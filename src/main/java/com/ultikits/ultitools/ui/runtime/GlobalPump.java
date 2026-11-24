@@ -28,18 +28,20 @@ public final class GlobalPump implements AutoCloseable {
     public void execute(Runnable task) { tasks.add(Objects.requireNonNull(task, "task")); }
 
     private void drain() {
+        // Retry submissions enqueued during this batch wait until the next tick, avoiding a rejection spin.
+        int remaining = tasks.size();
         Runnable task;
-        while ((task = tasks.poll()) != null) {
+        while (remaining-- > 0 && (task = tasks.poll()) != null) {
             try {
                 task.run();
-            } catch (RuntimeException failure) {
+            } catch (Throwable failure) {
                 logger.log(Level.WARNING, "UI global continuation failed", failure);
+                UiRuntime.rethrowFatal(failure);
             }
         }
     }
 
     @Override public void close() {
-        handle.cancel();
-        tasks.clear();
+        try { handle.cancel(); } finally { tasks.clear(); }
     }
 }

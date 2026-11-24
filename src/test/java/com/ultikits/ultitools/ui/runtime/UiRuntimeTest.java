@@ -14,9 +14,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
+import com.ultikits.ultitools.item.ItemSpec;
 import com.ultikits.ultitools.scheduling.ManualScheduler;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.ui.BindingMode;
+import com.ultikits.ultitools.ui.ClickKind;
 import com.ultikits.ultitools.ui.CloseReason;
 import com.ultikits.ultitools.ui.Confirm;
 import com.ultikits.ultitools.ui.ContainerSpec;
@@ -24,6 +26,7 @@ import com.ultikits.ultitools.ui.ContainerState;
 import com.ultikits.ultitools.ui.Delivery;
 import com.ultikits.ultitools.ui.Gesture;
 import com.ultikits.ultitools.ui.Grid;
+import com.ultikits.ultitools.ui.GridItem;
 import com.ultikits.ultitools.ui.GridSession;
 import com.ultikits.ultitools.ui.GridSlot;
 import com.ultikits.ultitools.ui.Notice;
@@ -50,6 +53,7 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import net.kyori.adventure.key.Key;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -164,10 +168,44 @@ class UiRuntimeTest {
         UiSession<Boolean> session = show(); settle();
         AtomicInteger completions = new AtomicInteger();
         session.result().thenAccept(ignored -> completions.incrementAndGet());
-        session.close(); session.close(); settle(); runtime.unload(service.owner());
+        session.close(); session.close(); settle(); runtime.unload(service);
         assertThat(completed(session.result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.CLOSED_BY_CODE));
         assertThat(completions).hasValue(1);
         verify(backend).close(session);
+        warning(failure);
+    }
+    @Test void closeError_completesExactlyOnceAndLaterShowStillOpens() {
+        UiBackend backend = backend();
+        AssertionError failure = new AssertionError("close linkage");
+        UiSession<Boolean> session = show(); settle();
+        doThrow(failure).when(backend).close(session);
+        AtomicInteger completions = new AtomicInteger();
+        session.result().thenAccept(ignored -> completions.incrementAndGet());
+        session.close(); settle();
+        UiSession<Boolean> later = show(); settle();
+        assertThat(completed(session.result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.CLOSED_BY_CODE));
+        assertThat(completions).hasValue(1);
+        assertThat(later.isOpen()).isTrue();
+        verify(backend).open(eq(later), any());
+        warning(failure);
+    }
+    @Test void actionError_doesNotWedgeOtherModulesForViewer() {
+        UiBackend backend = backend();
+        AssertionError failure = new AssertionError("module linkage");
+        GridSlot slot = GridSlot.ofIndex(0);
+        ItemSpec icon = ItemSpec.builder(
+                Key.key("minecraft", "stone")).build();
+        RuntimeGridSession first = (RuntimeGridSession) service.show(viewer, Grid.builder(TITLE, 1)
+                .set(slot, GridItem.of(icon, click -> { throw failure; })).build());
+        settle();
+        first.clicked(slot, ClickKind.LEFT);
+        settle();
+        assertThat(first.isOpen()).isTrue();
+        UiSession<Boolean> later = runtime.service("OtherModule").show(viewer, Confirm.builder(TITLE).build());
+        settle(); later.close(); settle();
+        assertThat(completed(first.result())).isEqualTo(new UiResult.Closed<>(CloseReason.REPLACED));
+        assertThat(completed(later.result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.CLOSED_BY_CODE));
+        verify(backend).open(eq(later), any());
         warning(failure);
     }
     @Test void backendReentryAndResultDependents_neverHoldRuntimeLock() {
@@ -214,7 +252,8 @@ class UiRuntimeTest {
         SlotContainer container = mock(SlotContainer.class);
         UiSession<?> session = mock(UiSession.class);
         empty.attach(container, session); empty.detach(container, session);
-        empty.prepareUnload("unused"); empty.startUnloadCommits("unused"); empty.finishUnload("unused", System.nanoTime());
+        UiOwner owner = new UiOwner("unused");
+        empty.prepareUnload(owner, System.nanoTime()); empty.startUnloadCommits(owner); empty.finishUnload(owner, System.nanoTime());
         assertThat(empty.engine().apply(Grid.builder(TITLE, 1).build(), viewer, mock(ViewerItems.class),
                 new Gesture.Pickup(GridSlot.ofIndex(0), false))).isFalse();
     }
@@ -226,10 +265,39 @@ class UiRuntimeTest {
         settle(); runtime.close(); runtime.close();
         assertThat(completed(first.result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.OWNER_UNLOADED));
         assertThat(completed(second.result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.OWNER_UNLOADED));
-        assertThat(runtime.service("TestModule")).isSameAs(service);
+        assertThat(completed(runtime.service("TestModule").show(viewer, Confirm.builder(TITLE).build()).result()))
+                .isEqualTo(new UiResult.Closed<Boolean>(CloseReason.OWNER_UNLOADED));
         assertThat(completed(runtime.service("NewModule").show(viewer, Confirm.builder(TITLE).build()).result()))
                 .isEqualTo(new UiResult.Closed<Boolean>(CloseReason.OWNER_UNLOADED));
         assertThatThrownBy(() -> runtime.register(backend)).isInstanceOf(IllegalStateException.class);
+    }
+    @Test void sameNameCopies_unloadingOldCopyLeavesNewSessionsAndServiceLive() {
+        UiBackend backend = backend();
+        UiSession<Boolean> oldSession = show();
+        UiService replacement = runtime.service("TestModule");
+        PlayerMock otherViewer = MockBukkit.getMock().addPlayer();
+        UiSession<Boolean> replacementSession = replacement.show(otherViewer, Confirm.builder(TITLE).build());
+        settle();
+        runtime.unload(service);
+        assertThat(completed(oldSession.result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.OWNER_UNLOADED));
+        assertThat(replacement).isNotSameAs(service);
+        assertThat(replacementSession.isOpen()).isTrue();
+        verify(backend, never()).close(replacementSession);
+        UiSession<Boolean> later = replacement.show(viewer, Confirm.builder(TITLE).build());
+        settle();
+        assertThat(later.isOpen()).isTrue();
+        verify(backend).open(eq(later), any());
+    }
+    @Test void reloadedModule_getsFreshUsableService() {
+        UiBackend backend = backend();
+        runtime.unload(service);
+        UiService reloaded = runtime.service("TestModule");
+        UiSession<Boolean> session = reloaded.show(viewer, Confirm.builder(TITLE).build());
+        settle();
+        assertThat(reloaded).isNotSameAs(service);
+        assertThat(session.isOpen()).isTrue();
+        verify(backend).open(eq(session), any());
+        assertThat(completed(show().result())).isEqualTo(new UiResult.Closed<Boolean>(CloseReason.OWNER_UNLOADED));
     }
     @Test void containerCreationOffThread_failsBeforeContainerRuntime() throws Exception {
         Throwable observed = CompletableFuture.supplyAsync(() -> {
@@ -323,7 +391,11 @@ class UiRuntimeTest {
         service = runtime.service("TestModule");
         UiBackend backend = backend();
         List<String> order = new ArrayList<>();
-        doAnswer(invocation -> { order.add("prepare"); return null; }).when(containers).prepareUnload("TestModule");
+        UiOwner owner = ((RuntimeUiService) service).ownerIdentity;
+        AtomicReference<Long> deadline = new AtomicReference<>();
+        doAnswer(invocation -> {
+            deadline.set(invocation.getArgument(1)); order.add("prepare"); return null;
+        }).when(containers).prepareUnload(eq(owner), anyLong());
         doAnswer(invocation -> {
             assertThat(Thread.holdsLock(runtime.lock)).isFalse();
             assertThat(viewer.getInventory().getItem(0)).isEqualTo(new ItemStack(Material.STONE, 3));
@@ -332,15 +404,18 @@ class UiRuntimeTest {
             assertThat(foreign.undelivered()).containsExactly(new ItemStack(Material.DIRT, 5));
             order.add("write");
             return null;
-        }).when(containers).startUnloadCommits("TestModule");
+        }).when(containers).startUnloadCommits(owner);
         doAnswer(invocation -> { order.add("close"); return null; }).when(backend).close(any());
-        doAnswer(invocation -> { order.add("finish"); return null; }).when(containers).finishUnload(any(), anyLong());
+        doAnswer(invocation -> {
+            assertThat((long) invocation.getArgument(1)).isEqualTo(deadline.get());
+            order.add("finish"); return null;
+        }).when(containers).finishUnload(eq(owner), anyLong());
         UiSession<Boolean> session = show(); settle();
         CompletionStage<Delivery> owed = service.deliver(viewer, List.of(new ItemStack(Material.STONE, 3)));
         AtomicReference<Delivery> immediate = new AtomicReference<>();
         session.result().thenAccept(ignored -> immediate.set(completed(service.deliver(viewer,
                 List.of(new ItemStack(Material.STONE, 4))))));
-        runtime.unload("TestModule");
+        runtime.unload(service);
         assertThat(completed(owed).given()).containsExactly(new ItemStack(Material.STONE, 3));
         assertThat(immediate.get().given()).containsExactly(new ItemStack(Material.STONE, 4));
         assertThat(viewer.getInventory().getItem(0)).isEqualTo(new ItemStack(Material.STONE, 7));

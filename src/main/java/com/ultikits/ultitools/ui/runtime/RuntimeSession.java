@@ -15,12 +15,18 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
-/** Outcome selection is synchronous; screen cleanup and result delivery are ordered continuations.
+/**
+ * Outcome selection is synchronous; screen cleanup and result delivery are ordered continuations.
+ * Existing screens close on the viewer lane (or the global pump after retirement), except owner unload,
+ * which closes them synchronously on the unloading thread. A show rejected during or after unload has
+ * neither a backend nor bindings and completes inline on its caller's thread, including an async caller.
+ * Future dependents run without the runtime lock.
  * @param <R> the intent's answer type
  */
 @ApiStatus.Internal
@@ -65,7 +71,7 @@ class RuntimeSession<R> implements UiSession<R> {
             cancel = timeout;
             timeout = null;
         }
-        if (cancel != null) { cancel.cancel(); }
+        if (cancel != null) { cancelTimeout(cancel); }
         return true;
     }
 
@@ -79,33 +85,50 @@ class RuntimeSession<R> implements UiSession<R> {
             result = chosen;
             closing = backend;
         }
-        if (closing != null) {
-            try { closing.close(this); } catch (RuntimeException failure) {
-                runtime.warn(service.owner(), "Backend close failed", failure);
+        try {
+            if (closing != null) {
+                try { closing.close(this); } catch (Throwable failure) {
+                    runtime.warn(service.owner(), "Backend close failed", failure);
+                    UiRuntime.rethrowFatal(failure);
+                }
+            }
+        } finally {
+            try { detachBindings(); } catch (Throwable failure) {
+                runtime.warn(service.owner(), "Container detach failed", failure);
+                UiRuntime.rethrowFatal(failure);
+            } finally {
+                completion.complete(result);
             }
         }
-        try { detachBindings(); } catch (RuntimeException failure) {
-            runtime.warn(service.owner(), "Container detach failed", failure);
-        }
-        completion.complete(result);
     }
 
+    /**
+     * No supporting backend leaves the previous session untouched. Once a supporting backend is selected,
+     * replacement is committed before calling open: an open failure intentionally leaves the old session
+     * REPLACED and closes this one as UNSUPPORTED; it does not restore the previous screen.
+     */
     final void openTask(ShowOptions options) {
         if (!isOpen()) { return; }
-        if (!viewer.isOnline()) { requestClose(CloseReason.DISCONNECTED); return; }
-        UiBackend selected = runtime.select(this);
-        if (!isOpen()) { return; }
-        if (selected == null) { requestClose(CloseReason.UNSUPPORTED); return; }
-        takeBindings();
-        runtime.replacePrevious(this);
-        if (!runtime.activate(this, selected)) { return; }
         try {
+            if (!viewer.isOnline()) { requestClose(CloseReason.DISCONNECTED); return; }
+            UiBackend selected = runtime.select(this);
+            if (!isOpen()) { return; }
+            if (selected == null) { requestClose(CloseReason.UNSUPPORTED); return; }
+            takeBindings();
+            runtime.replacePrevious(this);
+            if (!runtime.activate(this, selected)) { return; }
             selected.open(this, callbacks());
             if (this instanceof RuntimeGridSession grid) { grid.renderPicture(); }
-            scheduleTimeout(options);
-        } catch (RuntimeException failure) {
-            runtime.warn(service.owner(), "Backend open failed", failure);
+        } catch (Throwable failure) {
+            runtime.warn(service.owner(), "UI open failed", failure);
             requestClose(CloseReason.UNSUPPORTED);
+            UiRuntime.rethrowFatal(failure);
+            return;
+        }
+        try { scheduleTimeout(options); } catch (Throwable failure) {
+            runtime.warn(service.owner(), "UI timeout scheduling failed", failure);
+            requestClose(CloseReason.UNSUPPORTED);
+            UiRuntime.rethrowFatal(failure);
         }
     }
 
@@ -123,7 +146,22 @@ class RuntimeSession<R> implements UiSession<R> {
             cancel = !isOpenLocked();
             if (!cancel) { timeout = handle; }
         }
-        if (cancel) { handle.cancel(); }
+        if (cancel) { cancelTimeout(handle); }
+        handle.completion().whenComplete((ignored, failure) -> {
+            if (failure != null && isOpen()) {
+                Throwable cause = failure instanceof CompletionException wrapped
+                        && wrapped.getCause() != null ? wrapped.getCause() : failure;
+                runtime.warn(service.owner(), "UI timeout task failed", cause);
+                requestClose(CloseReason.UNSUPPORTED);
+            }
+        });
+    }
+
+    private void cancelTimeout(TaskHandle handle) {
+        try { handle.cancel(); } catch (Throwable failure) {
+            // Cancellation is best-effort; the chosen outcome must still be delivered.
+            runtime.warn(service.owner(), "UI timeout cancellation failed", failure);
+        }
     }
 
     private UiBackend.BackendCallbacks<R> callbacks() {

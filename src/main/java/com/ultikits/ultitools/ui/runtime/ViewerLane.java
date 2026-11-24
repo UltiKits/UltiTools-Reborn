@@ -8,7 +8,7 @@ import java.util.Queue;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.bukkit.entity.Player;
@@ -22,7 +22,7 @@ public final class ViewerLane {
     private final GlobalPump pump;
     private final Logger logger;
     private final Queue<Runnable> tasks = new ConcurrentLinkedQueue<>();
-    private final AtomicBoolean submitted = new AtomicBoolean();
+    private final AtomicReference<Object> submitted = new AtomicReference<>();
     private volatile boolean retired;
 
     /** Creates a lane sharing the runtime's global fallback. */
@@ -40,51 +40,53 @@ public final class ViewerLane {
     }
 
     private void schedule() {
-        if (!submitted.compareAndSet(false, true)) {
-            return;
-        }
-        if (isRetired()) {
-            retired = true;
-            pump.execute(() -> drain(true));
-            return;
-        }
+        if (tasks.isEmpty()) { return; }
+        Object ticket = new Object();
+        if (!submitted.compareAndSet(null, ticket)) { return; }
         try {
-            TaskHandle handle = scheduler.entity(viewer).run(() -> drain(false));
+            if (isRetired()) { handOff(ticket); return; }
+            TaskHandle handle = scheduler.entity(viewer).run(() -> drain(ticket, false));
             handle.completion().whenComplete((ignored, failure) -> {
                 Throwable cause = failure instanceof CompletionException ? failure.getCause() : failure;
-                if (cause instanceof TaskRetiredException) {
-                    retired = true;
-                    pump.execute(() -> drain(true));
-                }
+                if (cause instanceof TaskRetiredException) { handOff(ticket); }
+                else if (cause != null) { retry(ticket); }
             });
         } catch (RejectedExecutionException failure) {
-            retired = true;
-            pump.execute(() -> drain(true));
+            handOff(ticket);
+        } catch (Throwable failure) {
+            retry(ticket);
+            logger.log(Level.WARNING, "UI viewer submission failed for " + viewer.getUniqueId(), failure);
+            UiRuntime.rethrowFatal(failure);
         }
     }
 
-    private void drain(boolean global) {
-        if (!global && isRetired()) {
-            retired = true;
-            pump.execute(() -> drain(true));
-            return;
-        }
-        Runnable task;
-        while ((task = tasks.poll()) != null) {
-            try {
-                task.run();
-            } catch (RuntimeException failure) {
-                logger.log(Level.WARNING, "UI viewer continuation failed for " + viewer.getUniqueId(), failure);
+    private void handOff(Object ticket) {
+        retired = true;
+        pump.execute(() -> drain(ticket, true));
+    }
+
+    private void retry(Object ticket) {
+        // A late completion must not release a newer drain's reservation. Never submit from a completion callback.
+        if (submitted.compareAndSet(ticket, null) && !tasks.isEmpty()) { pump.execute(this::schedule); }
+    }
+
+    private void drain(Object ticket, boolean global) {
+        if (!ticket.equals(submitted.get())) { return; }
+        boolean handedOff = false;
+        try {
+            if (!global && isRetired()) { handedOff = true; handOff(ticket); return; }
+            Runnable task;
+            while ((task = tasks.poll()) != null) {
+                try {
+                    task.run();
+                } catch (Throwable failure) {
+                    logger.log(Level.WARNING, "UI viewer continuation failed for " + viewer.getUniqueId(), failure);
+                    UiRuntime.rethrowFatal(failure);
+                }
+                if (!global && isRetired()) { handedOff = true; handOff(ticket); return; }
             }
-            if (!global && isRetired()) {
-                retired = true;
-                pump.execute(() -> drain(true));
-                return;
-            }
-        }
-        submitted.set(false);
-        if (!tasks.isEmpty()) {
-            schedule();
+        } finally {
+            if (!handedOff) { retry(ticket); }
         }
     }
 

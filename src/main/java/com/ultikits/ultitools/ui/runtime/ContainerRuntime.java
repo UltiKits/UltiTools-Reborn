@@ -6,24 +6,31 @@ import com.ultikits.ultitools.ui.SlotContainer;
 import com.ultikits.ultitools.ui.UiSession;
 import org.jetbrains.annotations.ApiStatus;
 
-/** The editable-slot half of the UI runtime. Internal; implemented by the chest backend item. */
+/**
+ * The editable-slot half of the UI runtime. Internal; implemented by the chest backend item.
+ * Ownership is keyed by the opaque handle, never by its diagnostic name or SlotContainer#owner().
+ */
 @ApiStatus.Internal
 public interface ContainerRuntime {
-    /** Creates a container owned by {@code owner}. Called on the server thread, after the service's own checks. */
-    SlotContainer create(String owner, ContainerSpec spec, ContainerHost host);
-    /** {@code session} now shows {@code container} (its rendered snapshot binds it). Server thread. */
+    /** Creates a container for this module copy and its host. Server thread, after the service's own checks. */
+    SlotContainer create(UiOwner owner, ContainerSpec spec, ContainerHost host);
+    /** {@code session} now shows {@code container}. Idempotent for a session/container pair. Server thread. */
     void attach(SlotContainer container, UiSession<?> session);
     /**
-     * {@code session} no longer shows {@code container}. If the container's owner is unloading, the container ends
-     * through the unload path, never through endWhenUnviewed. Server thread.
+     * {@code session} no longer shows {@code container}. Must tolerate an absent or partially failed attach.
+     * If the container's owner is unloading, end through the unload path using the deadline supplied to
+     * {@link #prepareUnload}, never through endWhenUnviewed. Server thread.
      */
     void detach(SlotContainer container, UiSession<?> session);
     /** The engine that applies gestures to this runtime's containers. */
     GestureEngine engine();
-    /** Unload step 2: freeze new work for the owner's containers. Unloading thread. */
-    void prepareUnload(String owner);
-    /** Unload step 4: start the write of every COMMIT container of the owner that has changes. Unloading thread. */
-    void startUnloadCommits(String owner);
-    /** Unload step 6: await answers until {@code deadlineNanos} (System.nanoTime) and end every container of the owner. */
-    void finishUnload(String owner, long deadlineNanos);
+    /**
+     * Unload step 2: freeze new work for this module copy and retain the shared absolute System.nanoTime deadline.
+     * All later detach/wait operations use that deadline, without restarting a timeout. Unloading thread.
+     */
+    void prepareUnload(UiOwner owner, long deadlineNanos);
+    /** Unload step 4: start changed COMMIT writes for this copy, reusing any write already in flight. Unloading thread. */
+    void startUnloadCommits(UiOwner owner);
+    /** Unload step 6: await answers until the same deadline and end every container of this copy. Unloading thread. */
+    void finishUnload(UiOwner owner, long deadlineNanos);
 }

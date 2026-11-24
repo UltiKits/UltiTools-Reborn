@@ -5,8 +5,8 @@ import com.ultikits.ultitools.ui.CloseReason;
 import com.ultikits.ultitools.ui.Gesture;
 import com.ultikits.ultitools.ui.Grid;
 import com.ultikits.ultitools.ui.GridSession;
-import com.ultikits.ultitools.ui.SlotContainer;
 import com.ultikits.ultitools.ui.GridSlot;
+import com.ultikits.ultitools.ui.SlotContainer;
 import com.ultikits.ultitools.ui.UiBackend;
 import com.ultikits.ultitools.ui.UiResult;
 import com.ultikits.ultitools.ui.UiService;
@@ -15,7 +15,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +38,7 @@ public final class UiRuntime implements AutoCloseable {
     private final Logger logger;
     private final Thread serverThread;
     private final GlobalPump pump;
-    private final Map<String, RuntimeUiService> owners = new LinkedHashMap<>();
+    private final Set<RuntimeUiService> owners = new LinkedHashSet<>();
     private final List<BackendEntry> backends = new ArrayList<>();
     private final Set<RuntimeSession<?>> sessions = new LinkedHashSet<>();
     private final Map<UUID, RuntimeSession<?>> active = new HashMap<>();
@@ -55,11 +54,16 @@ public final class UiRuntime implements AutoCloseable {
         pump = new GlobalPump(scheduler, logger);
     }
 
-    /** Gets the shared owner-scoped service, including its unloaded state. */
+    /**
+     * Issues a fresh service for one module copy. Call once per copy and retain it for injection and unloading;
+     * names are diagnostic only. A closed runtime issues an already-unloaded service.
+     */
     public UiService service(String owner) {
         Objects.requireNonNull(owner, "owner");
         synchronized (lock) {
-            return owners.computeIfAbsent(owner, name -> new RuntimeUiService(this, name, closed));
+            RuntimeUiService service = new RuntimeUiService(this, new UiOwner(owner), closed);
+            if (!closed) { owners.add(service); }
+            return service;
         }
     }
 
@@ -108,8 +112,9 @@ public final class UiRuntime implements AutoCloseable {
                 if (entry.backend().supports(session.intent(), session.viewer())) {
                     return entry.backend();
                 }
-            } catch (RuntimeException failure) {
+            } catch (Throwable failure) {
                 warn(session.service.owner(), "Backend supports failed", failure);
+                rethrowFatal(failure);
             }
         }
         return null;
@@ -155,11 +160,17 @@ public final class UiRuntime implements AutoCloseable {
         });
     }
 
-    /** Synchronously closes this owner's sessions before its services are torn down. */
-    public void unload(String owner) {
+    /** Synchronously unloads exactly the module copy that received this service, never a same-name replacement. */
+    public void unload(UiService owner) {
         Objects.requireNonNull(owner, "owner");
         checkThread();
-        RuntimeUiService service = (RuntimeUiService) service(owner);
+        if (!(owner instanceof RuntimeUiService service) || !service.runtime.equals(this)) {
+            throw new IllegalArgumentException("Service belongs to another UI runtime");
+        }
+        unloadService(service);
+    }
+
+    private void unloadService(RuntimeUiService service) {
         List<RuntimeSession<?>> closing;
         synchronized (lock) {
             if (service.unloaded || service.unloading) { return; }
@@ -168,22 +179,27 @@ public final class UiRuntime implements AutoCloseable {
             closing = sessions.stream().filter(session -> session.service.equals(service)).toList();
         }
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        RuntimeCleanup cleanup = new RuntimeCleanup(this, service.owner());
         try {
-            containers.prepareUnload(owner);
-            service.flushDeliveries();
-            containers.startUnloadCommits(owner);
+            cleanup.run("Container prepare unload failed", () -> containers.prepareUnload(service.ownerIdentity, deadline));
+            cleanup.run("Pending delivery flush failed", service::flushDeliveries);
+            cleanup.run("Container unload commit failed", () -> containers.startUnloadCommits(service.ownerIdentity));
             for (RuntimeSession<?> session : closing) {
-                session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
-                session.closeAndComplete();
+                cleanup.run("Session unload failed", () -> {
+                    session.choose(new UiResult.Closed<>(CloseReason.OWNER_UNLOADED));
+                    session.closeAndComplete();
+                });
             }
-            containers.finishUnload(owner, deadline);
+            cleanup.run("Container finish unload failed", () -> containers.finishUnload(service.ownerIdentity, deadline));
         } finally {
             synchronized (lock) {
                 service.unloaded = true;
                 service.unloading = false;
                 service.unloadingThread = null;
+                owners.remove(service);
             }
         }
+        cleanup.finish();
     }
 
     /** Applies a gesture against the backend's rendered snapshot, refusing a terminal session. */
@@ -230,19 +246,27 @@ public final class UiRuntime implements AutoCloseable {
         log(record);
     }
     void log(LogRecord record) { logger.log(record); }
+    static void rethrowFatal(Throwable failure) {
+        if (failure instanceof VirtualMachineError fatal) { throw fatal; }
+    }
 
     @Override public void close() {
         checkThread();
-        List<String> names;
+        List<RuntimeUiService> services;
         synchronized (lock) {
             if (closed) { return; }
             closed = true;
-            names = List.copyOf(owners.keySet());
+            services = List.copyOf(owners);
         }
-        try { names.forEach(this::unload); } finally {
-            pump.close();
-            synchronized (lock) { lanes.clear(); }
+        RuntimeCleanup cleanup = new RuntimeCleanup(this, "UI runtime");
+        try {
+            services.forEach(service -> cleanup.run("Owner unload failed", () -> unloadService(service)));
+        } finally {
+            try { cleanup.run("Global pump close failed", pump::close); } finally {
+                synchronized (lock) { lanes.clear(); }
+            }
         }
+        cleanup.finish();
     }
 
     private static final class BackendEntry {

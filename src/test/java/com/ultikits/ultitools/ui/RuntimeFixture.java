@@ -2,7 +2,9 @@ package com.ultikits.ultitools.ui;
 
 import com.ultikits.ultitools.scheduling.ManualScheduler;
 import com.ultikits.ultitools.ui.runtime.UiRuntime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -19,6 +21,7 @@ final class RuntimeFixture implements AbstractUiServiceContractTest.Fixture {
     private final List<LogRecord> warnings = new CopyOnWriteArrayList<>();
     private final Logger logger = Logger.getAnonymousLogger();
     private final UiRuntime runtime;
+    private final Map<String, UiService> services = new HashMap<>();
 
     RuntimeFixture() {
         logger.setUseParentHandlers(false);
@@ -31,7 +34,7 @@ final class RuntimeFixture implements AbstractUiServiceContractTest.Fixture {
         });
         runtime = new UiRuntime(scheduler, containers, logger, Thread.currentThread());
     }
-    @Override public UiService service(String owner) { return runtime.service(owner); }
+    @Override public UiService service(String owner) { return services.computeIfAbsent(owner, runtime::service); }
     @Override public void register(UiBackend backend) { runtime.register(backend); }
     @Override public void advanceTicks(long ticks) {
         for (long tick = 0; tick < ticks; tick++) { clock.advanceTicks(1); }
@@ -41,7 +44,7 @@ final class RuntimeFixture implements AbstractUiServiceContractTest.Fixture {
         runtime.quit(player);
         clock.retire(player);
     }
-    @Override public void unload(String owner) { runtime.unload(owner); }
+    @Override public void unload(String owner) { runtime.unload(services.get(owner)); }
     @Override public RecordingScheduler scheduler() { return scheduler; }
     @Override public GestureEngine engine() { return containers.engine(); }
     @Override public boolean gesture(GridSession session, ViewerItems side, Gesture gesture) {

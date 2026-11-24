@@ -15,6 +15,7 @@ import com.ultikits.ultitools.ui.UiBackend;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -29,7 +30,7 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
     private Grid rendered;
     private Map<GridSlot, ItemStack> picture = Map.of();
     private boolean updateQueued;
-    private boolean attached;
+    private final Set<SlotContainer> attached = Collections.newSetFromMap(new IdentityHashMap<>());
 
     RuntimeGridSession(RuntimeUiService service, Player viewer, Grid grid) {
         super(service, viewer, grid);
@@ -76,26 +77,34 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
         synchronized (runtime.lock) {
             rendered = current;
             snapshot = rendered;
-            attached = true;
         }
-        boundContainers(snapshot).forEach(container -> runtime.containers.attach(container, this));
+        attachBindings(snapshot);
         drawPicture();
     }
 
-    @Override void detachBindings() {
-        Grid snapshot;
-        synchronized (runtime.lock) {
-            if (!attached) { return; }
-            attached = false;
-            snapshot = rendered;
+    private void attachBindings(Grid snapshot) {
+        for (SlotContainer container : boundContainers(snapshot)) {
+            boolean added;
+            synchronized (runtime.lock) {
+                if (!isOpenLocked()) { return; }
+                // Record the attempt first: attach may have side effects before throwing.
+                added = attached.add(container);
+            }
+            if (added) { runtime.containers.attach(container, this); }
         }
-        boundContainers(snapshot).forEach(this::detach);
     }
 
-    private void detach(SlotContainer container) {
-        try { runtime.containers.detach(container, this); } catch (RuntimeException failure) {
-            runtime.warn(service.owner(), "Container detach failed", failure);
+    @Override void detachBindings() { detachExcept(Set.of()); }
+
+    private void detachExcept(Set<SlotContainer> retained) {
+        List<SlotContainer> removed;
+        synchronized (runtime.lock) {
+            removed = attached.stream().filter(container -> !retained.contains(container)).toList();
+            attached.removeAll(removed);
         }
+        RuntimeCleanup cleanup = new RuntimeCleanup(runtime, service.owner());
+        removed.forEach(container -> cleanup.run("Container detach failed", () -> runtime.containers.detach(container, this)));
+        cleanup.finish();
     }
 
     private void notifyBackend() {
@@ -111,17 +120,22 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
             next = current;
             selected = backend;
         }
-        Set<SlotContainer> after = boundContainers(next);
-        after.forEach(container -> runtime.containers.attach(container, this));
-        synchronized (runtime.lock) { rendered = next; }
-        drawPicture();
-        try { selected.update(this, previous, next); } catch (RuntimeException failure) {
-            runtime.warn(service.owner(), "Backend update failed", failure);
+        try {
+            attachBindings(next);
+            synchronized (runtime.lock) {
+                if (!isOpenLocked()) { return; }
+                rendered = next;
+            }
+            drawPicture();
+            selected.update(this, previous, next);
+            detachExcept(boundContainers(next));
+            renderPicture();
+        } catch (Throwable failure) {
+            runtime.warn(service.owner(), "Grid update failed", failure);
+            // Cleanup uses the explicit attempted-attachment set, not either grid snapshot.
             requestClose(CloseReason.UNSUPPORTED);
-        } finally {
-            boundContainers(previous).stream().filter(container -> !after.contains(container)).forEach(this::detach);
+            UiRuntime.rethrowFatal(failure);
         }
-        renderPicture();
     }
 
     void drawPicture() {
@@ -141,9 +155,14 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
     }
 
     void redraw() {
-        if (isOpen()) {
+        if (!isOpen()) { return; }
+        try {
             drawPicture();
             renderPicture();
+        } catch (Throwable failure) {
+            runtime.warn(service.owner(), "Bound slot refresh failed", failure);
+            requestClose(CloseReason.UNSUPPORTED);
+            UiRuntime.rethrowFatal(failure);
         }
     }
 
@@ -154,8 +173,9 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
             selected = backend;
         }
         if (selected instanceof BoundSlotRenderer renderer) {
-            try { renderer.redraw(this, pictureCopy()); } catch (RuntimeException failure) {
+            try { renderer.redraw(this, pictureCopy()); } catch (Throwable failure) {
                 runtime.warn(service.owner(), "Bound slot redraw failed", failure);
+                UiRuntime.rethrowFatal(failure);
             }
         }
     }
@@ -171,8 +191,9 @@ final class RuntimeGridSession extends RuntimeSession<Ack> implements GridSessio
 
     private void runAction(GridAction action, GridSlot slot, ClickKind kind) {
         if (!isOpen()) { return; }
-        try { action.onClick(new Click(viewer, slot, kind, this)); } catch (Exception failure) {
+        try { action.onClick(new Click(viewer, slot, kind, this)); } catch (Throwable failure) {
             runtime.warn(service.owner(), "Grid action failed", failure);
+            UiRuntime.rethrowFatal(failure);
         }
     }
 

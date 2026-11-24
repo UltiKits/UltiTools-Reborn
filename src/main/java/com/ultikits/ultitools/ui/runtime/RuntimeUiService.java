@@ -27,22 +27,22 @@ import org.bukkit.inventory.PlayerInventory;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
-/** One module's view of the shared session registry and item-delivery lifecycle. */
+/** One module copy's view of the shared session registry and item-delivery lifecycle. */
 @ApiStatus.Internal
 final class RuntimeUiService implements UiService, ContainerHost {
     final UiRuntime runtime;
-    private final String owner;
+    final UiOwner ownerIdentity;
     boolean unloaded;
     boolean unloading;
     @Nullable Thread unloadingThread;
     private final List<PendingDelivery> pendingDeliveries = new ArrayList<>();
 
-    RuntimeUiService(UiRuntime runtime, String owner, boolean unloaded) {
+    RuntimeUiService(UiRuntime runtime, UiOwner owner, boolean unloaded) {
         this.runtime = runtime;
-        this.owner = owner;
+        ownerIdentity = owner;
         this.unloaded = unloaded;
     }
-    @Override public String owner() { return owner; }
+    @Override public String owner() { return ownerIdentity.name(); }
     @Override public <R> UiSession<R> show(Player viewer, UiIntent<R> intent) {
         return show(viewer, intent, ShowOptions.defaults());
     }
@@ -75,9 +75,9 @@ final class RuntimeUiService implements UiService, ContainerHost {
         Objects.requireNonNull(spec, "spec");
         runtime.checkThread();
         synchronized (runtime.lock) {
-            if (unloaded || unloading) { throw new IllegalStateException("Owner unloaded: " + owner); }
+            if (unloaded || unloading) { throw new IllegalStateException("Owner unloaded: " + owner()); }
         }
-        return runtime.containers.create(owner, spec, this);
+        return runtime.containers.create(ownerIdentity, spec, this);
     }
 
     @Override public CompletionStage<Delivery> deliver(Player player, List<ItemStack> items) {
@@ -104,7 +104,9 @@ final class RuntimeUiService implements UiService, ContainerHost {
     void flushDeliveries() {
         List<PendingDelivery> pending;
         synchronized (runtime.lock) { pending = List.copyOf(pendingDeliveries); }
-        pending.forEach(PendingDelivery::run);
+        RuntimeCleanup cleanup = new RuntimeCleanup(runtime, owner());
+        pending.forEach(delivery -> cleanup.run("Pending delivery failed", delivery));
+        cleanup.finish();
     }
 
     @Override public CompletionStage<Delivery> returnTo(UUID contributor, List<ItemStack> items) {
@@ -152,10 +154,12 @@ final class RuntimeUiService implements UiService, ContainerHost {
             DeliveryWork work = new DeliveryWork(player, items);
             try {
                 if (player.isOnline() && !lane.isRetired()) { work.give(); }
-            } catch (RuntimeException failure) {
-                runtime.warn(owner, "Item delivery failed", failure);
+            } catch (Throwable failure) {
+                runtime.warn(owner(), "Item delivery failed", failure);
+                UiRuntime.rethrowFatal(failure);
+            } finally {
+                result.complete(work.answer());
             }
-            result.complete(work.answer());
         }
     }
 
