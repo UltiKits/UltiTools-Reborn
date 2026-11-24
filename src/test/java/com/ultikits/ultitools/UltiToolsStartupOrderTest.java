@@ -87,6 +87,18 @@ class UltiToolsStartupOrderTest {
     }
 
     @Test
+    @DisplayName("declared plugin loaders are registered before any module is discovered")
+    void declaredDependencyLoadersAreRegisteredBeforeModulesLoad() {
+        List<Event> walk = onEnableWalk();
+        int dependencies = indexOfCall(walk, "registerModuleDependencyLoaders");
+        int modules = indexOfCall(walk, "initPluginModules");
+
+        assertThat(dependencies).as("onEnable directly registers declared plugin loaders").isNotNegative();
+        assertThat(modules).as("onEnable directly loads modules").isNotNegative();
+        assertThat(dependencies).as("dependency visibility must exist before module discovery").isLessThan(modules);
+    }
+
+    @Test
     @DisplayName("UltiTools constructs the registry at exactly one place and assigns the field at exactly one place")
     void registryIsConstructedAndAssignedAtExactlyOnePlace() {
         List<Event> constructions = new ArrayList<>();
