@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.ui.dialog;
 
+import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.ui.Choice;
@@ -42,8 +43,7 @@ public final class DialogMapper {
             case Confirm confirm -> model(confirm, viewer, confirm.body(), List.of(), List.of(
                     button(confirm.yes(), null, new ButtonRole.Yes(), viewer),
                     button(confirm.no(), null, new ButtonRole.No(), viewer)), DialogModel.Kind.CONFIRMATION, escapeCloses);
-            case Form form -> model(form, viewer, form.body(), form.inputs().stream().map(input -> input(input, viewer)).toList(),
-                    List.of(button(form.submit(), null, new ButtonRole.Submit(), viewer)), DialogModel.Kind.NOTICE, escapeCloses);
+            case Form form -> form(form, viewer, escapeCloses);
             case Choice<?> choice -> choice(choice, viewer, escapeCloses);
             case Grid ignored -> throw new IllegalArgumentException("Dialogs do not support grids");
         };
@@ -51,8 +51,26 @@ public final class DialogMapper {
 
     private DialogModel model(UiIntent<?> intent, Player viewer, List<Text> body, List<DialogModel.Input> inputs,
                               List<DialogModel.Button> buttons, DialogModel.Kind kind, boolean escapeCloses) {
+        return model(intent, viewer, body, inputs, buttons, kind, escapeCloses, null);
+    }
+
+    private DialogModel model(UiIntent<?> intent, Player viewer, List<Text> body, List<DialogModel.Input> inputs,
+                              List<DialogModel.Button> buttons, DialogModel.Kind kind, boolean escapeCloses,
+                              @Nullable DialogModel.Button exit) {
         return new DialogModel(messages.render(intent.title(), viewer),
-                body.stream().map(line -> messages.render(line, viewer)).toList(), inputs, buttons, null, kind, escapeCloses);
+                body.stream().map(line -> messages.render(line, viewer)).toList(), inputs, buttons, exit, kind, escapeCloses);
+    }
+
+    private DialogModel form(Form form, Player viewer, boolean escapeCloses) {
+        DialogModel.Button submit = button(form.submit(), null, new ButtonRole.Submit(), viewer);
+        List<DialogModel.Button> buttons = escapeCloses ? List.of(submit) : List.of(submit, cancel(viewer));
+        DialogModel.Kind kind = escapeCloses ? DialogModel.Kind.NOTICE : DialogModel.Kind.CONFIRMATION;
+        return model(form, viewer, form.body(), form.inputs().stream().map(input -> input(input, viewer)).toList(),
+                buttons, kind, escapeCloses);
+    }
+
+    private DialogModel.Button cancel(Player viewer) {
+        return button(Text.of(MessageKey.of("ultitools", "ui.cancel")), null, new ButtonRole.Cancel(), viewer);
     }
 
     private DialogModel.Button button(Text label, @Nullable Text tooltip, ButtonRole role, Player viewer) {
@@ -66,7 +84,8 @@ public final class DialogMapper {
             ChoiceOption<?> option = choice.options().get(index);
             buttons.add(button(option.label(), option.tooltip(), new ButtonRole.Pick(index), viewer));
         }
-        return model(choice, viewer, choice.body(), List.of(), buttons, DialogModel.Kind.MULTI_ACTION, escapeCloses);
+        return model(choice, viewer, choice.body(), List.of(), buttons, DialogModel.Kind.MULTI_ACTION, escapeCloses,
+                escapeCloses ? null : cancel(viewer));
     }
 
     private DialogModel.Input input(FormInput<?> input, Player viewer) {

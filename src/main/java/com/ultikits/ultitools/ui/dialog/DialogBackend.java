@@ -22,7 +22,7 @@ import org.jetbrains.annotations.ApiStatus;
 /** Paper Dialog renderer for notices, confirmations, forms and choices. */
 @ApiStatus.Internal
 public final class DialogBackend implements UiBackend {
-    static final boolean ESCAPE_CLOSES = true;
+    static final boolean ESCAPE_CLOSES = false;
     private final DialogMapper mapper;
     private final DialogPresenter presenter;
     private final DialogAnswers answers;
