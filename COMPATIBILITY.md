@@ -319,6 +319,27 @@ A failed module load also retires that instance's injected scheduler and cancels
 work submitted during bean construction, `@PostConstruct`, or `registerSelf()`. An already running
 one-shot task may finish. This guarantee applies to the module-owned scheduler, not direct Bukkit tasks.
 
+### Chest backend known limitations (as of 7.0.0)
+
+- Framework chest inventories contain display copies, not independent real items. The backend cancels
+  clicks and drags before applying its own transfers. Another plugin must not clear that cancellation
+  with `setCancelled(false)` or `setResult(ALLOW)`: doing so lets vanilla move the display copies and
+  can duplicate items. If unexpected item moves occur, reproduce on a test server without inventory,
+  login/freeze or click-modifying plugins, then re-enable them individually and check which listener
+  clears the cancellation. Fix that plugin's event handling; do not treat display copies as stored items.
+- Number-key swaps and Shift moves depend on the `InventoryAction` Paper computes from the displayed
+  copy. While a redraw is pending, an empty or stale copy can produce `NOTHING` or another unsupported
+  action, so that input is ignored even if the real container has changed. Wait for the redraw and
+  retry; do not repeatedly force the action or modify the display inventory directly.
+
+中文补充：箱子界面里的物品只是展示副本。框架会先取消点击和拖拽，再通过容器执行真实转移。
+其他插件不得用 `setCancelled(false)` 或 `setResult(ALLOW)` 清掉取消状态，否则原版可能移动展示
+副本并复制物品。出现异常移动时，应在测试服暂时移除修改物品栏、登录冻结或点击事件的插件，
+逐个恢复以定位清除取消状态的监听器，修正该插件的事件处理，不把展示副本当作真实库存。
+数字键与 Shift 移动依赖 Paper 根据展示副本算出的 `InventoryAction`；重绘尚未到达时，空或过期的
+副本可能使动作变成 `NOTHING` 或其他不支持的动作，本次输入因此不生效。请等重绘完成后重试，
+不要反复强制动作，也不要直接修改展示物品栏。
+
 ## Adventure chat confirmation callbacks (as of 7.0.0)
 
 `ChatCallbackManager` and its hidden `/ultitools_callback` command are removed. Module authors
