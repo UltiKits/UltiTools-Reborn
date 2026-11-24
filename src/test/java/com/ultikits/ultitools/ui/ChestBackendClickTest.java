@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.ultikits.ultitools.item.ItemSpec;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.ui.chest.ChestListener;
+import com.ultikits.ultitools.ui.chest.PlayerViewerItems;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -171,12 +172,49 @@ class ChestBackendClickTest extends ChestTestFixture {
         SlotContainer box = container(1, List.of(stack(Material.STONE, 8)));
         GridSession session = open(grid(box, BindingMode.EDITABLE));
         session.close();
+        assertThat(runtime.applyGesture(session, new PlayerViewerItems(player.getOpenInventory(), player),
+                new Gesture.Pickup(GridSlot.ofIndex(0), false))).isFalse();
         assertThat(click(0, ClickType.LEFT, InventoryAction.PICKUP_ALL).isCancelled()).isTrue();
         assertThat(drag(false, Map.of(0, stack(Material.DIRT, 1))).isCancelled()).isTrue();
         assertThat(box.get(0)).isEqualTo(stack(Material.STONE, 8));
         assertThat(player.getItemOnCursor().isEmpty()).isTrue();
         tick();
         assertThat(session.isOpen()).isFalse();
+    }
+
+    @Test void unloadingOneServiceLeavesASameNameOwnersChestUsable() throws Exception {
+        SlotContainer firstBox = container(1, List.of(stack(Material.STONE, 8)));
+        GridSession first = open(grid(firstBox, BindingMode.EDITABLE));
+        UiService replacement = runtime.service(service.owner());
+        SyncPlayer bob = new SyncPlayer(server, "Bob");
+        server.addPlayer(bob);
+        SlotContainer secondBox = replacement.container(ContainerSpec.storage(1)
+                .disposition(Disposition.RETURN_TO_CONTRIBUTORS).endWhenUnviewed(false)
+                .undelivered((contributor, items) -> { /* This test withdraws the baseline before cleanup. */ })
+                .baseline(List.of(stack(Material.DIRT, 5))).build());
+        GridSession second = replacement.show(bob, grid(secondBox, BindingMode.EDITABLE));
+        tick();
+        InventoryView secondView = bob.getOpenInventory();
+        assertThat(firstBox.owner()).isEqualTo(secondBox.owner());
+
+        runtime.unload(service);
+        runtime.unload(service);
+
+        assertThat(first.result().toCompletableFuture().get(2, TimeUnit.SECONDS))
+                .isEqualTo(new UiResult.Closed<Ack>(CloseReason.OWNER_UNLOADED));
+        assertThat(firstBox.state()).isEqualTo(ContainerState.ENDED);
+        assertThat(secondBox.state()).isEqualTo(ContainerState.EDITABLE);
+        assertThat(second.isOpen()).isTrue();
+        assertThat(bob.getOpenInventory()).isSameAs(secondView);
+        InventoryClickEvent pickup = new InventoryClickEvent(secondView, InventoryType.SlotType.CONTAINER,
+                0, ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        server.getPluginManager().callEvent(pickup);
+        assertThat(pickup.isCancelled()).isTrue();
+        assertThat(secondBox.get(0).isEmpty()).isTrue();
+        assertThat(bob.getItemOnCursor()).isEqualTo(stack(Material.DIRT, 5));
+        tick();
+        assertThat(secondView.getTopInventory().isEmpty()).isTrue();
+        assertThat(bob.syncScopes).hasSize(1);
     }
 
     @Test void closeEventsMapReasonsAndCodeCloseKeepsItsChosenReason() throws Exception {
