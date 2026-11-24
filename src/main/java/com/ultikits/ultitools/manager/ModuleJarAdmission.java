@@ -2,10 +2,16 @@ package com.ultikits.ultitools.manager;
 
 import java.io.File;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
 
 import com.ultikits.ultitools.utils.PluginYmlReader;
 
@@ -30,11 +36,33 @@ public final class ModuleJarAdmission {
         return entries.computeIfAbsent(path, ignored -> new Entry(PluginYmlReader.readFromJarFile(jar)));
     }
 
-    /** Immutable result; file-management identity is retained even when API admission is refused. */
+    /**
+     * Records a failed early hook before discovery can load the module main class.
+     *
+     * @param jar the module's own archive
+     * @param failure the original early-hook failure
+     */
+    public void markBootstrapFailed(Path jar, Throwable failure) {
+        inspect(jar.toFile()).bootstrapFailure = failure;
+    }
+
+    /** @return a filename-ordered snapshot of metadata already inspected at this start */
+    public Map<Path, Entry> entries() {
+        List<Path> paths = new ArrayList<>(entries.keySet());
+        paths.sort(Comparator.comparing((Path path) -> path.getFileName().toString()).thenComparing(Path::toString));
+        Map<Path, Entry> ordered = new LinkedHashMap<>();
+        for (Path path : paths) {
+            ordered.put(path, entries.get(path));
+        }
+        return Collections.unmodifiableMap(ordered);
+    }
+
+    /** Minimum decision and the early-hook outcome; archive identity survives either refusal. */
     public static final class Entry {
         private final PluginYmlReader.PluginYmlInfo metadata;
         private final Integer apiLevel;
         private final boolean apiAllowed;
+        private @Nullable Throwable bootstrapFailure;
 
         private Entry(PluginYmlReader.PluginYmlInfo metadata) {
             this.metadata = metadata;
@@ -43,18 +71,15 @@ public final class ModuleJarAdmission {
         }
 
         /** @return the metadata used to make this decision */
-        public PluginYmlReader.PluginYmlInfo getMetadata() {
-            return metadata;
-        }
+        public PluginYmlReader.PluginYmlInfo getMetadata() { return metadata; }
 
         /** @return the integer API declaration, or {@code null} when missing or invalid */
-        public Integer getApiLevel() {
-            return apiLevel;
-        }
+        public Integer getApiLevel() { return apiLevel; }
 
         /** @return whether the declaration meets the shared minimum; the existing upper gate is unchanged */
-        public boolean isApiAllowed() {
-            return apiAllowed;
-        }
+        public boolean isApiAllowed() { return apiAllowed; }
+
+        /** @return the original early-hook failure, or {@code null} when no hook failed */
+        public @Nullable Throwable getBootstrapFailure() { return bootstrapFailure; }
     }
 }

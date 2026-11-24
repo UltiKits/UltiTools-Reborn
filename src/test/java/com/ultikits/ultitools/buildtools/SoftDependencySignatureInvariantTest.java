@@ -29,7 +29,7 @@ import org.junit.jupiter.api.Timeout;
  * Pins {@link SoftDependencySignatureInvariant}'s D-08 rule: no class the container reflects over
  * may mention a soft-dependency plugin's types in a declared method/field/constructor signature.
  * Synthetic cases cover the discrimination logic; the final test runs the rule against every real
- * class in this module's own build output, with the package prefixes read from {@code plugin.yml}
+ * class in this module's own build output, with the package prefixes read from {@code paper-plugin.yml}
  * rather than hard-coded, so a soft dependency added later is automatically covered once its
  * plugin-name-to-package mapping is added to {@link #KNOWN_PACKAGE_PREFIXES} — the one manual step
  * a new soft dependency needs, since a plugin's display name in {@code softdepend:} carries no
@@ -40,11 +40,11 @@ import org.junit.jupiter.api.Timeout;
 class SoftDependencySignatureInvariantTest {
 
     /**
-     * Maps a {@code plugin.yml} {@code softdepend:} entry to the Java package prefix its API
+     * Maps a {@code paper-plugin.yml} {@code softdepend:} entry to the Java package prefix its API
      * ships under. This is the one place a future soft dependency needs a manual entry — nothing
      * about a plugin's display name implies its package, so this cannot be derived automatically.
      * Everything else about this guard (which classes to check, which prefixes are active) is
-     * derived from {@code plugin.yml} and the real build output.
+     * derived from {@code paper-plugin.yml} and the real build output.
      */
     private static final Map<String, String> KNOWN_PACKAGE_PREFIXES;
 
@@ -166,11 +166,11 @@ class SoftDependencySignatureInvariantTest {
     }
 
     @Test
-    @DisplayName("the real check: every class in this module's real build output, against the real plugin.yml soft-dependency list, produces zero violations")
+    @DisplayName("the real check: every class in this module's real build output, against the real paper-plugin.yml soft-dependency list, produces zero violations")
     void realBuildOutputAgainstRealPluginYmlIsClean() throws IOException {
         Set<String> prefixes = readRealSoftDependencyPrefixes();
         assertThat(prefixes)
-                .as("plugin.yml's softdepend: list must map to at least one known package prefix, or "
+                .as("paper-plugin.yml's dependencies.server keys must map to at least one known package prefix, or "
                         + "this guard silently checks nothing")
                 .isNotEmpty();
 
@@ -197,15 +197,16 @@ class SoftDependencySignatureInvariantTest {
     }
 
     /**
-     * Reads {@code plugin.yml}'s {@code softdepend:} list and maps each entry to its known Java
+     * Reads {@code paper-plugin.yml}'s {@code dependencies.server} keys and maps each entry to its known Java
      * package prefix via {@link #KNOWN_PACKAGE_PREFIXES}, skipping any name with no known mapping
      * rather than failing — an entry with no mapping is simply not covered by this guard yet,
      * which is the "one manual step" documented on {@link #KNOWN_PACKAGE_PREFIXES} itself.
      */
     private static Set<String> readRealSoftDependencyPrefixes() {
-        File pluginYml = new File("src/main/resources/plugin.yml");
+        File pluginYml = new File("src/main/resources/paper-plugin.yml");
         YamlConfiguration config = YamlConfiguration.loadConfiguration(pluginYml);
-        List<String> softdepend = config.getStringList("softdepend");
+        assertThat(config.getConfigurationSection("dependencies.server")).isNotNull();
+        Set<String> softdepend = config.getConfigurationSection("dependencies.server").getKeys(false);
 
         Set<String> prefixes = new LinkedHashSet<>();
         for (String pluginName : softdepend) {
