@@ -1,6 +1,9 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doReturn;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -11,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.logging.Logger;
 
@@ -25,10 +29,19 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.annotations.Autowired;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.scheduling.ManualScheduler;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.TaskContext;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import com.ultikits.ultitools.text.FixedLocaleResolver;
+import com.ultikits.ultitools.text.InMemoryMessages;
+import com.ultikits.ultitools.text.Messages;
+
+import java.util.Locale;
+import java.util.Optional;
 import com.ultikits.ultitools.services.EmailService;
 import com.ultikits.ultitools.services.NotificationService;
 import com.ultikits.ultitools.services.TeleportService;
@@ -44,6 +57,11 @@ import java.util.Comparator;
 class DependenceManagersTest {
 
     private AutoCloseable mocks;
+
+    static class OptionalNotificationClient {
+        @Autowired(required = false)
+        private NotificationService notifications;
+    }
 
     @Mock
     private JavaPlugin mockPlugin;
@@ -434,12 +452,15 @@ class DependenceManagersTest {
             setField(managers, "context", context);
 
             // Supply the framework's global context without running its deferred economy report;
-            // this test checks service aliases and does not have a live Bukkit server.
+            // this test checks service registration and does not have a live Bukkit server.
             Scheduler scheduler = mock(Scheduler.class);
             TaskContext global = mock(TaskContext.class);
             when(scheduler.global()).thenReturn(global);
             FrameworkScheduling.install(scheduler);
-            try {
+            try (ManualScheduler.Engine engine = new ManualScheduler.Engine()) {
+                context.registerType(Messages.class, new InMemoryMessages("ultitools",
+                        new FixedLocaleResolver(Locale.ENGLISH, Optional.empty())));
+                context.registerType(Scheduler.class, engine.scheduler("ultitools"));
 
                 // Act: invoke the real private initCoreServices() method -- the exact
                 // code path DependenceManagers' own constructor runs, not a hand-copied
@@ -461,15 +482,83 @@ class DependenceManagersTest {
 
                 NotificationService notificationService = assertDoesNotThrow(
                         () -> context.getBean(NotificationService.class),
-                        "NotificationService is aliased under two names (:75-76) -- must not be seen "
-                                + "as two ambiguous candidates");
+                        "NotificationService must be built lazily from the registered root services");
                 assertThat(notificationService).isNotNull();
+                assertThat(context.getBean(NotificationService.class)).isSameAs(notificationService);
 
                 EmailService emailService = assertDoesNotThrow(
                         () -> context.getBean(EmailService.class),
                         "EmailService is aliased under two names (:80-81) -- must not be seen as two "
                                 + "ambiguous candidates");
                 assertThat(emailService).isNotNull();
+            } finally {
+                FrameworkScheduling.uninstall(scheduler);
+                context.close();
+            }
+        }
+
+        @Test
+        void notificationServiceBeforeMessagesAndScheduler_failsThenSucceedsOnceRegistered() throws Exception {
+            DependenceManagers managers = createManagersWithMockedFields();
+            SimpleContainer context = spy(new SimpleContainer());
+            setField(managers, "context", context);
+            // Simulate dependency registration occurring later, independently of the text engine's bootstrap.
+            doReturn(null).when(context).getBean(Messages.class);
+            doReturn(null).when(context).getBean(Scheduler.class);
+            Scheduler scheduler = mock(Scheduler.class);
+            when(scheduler.global()).thenReturn(mock(TaskContext.class));
+            FrameworkScheduling.install(scheduler);
+            try (ManualScheduler.Engine engine = new ManualScheduler.Engine()) {
+                UltiTools core = mock(UltiTools.class);
+                when(core.getLogger()).thenReturn(Logger.getAnonymousLogger());
+                when(core.getDataFolder()).thenReturn(temporary.toFile());
+                Method initCoreServices = DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                assertDoesNotThrow(() -> ReflectionUtil.invoke(managers, initCoreServices, core));
+                assertThatThrownBy(() -> context.getBean(NotificationService.class))
+                        .isInstanceOf(NullPointerException.class).hasMessage("messages");
+
+                InMemoryMessages messages = new InMemoryMessages("ultitools",
+                        new FixedLocaleResolver(Locale.ENGLISH, Optional.empty()));
+                context.registerType(Messages.class, messages);
+                doCallRealMethod().when(context).getBean(Messages.class);
+                assertThatThrownBy(() -> context.getBean(NotificationService.class))
+                        .isInstanceOf(NullPointerException.class).hasMessage("scheduler");
+
+                context.registerType(Scheduler.class, engine.scheduler("ultitools"));
+                doCallRealMethod().when(context).getBean(Scheduler.class);
+                NotificationService notification = assertDoesNotThrow(() -> context.getBean(NotificationService.class));
+                assertThat(context.getBean(NotificationService.class)).isSameAs(notification);
+                SimpleContainer child = new SimpleContainer(context);
+                try {
+                    assertThat(child.getBean(NotificationService.class)).isSameAs(notification);
+                } finally {
+                    child.close();
+                }
+            } finally {
+                FrameworkScheduling.uninstall(scheduler);
+                context.close();
+            }
+        }
+
+        @Test
+        void optionalInjectionWhenSupplierFails_isObserved() throws Exception {
+            DependenceManagers managers = createManagersWithMockedFields();
+            SimpleContainer context = spy(new SimpleContainer());
+            setField(managers, "context", context);
+            doReturn(null).when(context).getBean(Messages.class);
+            Scheduler scheduler = mock(Scheduler.class);
+            when(scheduler.global()).thenReturn(mock(TaskContext.class));
+            FrameworkScheduling.install(scheduler);
+            try {
+                UltiTools core = mock(UltiTools.class);
+                when(core.getLogger()).thenReturn(Logger.getAnonymousLogger());
+                when(core.getDataFolder()).thenReturn(temporary.toFile());
+                Method initCoreServices = DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                ReflectionUtil.invoke(managers, initCoreServices, core);
+                OptionalNotificationClient client = new OptionalNotificationClient();
+                assertThatThrownBy(() -> context.getAutowireCapableBeanFactory().autowireBean(client))
+                        .isInstanceOf(NullPointerException.class).hasMessage("messages");
+                assertThat(client.notifications).isNull();
             } finally {
                 FrameworkScheduling.uninstall(scheduler);
                 context.close();
