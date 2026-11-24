@@ -38,6 +38,10 @@ import com.ultikits.ultitools.manager.RemoteRequestHandlers;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.stub.UltiCloudStub;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 
 /**
  * Test scope (plan 22-23): one protocol v2 session of the framework on the in-process {@link UltiCloudStub}, for the
@@ -81,6 +85,9 @@ public final class V2StubSession implements AutoCloseable {
     private UltiCloudStub.Handle stub;
     private CloudFeatures features;
     private UltiTools plugin;
+    private PaperSchedulerEngine schedulerEngine;
+    private Scheduler scheduler;
+    private Scheduler schedulerOwner;
 
     /**
      * @param temp   a temporary directory for the server root, the credentials and the access log
@@ -154,6 +161,27 @@ public final class V2StubSession implements AutoCloseable {
                 extraStubbing.accept(mocked);
             }
         });
+        schedulerEngine = new PaperSchedulerEngine(plugin, logger, PaperBackend.live(plugin));
+        schedulerOwner = schedulerEngine.newOwner("UltiTools");
+        scheduler = schedulerOwner;
+        if (server instanceof ShutdownPanelMessageTracerTest.ValidatingServer) {
+            scheduler = ((ShutdownPanelMessageTracerTest.ValidatingServer) server)
+                    .recordFrameworkCalls(plugin, scheduler);
+        }
+        FrameworkScheduling.install(scheduler);
+        try {
+            startCloud(serverRoot, state);
+        } catch (Exception | Error failure) {
+            try {
+                close();
+            } catch (Exception | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
+    }
+
+    private void startCloud(Path serverRoot, Path state) throws Exception {
         CloudTestAccess.useTemporaryCredentials(state);
         stub = UltiCloudStub.start(UltiCloudStub.Options.defaults().accessLog(temp.resolve("access.log"))
                 .acceptCredential(CREDENTIAL, SERVER_ID));
@@ -318,18 +346,34 @@ public final class V2StubSession implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        PluginInitiationUtils.startAcceptingPanelMessages();
-        CloudSession.current().invalidate();
-        if (features != null) {
-            features.shutdown();
+        try {
+            PluginInitiationUtils.startAcceptingPanelMessages();
+            CloudSession.current().invalidate();
+            if (features != null) {
+                features.shutdown();
+            }
+            responders.shutdown();
+            if (stub != null) {
+                stub.close();
+            }
+        } finally {
+            try {
+                CloudTestAccess.reset();
+            } finally {
+                try {
+                    if (scheduler != null) {
+                        try {
+                            schedulerEngine.retire(schedulerOwner);
+                        } finally {
+                            FrameworkScheduling.uninstall(scheduler);
+                        }
+                    }
+                } finally {
+                    Field instance = UltiTools.class.getDeclaredField("ultiTools");
+                    instance.setAccessible(true);
+                    instance.set(null, null);
+                }
+            }
         }
-        responders.shutdown();
-        if (stub != null) {
-            stub.close();
-        }
-        CloudTestAccess.reset();
-        Field instance = UltiTools.class.getDeclaredField("ultiTools");
-        instance.setAccessible(true);
-        instance.set(null, null);
     }
 }

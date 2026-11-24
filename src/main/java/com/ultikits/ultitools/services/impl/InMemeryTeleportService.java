@@ -11,7 +11,11 @@ import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.Sound;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitRunnable;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.Ticks;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import java.time.Duration;
+import java.util.function.Consumer;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.PlayerCache;
@@ -79,12 +83,8 @@ public class InMemeryTeleportService implements TeleportService {
             return;
         }
         try {
-            new BukkitRunnable() {
-                @Override
-                public void run() {
-                    checkAllPlayersMovement();
-                }
-            }.runTaskTimerAsynchronously(UltiTools.getInstance(), 0, 10L);
+            FrameworkScheduling.scheduler().global().runRepeating(
+                    Duration.ZERO, Ticks.of(10), handle -> checkAllPlayersMovement());
             schedulerInitialized = true;
         } catch (Exception e) {
             // Scheduler initialization failed - likely in test environment
@@ -93,7 +93,7 @@ public class InMemeryTeleportService implements TeleportService {
 
     /**
      * Check movement for all teleporting players.
-     * This method is extracted from BukkitRunnable for testability.
+     * This method is extracted from the scheduled task for testability.
      */
     static void checkAllPlayersMovement() {
         for (UUID playerUUID : teleportingPlayers.keySet()) {
@@ -103,7 +103,7 @@ public class InMemeryTeleportService implements TeleportService {
 
     /**
      * Check if a single player has moved during teleport delay.
-     * This method is extracted from BukkitRunnable for testability.
+     * This method is extracted from the scheduled task for testability.
      *
      * @param playerUUID the UUID of the player to check
      * @return true if the player moved (teleport should be cancelled), false otherwise
@@ -152,18 +152,19 @@ public class InMemeryTeleportService implements TeleportService {
         if (!chunk.isLoaded()) {
             chunk.load();
         }
-        new BukkitRunnable() {
-            float time = delay;
+        FrameworkScheduling.scheduler().entity(player).runRepeating(
+                Duration.ZERO, Ticks.of(10), new Consumer<TaskHandle>() {
+                    private float time = delay;
 
-            @Override
-            public void run() {
-                DelayTeleportResult result = processDelayTeleportTick(player, location, time);
-                time = result.remainingTime;
-                if (result.shouldCancel) {
-                    this.cancel();
-                }
-            }
-        }.runTaskTimer(UltiTools.getInstance(), 0, 10L);
+                    @Override
+                    public void accept(TaskHandle handle) {
+                        DelayTeleportResult result = processDelayTeleportTick(player, location, time);
+                        time = result.remainingTime;
+                        if (result.shouldCancel) {
+                            handle.cancel();
+                        }
+                    }
+                });
     }
 
     /**
@@ -181,7 +182,7 @@ public class InMemeryTeleportService implements TeleportService {
 
     /**
      * Process a single tick of the delay teleport countdown.
-     * This method is extracted from BukkitRunnable for testability.
+     * This method is extracted from the scheduled task for testability.
      *
      * @param player   the player being teleported
      * @param location the target location

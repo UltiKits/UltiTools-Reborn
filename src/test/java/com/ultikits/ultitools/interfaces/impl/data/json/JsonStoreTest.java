@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
@@ -15,8 +16,14 @@ import java.util.logging.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
 import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.scheduler.BukkitScheduler;
-import org.bukkit.scheduler.BukkitTask;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.Ticks;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import org.junit.jupiter.api.AfterEach;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -50,8 +57,8 @@ class JsonStoreTest {
     private static MockedStatic<UltiTools> mockedUltiTools;
     private static MockedStatic<DataStoreManager> mockedDataStoreManager;
     private static UltiTools mockUltiToolsInstance;
-    private static BukkitScheduler mockScheduler;
-    private static BukkitTask mockTask;
+    private Scheduler scheduler;
+    private TaskContext async;
     private static PluginManager mockPluginManager;
 
     @BeforeAll
@@ -60,17 +67,7 @@ class JsonStoreTest {
         if (Bukkit.getServer() == null) {
             Server mockServer = mock(Server.class);
             Logger mockLogger = mock(Logger.class);
-            mockScheduler = mock(BukkitScheduler.class);
-            mockTask = mock(BukkitTask.class);
-            
             when(mockServer.getLogger()).thenReturn(mockLogger);
-            when(mockServer.getScheduler()).thenReturn(mockScheduler);
-            when(mockScheduler.runTaskTimerAsynchronously(
-                org.mockito.ArgumentMatchers.any(), 
-                org.mockito.ArgumentMatchers.any(Runnable.class), 
-                org.mockito.ArgumentMatchers.anyLong(), 
-                org.mockito.ArgumentMatchers.anyLong()
-            )).thenReturn(mockTask);
             
             org.mockito.Mockito.lenient().when(mockServer.getVersion()).thenReturn("MockBukkit (MC: 1.21.11)");
             org.mockito.Mockito.lenient().when(mockServer.getBukkitVersion()).thenReturn("1.21.11-R0.1-SNAPSHOT");
@@ -108,6 +105,28 @@ class JsonStoreTest {
     @BeforeEach
     void useInternalDataFolder() {
         when(mockUltiToolsInstance.getDataFolder()).thenReturn(tempDir.toFile());
+        scheduler = mock(Scheduler.class);
+        async = mock(TaskContext.class);
+        when(scheduler.async()).thenReturn(async);
+        when(async.runRepeating(any(), any(), any())).thenReturn(mock(TaskHandle.class));
+        FrameworkScheduling.install(scheduler);
+    }
+
+    @AfterEach
+    void uninstallScheduler() {
+        FrameworkScheduling.uninstall(scheduler);
+    }
+
+    @Test
+    void flushTaskUsesTheFrameworkAsyncContextAndConfiguredInterval() {
+        JsonStore previous = new JsonStore(tempDir.toString());
+        previous.resetSchedulerState();
+        org.mockito.Mockito.clearInvocations(async);
+        new JsonStore(tempDir.toString());
+
+        verify(async).runRepeating(org.mockito.ArgumentMatchers.eq(Ticks.of(20)),
+                org.mockito.ArgumentMatchers.eq(Ticks.of(200)), any());
+        assertThat(mockingDetails(async).getInvocations()).hasSize(1);
     }
 
     // ==================== Constructor Tests ====================

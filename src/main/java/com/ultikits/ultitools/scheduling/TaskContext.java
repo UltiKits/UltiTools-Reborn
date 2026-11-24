@@ -28,12 +28,15 @@ import org.jetbrains.annotations.ApiStatus;
 public interface TaskContext extends Executor {
     /**
      * Runs once, never inline, even on the context's own thread; on tick contexts, on the next tick.
+     * A thrown failure is logged exactly once at WARNING with the owner's name and original throwable;
+     * the handle ends {@link TaskState#FAILED} and its completion fails with that throwable.
      * @throws java.util.concurrent.RejectedExecutionException if the owner is unloaded
      */
     TaskHandle run(Runnable task);
 
     /**
-     * Runs once after a delay. Zero behaves as {@link #run(Runnable)}.
+     * Runs once after a delay. Zero behaves as {@link #run(Runnable)}. Failure logging and exceptional
+     * completion are the same as for {@code run}.
      * @throws IllegalArgumentException if the delay is negative
      * @throws java.util.concurrent.RejectedExecutionException if the owner is unloaded
      */
@@ -51,7 +54,8 @@ public interface TaskContext extends Executor {
 
     /**
      * Runs {@code task} once (as {@link #run(Runnable)}) and completes the returned future with its
-     * result, or exceptionally with what it threw. The future follows {@link CompletableFuture} rules:
+     * result, or exceptionally with what it threw, without logging the failure while the future can
+     * still observe it. The future follows {@link CompletableFuture} rules:
      * cancelling it before it completes always succeeds. If the task has not started it then never runs;
      * if it has started it finishes, its result is discarded, and an exception it throws is logged once
      * as a WARNING with the owner's name, because no caller can observe it any more. An entity removed
@@ -74,7 +78,8 @@ public interface TaskContext extends Executor {
     boolean isCurrentThread();
 
     /**
-     * Runs the command through {@link #run(Runnable)}, discarding its handle.
+     * Runs the command through {@link #run(Runnable)}, discarding its handle. A thrown failure is
+     * logged exactly once at WARNING with the owner's name and original throwable.
      * @throws java.util.concurrent.RejectedExecutionException if the owner is unloaded or the
      *         entity is already removed
      */

@@ -71,8 +71,7 @@ public class DependenceManagers {
     /**
      * Initialize core services provided by UltiTools-API.
      *
-     * @param plugin the main plugin instance, needed to schedule the deferred economy start-up
-     *               report (Codex P2, PR #463) via the Bukkit scheduler
+     * The framework scheduler defers the economy start-up report until the first server tick.
      */
     private void initCoreServices(UltiTools plugin) {
         // Register TeleportService
@@ -131,7 +130,7 @@ public class DependenceManagers {
         // one tick -- the scheduler-based pattern UltiTools#scheduleStartupMessages() already
         // uses for its own one-time start-up lines -- guarantees every plugin that will enable
         // during this start-up already has, before this runs.
-        Bukkit.getScheduler().runTask(plugin, EconomyUtils::logStartupState);
+        FrameworkScheduling.scheduler().global().run(EconomyUtils::logStartupState);
         ItemServices.register(context);
     }
 

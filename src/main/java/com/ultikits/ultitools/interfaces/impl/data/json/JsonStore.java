@@ -8,7 +8,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.bukkit.scheduler.BukkitRunnable;
+import com.ultikits.ultitools.scheduling.Ticks;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
@@ -78,13 +79,8 @@ public class JsonStore implements DataStore {
             try {
                 int flushRate = UltiTools.getInstance().getConfig().getInt("datasource.flushRate");
                 flushRate = flushRate == 0 ? 10 : flushRate;
-                new BukkitRunnable() {
-
-                    @Override
-                    public void run() {
-                        flushAllCaches();
-                    }
-                }.runTaskTimerAsynchronously(UltiTools.getInstance(), 20L, 20L * flushRate);
+                FrameworkScheduling.scheduler().async().runRepeating(
+                        Ticks.of(20), Ticks.of(20L * flushRate), handle -> flushAllCaches());
                 schedulerInitialized = true;
             } catch (Exception e) {
                 // Scheduler initialization failed - likely in test environment
@@ -98,7 +94,7 @@ public class JsonStore implements DataStore {
      * writing every entry of that plugin changed since its last checkpoint through one checkpoint
      * record, then {@code gc()} on each of the identity's operators. An identity whose checkpoint
      * fails keeps its changed entries pending and does not stop the others; the first failure is
-     * rethrown afterwards with the rest suppressed. Extracted from the {@code BukkitRunnable} for
+     * rethrown afterwards with the rest suppressed. Extracted from the scheduled task for
      * testability.
      */
     void flushAllCaches() {

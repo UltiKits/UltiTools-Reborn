@@ -498,6 +498,10 @@ public class SystemLogHandler extends Handler {
             }
 
             // Scheduled task
+            if ("com.ultikits.ultitools.scheduling.internal.TaskRecord".equals(className)
+                    && "executeClaimed".equals(methodName)) {
+                return TriggerContext.scheduled("Scheduler");
+            }
             if (className.contains("BukkitRunnable") && "run".equals(methodName)) {
                 return TriggerContext.scheduled("BukkitRunnable");
             }

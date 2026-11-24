@@ -251,12 +251,14 @@ class ModuleRequestEndToEndTest {
         private final List<PanelMessageEvent> received = new CopyOnWriteArrayList<>();
         private final AtomicBoolean observedPrimaryThread = new AtomicBoolean();
         private ServerMock server;
+        private FrameworkSchedulerTestSession frameworkScheduler;
         private EventBus eventBus;
 
         @BeforeEach
         void setUp() {
             MockBukkitHelper.ensureCleanState();
             server = MockBukkit.mock();
+            frameworkScheduler = new FrameworkSchedulerTestSession();
             MockBukkit.createMockPlugin();
             eventBus = new EventBus();
             eventBus.subscribe(PanelMessageEvent.class, event -> {
@@ -271,11 +273,18 @@ class ModuleRequestEndToEndTest {
 
         @AfterEach
         void tearDown() throws Exception {
-            eventBus.shutdown();
-            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-            instanceField.setAccessible(true);
-            instanceField.set(null, null);
-            MockBukkitHelper.safeUnmock();
+            try {
+                if (eventBus != null) { eventBus.shutdown(); }
+                Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+                instanceField.setAccessible(true);
+                instanceField.set(null, null);
+            } finally {
+                try {
+                    if (frameworkScheduler != null) { frameworkScheduler.close(); }
+                } finally {
+                    MockBukkitHelper.safeUnmock();
+                }
+            }
         }
 
         @Test
