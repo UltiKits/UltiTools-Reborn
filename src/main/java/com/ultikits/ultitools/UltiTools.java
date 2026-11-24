@@ -381,13 +381,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         PluginInitiationUtils.startAcceptingPanelMessages();
         // Paper bootstrap already applied file transactions and decided this start's module set.
         // Reports still wait for the language, and update observation still follows module loading.
-        moduleFileTransactions = bootstrap.transactions();
-        moduleJarAdmission = bootstrap.admission();
-        ultiToolsClassLoader = bootstrap.classLoader();
-        if (bootstrap.classPathFailure() != null) {
-            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
-                    "Failed to initialize plugin module loading", bootstrap.classPathFailure());
-        }
+        consumeBootstrap(bootstrap);
         this.eventBus = new EventBus();
 
         if (!initDependencies()) {
@@ -403,8 +397,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         initPanelResponderRegistry();
         // Plan 22-21 (S-60): the player-link API exists before the modules that set its handler load.
         cloudFeatures = CloudFeatures.start(this);
-        registerModuleDependencyLoaders();
-        initPluginModules();
+        enableBootstrappedModules();
         migrateCapabilitiesConfig();
         initWebSocketManagers();
         startMetrics(this, 8652, getLogger());
@@ -441,6 +434,17 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
         long ticks = EarlyLogCapture.RELEASE_AFTER_MS / 50L + 20L;
         Bukkit.getScheduler().runTaskLater(this, EarlyLogCapture::releaseIfExpired, ticks);
+    }
+
+    // Package-private lifecycle seam: validate before accessing a failed handover's resources.
+    void consumeBootstrap(BootstrapResult prepared) {
+        if (prepared.classPathFailure() != null) {
+            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
+                    "Failed to initialize plugin module loading", prepared.classPathFailure());
+        }
+        moduleFileTransactions = prepared.transactions();
+        moduleJarAdmission = prepared.admission();
+        ultiToolsClassLoader = prepared.classLoader();
     }
 
     private boolean initDependencies() {
@@ -551,6 +555,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
         panelResponderRegistry = new PanelResponderRegistry();
     }
 
+    // Kept together so dependency visibility is installed before any module is discovered.
+    void enableBootstrappedModules() {
+        registerModuleDependencyLoaders();
+        initPluginModules();
+    }
+
     private void registerModuleDependencyLoaders() {
         bootstrap.classLoader().addDeclaredDependencies(moduleJarAdmission, name -> {
             Plugin dependency = Bukkit.getPluginManager().getPlugin(name);
@@ -558,7 +568,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         });
     }
 
-    private void initPluginModules() {
+    void initPluginModules() {
         pluginManager = new PluginManager(moduleJarAdmission);
         File file = ModuleFileTransactions.modulesFolder(getDataFolder());
         if (!file.exists()) {
