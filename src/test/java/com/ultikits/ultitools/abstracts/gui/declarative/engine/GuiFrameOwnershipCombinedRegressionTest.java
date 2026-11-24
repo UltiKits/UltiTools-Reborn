@@ -9,15 +9,9 @@ import com.ultikits.ultitools.abstracts.gui.declarative.widgets.TextButton;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
-import mc.obliviate.inventory.Gui;
+import com.ultikits.ultitools.text.Text;
 
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
-import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.event.inventory.InventoryCloseEvent;
-import org.bukkit.event.inventory.InventoryOpenEvent;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.ItemMeta;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -39,7 +33,6 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
@@ -58,9 +51,8 @@ import static org.mockito.Mockito.when;
  * {@code d92e7d20b28ecee218c1ad5c8d4b9d1aec89a4367ba9b4d1cb435b8da8d14511}): a replacement made
  * before a failing sibling must still be disposed exactly once when the page closes.</li>
  * </ol>
- * The page uses the production default {@link GuiScheduler} (16 ms frames, plugin = the mocked
- * UltiTools instance), and every request is drained with {@code performTicks(25)}, so the
- * assertions do not depend on whether a given frame ran inline or on a later tick.
+ * The page uses {@link GuiScheduler} with the contract fixture's entity scheduler. Advancing
+ * entity ticks drains scheduled updates before observing the resulting grid snapshot.
  * <p>
  * Bounded failing frame: the only State created in the failing frame ({@code a2}) registers a
  * counting-only listener and never calls {@code setState}, so the failing frame records no
@@ -70,10 +62,10 @@ import static org.mockito.Mockito.when;
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 class GuiFrameOwnershipCombinedRegressionTest {
 
-    /** Enough ticks for any frame the 16 ms default scheduler deferred to run. */
-    private static final int DRAIN_TICKS = 25;
+    /** Enough ticks for a frame, its coalesced follow-up and the session update. */
+    private static final int DRAIN_TICKS = 6;
 
-    private ServerMock server;
+    private GuiTestHarness harness;
     private Player player;
     private Logger pageLogger;
     private FrameErrorCounter frameErrors;
@@ -81,20 +73,21 @@ class GuiFrameOwnershipCombinedRegressionTest {
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
-        server = MockBukkit.mock();
+        ServerMock server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
         player = server.addPlayer();
+        harness = new GuiTestHarness();
         pageLogger = Logger.getLogger(GuiFrameOwnershipCombinedRegressionTest.class.getName());
         frameErrors = new FrameErrorCounter();
         pageLogger.addHandler(frameErrors);
-        // The default GuiScheduler's plugin is this mocked instance; executeFrame logs frame
-        // failures through plugin.getLogger(), so stub it before the mock is published.
+        // Failure logging still uses the framework logger, independently of entity scheduling.
         TestHelper.mockUltiToolsInstance(ultiTools -> when(ultiTools.getLogger()).thenReturn(pageLogger));
     }
 
     @AfterEach
     void tearDown() {
         pageLogger.removeHandler(frameErrors);
+        harness.close();
         MockBukkitHelper.safeUnmock();
     }
 
@@ -104,11 +97,10 @@ class GuiFrameOwnershipCombinedRegressionTest {
         Lifecycle life = new Lifecycle();
         ValueSource source = new ValueSource("v0");
         List<String> clicks = new ArrayList<>();
-        CombinedPage page = new CombinedPage(player, life, source, clicks);
-        page.setInventory(Bukkit.createInventory(page, 9));
+        CombinedPage page = new CombinedPage(harness, player, life, source, clicks);
 
         // Step 1: open. Every cell subscribes during the first mount and receives v0 at once.
-        page.onOpen(mock(InventoryOpenEvent.class));
+        harness.open(page);
         drain();
 
         assertEquals("states{a=[0], b=[0], c=[0]} listeners=3",
@@ -124,9 +116,9 @@ class GuiFrameOwnershipCombinedRegressionTest {
         source.emit("v1");
         drain();
         String slotsAfterEmit = labels(page);
-        page.onClick(clickAt(1));
+        harness.click(page, 1);
         String clicksAfterSlot1 = clicks.toString();
-        page.onClick(clickAt(2));
+        harness.click(page, 2);
         String clicksAfterSlot2 = clicks.toString();
 
         assertEquals("slots=a:v1|b:v1|c:v1 clickSlot1=[b] clickSlot2=[b, c]",
@@ -149,7 +141,7 @@ class GuiFrameOwnershipCombinedRegressionTest {
                         + "disposed and its replacement a2 created once, and no rebuild may be replayed");
 
         // Step 4: close. Every created State is disposed exactly once and nothing builds after.
-        page.onClose(mock(InventoryCloseEvent.class));
+        harness.close(page);
         int buildsAtClose = page.builds.get();
         drain();
 
@@ -167,28 +159,15 @@ class GuiFrameOwnershipCombinedRegressionTest {
     // ------------------------------------------------------------------
 
     private void drain() {
-        server.getScheduler().performTicks(DRAIN_TICKS);
+        harness.fixture().advanceTicks(DRAIN_TICKS);
     }
 
-    private static InventoryClickEvent clickAt(int rawSlot) {
-        InventoryClickEvent event = mock(InventoryClickEvent.class);
-        when(event.getRawSlot()).thenReturn(rawSlot);
-        when(event.getSlot()).thenReturn(rawSlot);
-        return event;
-    }
 
-    private static String labels(Gui gui) {
+    private String labels(DeclarativeGui gui) {
         return displayNameAt(gui, 0) + "|" + displayNameAt(gui, 1) + "|" + displayNameAt(gui, 2);
     }
 
-    private static String displayNameAt(Gui gui, int slot) {
-        ItemStack stack = gui.getInventory().getItem(slot);
-        if (stack == null) {
-            return "-";
-        }
-        ItemMeta meta = stack.getItemMeta();
-        return meta == null ? "?" : meta.getDisplayName();
-    }
+    private String displayNameAt(DeclarativeGui gui, int slot) { return GuiTestHarness.label(harness.current(gui), slot); }
 
     // ------------------------------------------------------------------
     // fixtures
@@ -206,8 +185,8 @@ class GuiFrameOwnershipCombinedRegressionTest {
         private final AtomicInteger builds = new AtomicInteger();
         private boolean failing;
 
-        CombinedPage(Player player, Lifecycle life, ValueSource source, List<String> clicks) {
-            super(player, "gui-frame-ownership-combined-page", "Test", 1);
+        CombinedPage(GuiTestHarness harness, Player player, Lifecycle life, ValueSource source, List<String> clicks) {
+            super(harness.ui(), harness.scheduler(), player, "gui-frame-ownership-combined-page", Text.plain("Test"), 1);
             this.life = life;
             this.source = source;
             this.clicks = clicks;
@@ -390,7 +369,7 @@ class GuiFrameOwnershipCombinedRegressionTest {
         public Widget build(BuildContext context) {
             final ValueCell widget = getWidget();
             return TextButton.builder()
-                    .text(widget.id + ":" + value)
+                    .text(Text.plain(widget.id + ":" + value))
                     .onClick(() -> widget.clicks.add(widget.id))
                     .build();
         }
@@ -446,7 +425,7 @@ class GuiFrameOwnershipCombinedRegressionTest {
 
         @Override
         public Widget build(BuildContext context) {
-            return TextButton.builder().text(getWidget().id + ":quiet:" + deliveries.get()).build();
+            return TextButton.builder().text(Text.plain(getWidget().id + ":quiet:" + deliveries.get())).build();
         }
 
         @Override
