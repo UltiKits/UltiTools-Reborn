@@ -47,7 +47,7 @@ abstract class ChestTestFixture {
         scheduler = new RecordingScheduler(clock.scheduler("UiRuntime"));
         messages = createMessages();
         runtime = new UiRuntime(scheduler, createContainerRuntime(), Logger.getAnonymousLogger(), Thread.currentThread());
-        backend = new ChestBackend(runtime, new MinimalItemRenderer(messages), messages, scheduler);
+        backend = new ChestBackend(runtime, createItemRenderer(), messages, scheduler);
         runtime.register(backend);
         service = runtime.service("chest-test");
     }
@@ -62,6 +62,8 @@ abstract class ChestTestFixture {
     Messages createMessages() {
         return new InMemoryMessages("test", new FixedLocaleResolver(Locale.ENGLISH, Optional.empty()));
     }
+
+    ItemRenderer createItemRenderer() { return new MinimalItemRenderer(messages); }
 
     ContainerRuntime createContainerRuntime() { return new InMemoryContainerRuntime(); }
 
@@ -91,7 +93,7 @@ abstract class ChestTestFixture {
         }
     }
 
-    // The existing item-package renderer is package-private; this local minimal renderer uses the same seams.
+    // Deliberately minimal substitute; production renderer integration tests override its factory.
     private record MinimalItemRenderer(Messages messages) implements ItemRenderer {
         @Override public ItemStack render(ItemSpec spec, Locale locale) {
             ItemStack item = new ItemStack(Material.matchMaterial(spec.itemType().asString()), spec.amount());
