@@ -69,7 +69,7 @@ import com.ultikits.ultitools.utils.PluginInitiationUtils;
  *       the server main thread, and never the thread reading the panel connection, so a slow call
  *       does not hold up other panel messages or the connection's heartbeat. A responder that uses
  *       Bukkit API schedules that part onto the main thread itself (for example with
- *       {@code Bukkit.getScheduler().runTask}) and completes its future from there.</li>
+ *       the framework's global scheduler context) and completes its future from there.</li>
  *   <li><b>Deadline.</b> One deadline of {@link #RESPONDER_TIMEOUT_MILLIS} starts when the request
  *       is admitted ({@link #dispatch} is called) and covers waiting for a worker, the call itself
  *       and the returned future. When it passes, the request fails with a timeout error; a result
