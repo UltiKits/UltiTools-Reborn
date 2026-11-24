@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 
 import org.junit.jupiter.api.Test;
 
@@ -39,6 +40,16 @@ class NotificationServiceSurfaceTest {
                 .extracting(Method::getName)
                 .contains("sendActionBarNotification")
                 .doesNotContain("sendToastNotification");
+    }
+
+    @Test
+    void notificationParametersContainNoStringAndSendingMethodsReturnVoid() {
+        Method[] methods = NotificationService.class.getDeclaredMethods();
+        assertThat(methods).hasSize(12).allSatisfy(method -> {
+            assertThat(method.getParameterTypes()).doesNotContain(String.class);
+            assertThat(method.getReturnType()).isEqualTo(void.class);
+        });
+        assertThat(methods).filteredOn(method -> Modifier.isAbstract(method.getModifiers())).hasSize(4);
     }
 
     @Test
