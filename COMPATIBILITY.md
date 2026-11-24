@@ -82,7 +82,7 @@ Additional 6.x migration differences:
 
 ### Replies, ownership and lifecycle
 
-- Unmatched input retains the framework's existing unknown-command / usage language keys.
+- Unmatched input retains the framework's existing unknown-command / usage wording.
   Unknown first tokens retain the gated help fallthrough; deeper failures list usages from the
   typed tree. Every intermediate node and non-greedy path has an `args` fallback (or `args_` if
   that name is already used). Such fallbacks can make otherwise-invalid input appear valid to
@@ -162,6 +162,68 @@ Additional 6.x migration differences:
 已注册参数类型和模块自定义 `TypeParser` 实例，旧解析器和其类加载器可能继续被引用。
 玩家在线期间权限变化不会自动刷新客户端命令树，须重新登录或执行 `/minecraft:reload`；执行时仍实时检查权限。
 模块必须重新编译，不能只修改 `api-version`。
+
+### Command feedback and asynchronous unload (as of 7.0.0)
+
+Framework command feedback now uses `Messages.send(sender, Text)` rather than sentence-key
+`i18n` strings. With `language: auto`, each player receives their current client language;
+console, command blocks and panel feedback use `fallback-language`. The wording and colours
+of the bundled replies are retained. Module help and custom parser exception details remain
+module-owned; the parser helpers' fixed English details are not translated.
+
+All thirteen framework keys use the `ultitools:` namespace:
+
+- `command.error.op_required`, `command.error.no_permission`, `command.error.player_only`,
+  `command.error.console_only`, `command.error.sender_locked`, `command.error.server_locked`,
+  `command.error.cooldown`, `command.error.execution_failed`;
+- `command.async.processing`, `command.async.timeout`;
+- `command.reply.unknown`, `command.reply.usage`, `command.reply.argument_error`.
+
+Override them in `plugins/UltiTools/messages/<locale>.yml` using dotted or nested YAML keys and
+MiniMessage values. Framework catalogue overrides currently require a restart. Arguments are
+literal text or components, not MiniMessage templates: `<target>` and `<words...>` in usages
+remain visible. Native translatable argument-error components are retained where Paper supplies
+them; plain parser details are passed through literally.
+
+`ValidationResult.failure(Text, String)` and `getErrorText()` provide deferred text for validators.
+`ChainValidationResult.getErrorText()` reads the first failure, like `getErrorMessage()`. A
+Text-backed failure returns **null** from `getErrorMessage()`; consumers must check `getErrorText()`
+first. The existing String factories remain supported and custom String messages are sent unchanged.
+`@AsyncCommand.processingMessageKey` now takes `<namespace>:<path>`; its colour comes from that
+catalogue. An invalid value warns once per executor/value and uses `ultitools:command.async.processing`.
+
+`@RunAsync` and `@AsyncCommand` command bodies remain **framework-owned**, not module-owned.
+They use `Scheduler.async().run`; synchronous bodies run inline on the global tick thread, or
+are handed to `global().run` off that thread. Bodies are not entity tasks: a player leaving must
+not skip the body and its completion/lock-release hooks. A timeout notice alone uses that player's
+`entity(player)` context, or `global()` for other senders. Completion cancels its timeout task.
+Timeout stops waiting and reports once; it never cancels or interrupts the body.
+
+At module unload or shutdown, each executor waits at most about **ten seconds** for accepted async
+invocations, including their completion hooks, before releasing its validators and other resources.
+New async submissions to that unloading executor are refused. If the budget expires, one WARNING
+names the executor and remaining invocation count; work continues in the background without
+interruption. Multiple executors each have their own budget, so simultaneous stuck commands can
+add to shutdown time. Do not block a command waiting for a global/entity callback during unload:
+the unloading tick thread cannot run that callback while waiting, and later framework submissions
+are refused once its scheduler retires. A module's injected scheduler has its own retirement rules.
+
+中文补充：框架命令反馈已改用 `Messages`；`language: auto` 时按各玩家当前客户端语言渲染，
+控制台、命令方块和面板使用后备语言。上列 13 个键都属于 `ultitools` 命名空间，可在
+`plugins/UltiTools/messages/<locale>.yml` 中覆盖；框架目录覆盖目前须重启生效。原有回复措辞和
+颜色保留，用法里的 `<target>`、`<words...>` 等参数不会当模板解析；模块帮助及解析器异常原文
+仍归模块所有，两个固定英文解析错误不翻译。校验失败先读取 `getErrorText()`；由 Text 构造的
+失败其 `getErrorMessage()` 为 null，旧 String 工厂及自定义字符串回复继续原样支持。
+`processingMessageKey` 改用带命名空间的 `<namespace>:<path>`，颜色由模块目录决定；非法值
+每个执行器／值只警告一次，回退默认“处理中...”键。
+
+异步命令体仍归框架调度器所有，同步命令已在 global tick 线程时立即执行，否则交给 global；
+只有超时提示跟随玩家实体，其他发送者走 global。命令按时结束会取消看门狗，超时只停止等待、
+提示一次，不取消或中断命令体。卸载或停服时每个执行器最多等约 10 秒，等待包含完成钩子和
+锁释放；随后拒绝该执行器的新异步提交。到期记一条含执行器类名和剩余数量的 WARNING，任务
+继续在后台运行。多个卡住的执行器会累计等待时间，这是已知限制，不共用截止时间。卸载期间
+不要阻塞等待跳回 global／entity 的回调：等待中的 tick 线程无法执行它，框架调度器收回后
+再提交也会被拒绝；模块注入的调度器另按模块生命周期收回。
 
 ## Message catalogues and automatic fallback (as of 7.0.0)
 
