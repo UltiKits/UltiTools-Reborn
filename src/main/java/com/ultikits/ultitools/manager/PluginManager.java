@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.scheduling.Scheduler;
+
 import java.io.File;
 import java.io.IOException;
 import java.lang.annotation.Annotation;
@@ -577,6 +579,7 @@ public class PluginManager {
             releaseSupersededRegistrations(plugin);
             assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
+            if (taskManager != null) { taskManager.cancelAll(plugin); }
             restoreSupersededRegistrations(plugin);
             releaseConfigEntities(plugin);
             logPluginInitializationFailure(plugin.getClass(), plugin.getPluginName(), e);
@@ -2730,6 +2733,7 @@ public class PluginManager {
                 unregisterSupersededVersions(plugin);
                 onPluginRegistered(plugin);
             } else {
+                if (taskManager != null) { taskManager.cancelAll(plugin); }
                 try { plugin.getContext().close(); }
                 finally {
                     try { restoreSupersededRegistrations(plugin); }
@@ -2741,6 +2745,7 @@ public class PluginManager {
             return registerSelf;
         } catch (Exception | Error e) {
             if (!pluginList.contains(plugin)) {
+                if (taskManager != null) { taskManager.cancelAll(plugin); }
                 // #562: registerSelf() (or the close after it returned false) threw; the superseded
                 // copies keep running and get their registrations back. A listed copy failed after
                 // the handover was discarded; unregister below releases its registrations.
@@ -3162,6 +3167,7 @@ public class PluginManager {
             assemblePluginContainer(pluginContext, plugin, pluginClass, classLoader);
             return plugin;
         } catch (Exception | Error failure) {
+            if (taskManager != null) { taskManager.cancelAll(plugin); }
             restoreSupersededRegistrations(plugin);
             releaseConfigEntities(plugin);
             if (failure instanceof Error) { throw (Error) failure; }
@@ -3230,6 +3236,9 @@ public class PluginManager {
         pluginContext.setDisplayName(plugin.getPluginName());
 
         pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
+        if (taskManager != null) {
+            pluginContext.registerType(Scheduler.class, taskManager.schedulerFor(plugin));
+        }
         pluginContext.registerShutdownHook();
         pluginContext.setClassLoader(loader);
 

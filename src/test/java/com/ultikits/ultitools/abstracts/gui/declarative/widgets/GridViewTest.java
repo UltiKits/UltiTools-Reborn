@@ -4,16 +4,15 @@ import com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Element;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderNode;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderObjectElement;
-import com.ultikits.ultitools.abstracts.gui.declarative.core.SlotKey;
-import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiScheduler;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
-import mc.obliviate.inventory.Gui;
-import org.bukkit.Bukkit;
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiTestHarness;
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiTestHarness.SnapshotProbe;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.item.ItemSpec;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,7 +21,6 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -49,6 +47,7 @@ import static org.junit.jupiter.api.Assertions.*;
 public class GridViewTest {
 
     private Plugin mockPlugin;
+    private GuiTestHarness harness;
     private Player player;
     private BuildContext rootContext;
 
@@ -61,11 +60,13 @@ public class GridViewTest {
         ServerMock server = MockBukkit.mock();
         mockPlugin = MockBukkit.createMockPlugin();
         player = server.addPlayer();
+        harness = new GuiTestHarness();
         rootContext = BuildContext.root(player, "test-gui", 6);
     }
 
     @AfterEach
     void tearDown() {
+        harness.close();
         MockBukkitHelper.safeUnmock();
     }
 
@@ -134,9 +135,9 @@ public class GridViewTest {
         GridView<Void> gridView = GridView.<Void>builder()
                 .startSlot(0)
                 .columns(9)
-                .child(TextButton.builder().text("A").build())
-                .child(TextButton.builder().text("B").build())
-                .child(TextButton.builder().text("C").build())
+                .child(TextButton.builder().text(Text.plain("A")).build())
+                .child(TextButton.builder().text(Text.plain("B")).build())
+                .child(TextButton.builder().text(Text.plain("C")).build())
                 .build();
 
         GridViewElement element = mountGridView(gridView);
@@ -155,10 +156,10 @@ public class GridViewTest {
 
     @Test
     void gridViewOfItemDisplaysStillPositionsAtTheSameSlots() {
-        List<ItemStack> items = java.util.Arrays.asList(
-                new ItemStack(Material.DIAMOND), new ItemStack(Material.GOLD_INGOT), new ItemStack(Material.IRON_INGOT));
+        List<ItemSpec> items = java.util.Arrays.asList(
+                ItemSpec.builder(Material.DIAMOND).build(), ItemSpec.builder(Material.GOLD_INGOT).build(), ItemSpec.builder(Material.IRON_INGOT).build());
 
-        GridView<ItemStack> gridView = GridView.<ItemStack>builder()
+        GridView<ItemSpec> gridView = GridView.<ItemSpec>builder()
                 .startSlot(0)
                 .columns(9)
                 .items(items, item -> ItemDisplay.builder(item).build())
@@ -181,9 +182,9 @@ public class GridViewTest {
         GridView<Void> gridView = GridView.<Void>builder()
                 .startSlot(0)
                 .columns(9)
-                .child(TextButton.builder().text("A").build())
-                .child(ItemDisplay.builder(new ItemStack(Material.DIAMOND)).build())
-                .child(TextButton.builder().text("C").build())
+                .child(TextButton.builder().text(Text.plain("A")).build())
+                .child(ItemDisplay.builder(ItemSpec.builder(Material.DIAMOND).build()).build())
+                .child(TextButton.builder().text(Text.plain("C")).build())
                 .build();
 
         GridViewElement element = mountGridView(gridView);
@@ -207,7 +208,7 @@ public class GridViewTest {
             GridView<Void> gridView = GridView.<Void>builder()
                     .startSlot(0)
                     .columns(9)
-                    .child(TextButton.builder().text("A").slot(50).build())
+                    .child(TextButton.builder().text(Text.plain("A")).slot(50).build())
                     .build();
 
             GridViewElement element = mountGridView(gridView);
@@ -232,7 +233,7 @@ public class GridViewTest {
             GridView<Void> gridView = GridView.<Void>builder()
                     .startSlot(0)
                     .columns(9)
-                    .child(TextButton.builder().text("A").build())
+                    .child(TextButton.builder().text(Text.plain("A")).build())
                     .build();
 
             mountGridView(gridView);
@@ -252,7 +253,7 @@ public class GridViewTest {
             GridView<Void> gridView = GridView.<Void>builder()
                     .startSlot(9)
                     .columns(9)
-                    .child(TextButton.builder().text("A").build())
+                    .child(TextButton.builder().text(Text.plain("A")).build())
                     .build();
 
             mountGridView(gridView);
@@ -282,7 +283,7 @@ public class GridViewTest {
         GridView<Void> gridView = GridView.<Void>builder()
                 .startSlot(20)
                 .columns(9)
-                .child(TextButton.builder().text("only").build())
+                .child(TextButton.builder().text(Text.plain("only")).build())
                 .build();
 
         GridViewElement element = mountGridView(gridView);
@@ -298,7 +299,7 @@ public class GridViewTest {
     void overflowFollowsCalculateSlotForChildsExistingArithmetic() {
         GridView.Builder<Void> builder = GridView.<Void>builder().startSlot(0).columns(9);
         for (int i = 0; i < 12; i++) {
-            builder.child(TextButton.builder().text("i" + i).build());
+            builder.child(TextButton.builder().text(Text.plain("i" + i)).build());
         }
         GridView<Void> gridView = builder.build();
 
@@ -324,7 +325,7 @@ public class GridViewTest {
                 .startSlot(0)
                 .columns(9)
                 .child(Container.builder()
-                        .child(TextButton.builder().text("nested").build())
+                        .child(TextButton.builder().text(Text.plain("nested")).build())
                         .build())
                 .build();
 
@@ -346,8 +347,8 @@ public class GridViewTest {
                 .startSlot(0)
                 .columns(9)
                 .child(Container.builder()
-                        .child(TextButton.builder().text("first").build())
-                        .child(TextButton.builder().text("second").build())
+                        .child(TextButton.builder().text(Text.plain("first")).build())
+                        .child(TextButton.builder().text(Text.plain("second")).build())
                         .build())
                 .build();
 
@@ -368,29 +369,23 @@ public class GridViewTest {
 
     @Test
     void repaintThroughGuiRendererPlacesChildrenAtComputedSlots() {
-        TestGui gui = new TestGui(player, "test-gui", "Test", 6);
-        gui.setInventory(Bukkit.createInventory(gui, 54));
-        GuiScheduler scheduler = new GuiScheduler(mockPlugin, 0L);
-        GuiRenderer renderer = new GuiRenderer(gui, player, scheduler);
+        SnapshotProbe gui = new SnapshotProbe();
+        GuiScheduler scheduler = new GuiScheduler(harness.scheduler(), player);
+        GuiRenderer renderer = new GuiRenderer(Text.plain("Test"), 6, scheduler, gui);
 
         GridView<Void> gridView = GridView.<Void>builder()
                 .startSlot(0)
                 .columns(9)
-                .child(TextButton.builder().text("A").build())
-                .child(TextButton.builder().text("B").build())
+                .child(TextButton.builder().text(Text.plain("A")).build())
+                .child(TextButton.builder().text(Text.plain("B")).build())
                 .build();
 
         renderer.initialize(() -> gridView, rootContext);
 
-        assertNotNull(gui.getInventory().getItem(0), "slot 0 should hold the first child after a real repaint");
-        assertNotNull(gui.getInventory().getItem(1), "slot 1 should hold the second child after a real repaint");
+        assertNotNull(gui.current().item(com.ultikits.ultitools.ui.GridSlot.ofIndex(0)).orElse(null), "slot 0 should hold the first child after a real repaint");
+        assertNotNull(gui.current().item(com.ultikits.ultitools.ui.GridSlot.ofIndex(1)).orElse(null), "slot 1 should hold the second child after a real repaint");
     }
 
-    private static final class TestGui extends Gui {
-        TestGui(Player player, String id, String title, int rows) {
-            super(player, id, title, rows);
-        }
-    }
 
     // ------------------------------------------------------------------
     // Task 1 sentinel: pre-existing widget-level tests (unrelated to slot
@@ -422,8 +417,8 @@ public class GridViewTest {
      */
     @Test
     void containerNoLongerExposesBackground() throws Exception {
-        assertThrows(NoSuchMethodException.class,
-                () -> Container.Builder.class.getMethod("background", IconWrapper.class));
+        assertFalse(java.util.Arrays.stream(Container.Builder.class.getMethods())
+                .anyMatch(method -> method.getName().equals("background")));
         assertThrows(NoSuchMethodException.class,
                 () -> Container.class.getMethod("getBackground"));
     }

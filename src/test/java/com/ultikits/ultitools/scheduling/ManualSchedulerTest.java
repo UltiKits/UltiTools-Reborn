@@ -3,6 +3,8 @@ package com.ultikits.ultitools.scheduling;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.bukkit.entity.Entity;
+import org.mockito.Mockito;
 import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
@@ -44,6 +46,28 @@ class ManualSchedulerTest {
             assertThat(work.get()).isNull();
             assertThatThrownBy(() -> engine.elapseAsync(Duration.ofNanos(-1)))
                     .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
+    void retire_continuationSchedulingNewTask_doesNotThrow() {
+        try (ManualScheduler.Engine engine = new ManualScheduler.Engine()) {
+            Entity entity = Mockito.mock(Entity.class);
+            Scheduler scheduler = engine.scheduler("sample");
+            AtomicInteger completions = new AtomicInteger();
+            AtomicInteger runs = new AtomicInteger();
+            TaskHandle first = scheduler.entity(entity).run(runs::incrementAndGet);
+            TaskHandle second = scheduler.entity(entity).run(runs::incrementAndGet);
+            first.completion().whenComplete((value, failure) -> {
+                scheduler.global().run(runs::incrementAndGet);
+                completions.incrementAndGet();
+            });
+            engine.retire(entity);
+            engine.advanceTicks(1);
+            assertThat(first.state()).isEqualTo(TaskState.RETIRED);
+            assertThat(second.state()).isEqualTo(TaskState.RETIRED);
+            assertThat(completions).hasValue(1);
+            assertThat(runs).hasValue(1);
         }
     }
 

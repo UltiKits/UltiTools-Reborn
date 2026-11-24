@@ -8,13 +8,12 @@ import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiScheduler;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
-import mc.obliviate.inventory.Gui;
-import org.bukkit.Bukkit;
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiTestHarness;
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiTestHarness.SnapshotProbe;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.item.ItemSpec;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
-import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.AfterEach;
@@ -38,8 +37,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Second-frame reproductions for GridView cells built by component (wrapper) widgets.
@@ -67,7 +64,8 @@ public class GridViewComponentCellRepaintTest {
     private Plugin mockPlugin;
     private Player player;
     private BuildContext rootContext;
-    private TestGui gui;
+    private SnapshotProbe gui;
+    private GuiTestHarness harness;
 
     @BeforeEach
     void setUp() {
@@ -75,13 +73,14 @@ public class GridViewComponentCellRepaintTest {
         ServerMock server = MockBukkit.mock();
         mockPlugin = MockBukkit.createMockPlugin();
         player = server.addPlayer();
+        harness = new GuiTestHarness();
         rootContext = BuildContext.root(player, "test-gui", GUI_ROWS);
-        gui = new TestGui(player, "test-gui", "Test", GUI_ROWS);
-        gui.setInventory(Bukkit.createInventory(gui, GUI_SIZE));
+        gui = new SnapshotProbe();
     }
 
     @AfterEach
     void tearDown() {
+        harness.close();
         MockBukkitHelper.safeUnmock();
     }
 
@@ -103,6 +102,7 @@ public class GridViewComponentCellRepaintTest {
                 "frame 1 (precondition): each stateless cell renders at its computed slot");
 
         renderer.scheduleBuild();
+        harness.tick();
 
         assertEquals("A|B|C", labels(0, 1, 2),
                 "frame 2: each stateless cell must still render at its GridView-computed slot");
@@ -126,6 +126,7 @@ public class GridViewComponentCellRepaintTest {
                 "frame 1 (precondition): each stateful cell renders at its computed slot");
 
         renderer.scheduleBuild();
+        harness.tick();
 
         assertEquals("DIAMOND|EMERALD|GOLD_INGOT", labels(0, 1, 2),
                 "frame 2: each stateful cell's ItemDisplay must still render at its GridView-computed slot");
@@ -145,8 +146,10 @@ public class GridViewComponentCellRepaintTest {
                 "frame 1 (precondition): each two-level wrapper cell renders at its computed slot");
 
         renderer.scheduleBuild();
+        harness.tick();
         String frame2 = labels(0, 1, 2);
         renderer.scheduleBuild();
+        harness.tick();
         String frame3 = labels(0, 1, 2);
 
         assertEquals("frame2=A|B|C frame3=A|B|C", "frame2=" + frame2 + " frame3=" + frame3,
@@ -168,10 +171,11 @@ public class GridViewComponentCellRepaintTest {
                 .build());
 
         renderer.scheduleBuild();
+        harness.tick();
 
-        renderer.handleClick(clickAtRawSlot(1));
+        gui.click(1);
         String afterSlot1 = counts(clicksA, clicksB, clicksC);
-        renderer.handleClick(clickAtRawSlot(0));
+        gui.click(0);
         String afterSlot0 = counts(clicksA, clicksB, clicksC);
 
         assertEquals("slot1->A=0,B=1,C=0 slot0->A=1,B=1,C=0",
@@ -192,6 +196,7 @@ public class GridViewComponentCellRepaintTest {
                     .child(new StatelessLabelCell("C"))
                     .build());
             renderer.scheduleBuild();
+        harness.tick();
 
             assertEquals(Collections.emptyList(), handler.overrideWarnings(),
                     "component cells that declare no slot must log no override warning on frame 1 or frame 2");
@@ -218,6 +223,7 @@ public class GridViewComponentCellRepaintTest {
 
             handler.records.clear();
             renderer.scheduleBuild();
+        harness.tick();
 
             assertEquals("warnings=[explicit 7 at index 1] slots=A|B|C|-",
                     "warnings=" + handler.overrideWarnings() + " slots=" + labels(0, 1, 2, 7),
@@ -233,15 +239,16 @@ public class GridViewComponentCellRepaintTest {
         GuiRenderer renderer = startRenderer(() -> GridView.<Void>builder()
                 .startSlot(0)
                 .columns(9)
-                .child(TextButton.builder().text("A").build())
-                .child(TextButton.builder().text("B").build())
-                .child(TextButton.builder().text("C").build())
+                .child(TextButton.builder().text(Text.plain("A")).build())
+                .child(TextButton.builder().text(Text.plain("B")).build())
+                .child(TextButton.builder().text(Text.plain("C")).build())
                 .build());
 
         assertEquals("A|B|C", labels(0, 1, 2),
                 "frame 1 (precondition): each direct leaf cell renders at its computed slot");
 
         renderer.scheduleBuild();
+        harness.tick();
 
         assertEquals("A|B|C", labels(0, 1, 2),
                 "frame 2 (control): direct leaf cells keep their GridView-computed slots");
@@ -252,8 +259,8 @@ public class GridViewComponentCellRepaintTest {
     // ------------------------------------------------------------------
 
     private GuiRenderer startRenderer(@NotNull Supplier<Widget> supplier) {
-        GuiScheduler scheduler = new GuiScheduler(mockPlugin, 0L);
-        GuiRenderer renderer = new GuiRenderer(gui, player, scheduler);
+        GuiScheduler scheduler = new GuiScheduler(harness.scheduler(), player);
+        GuiRenderer renderer = new GuiRenderer(Text.plain("Test"), GUI_ROWS, scheduler, gui);
         renderer.initialize(supplier, rootContext);
         return renderer;
     }
@@ -270,23 +277,8 @@ public class GridViewComponentCellRepaintTest {
         return out.toString();
     }
 
-    private String labelAt(int slot) {
-        ItemStack stack = gui.getInventory().getItem(slot);
-        if (stack == null || stack.getType() == Material.AIR) {
-            return EMPTY;
-        }
-        ItemMeta meta = stack.getItemMeta();
-        if (meta != null && meta.hasDisplayName()) {
-            return meta.getDisplayName();
-        }
-        return stack.getType().name();
-    }
+    private String labelAt(int slot) { return gui.label(slot); }
 
-    private static InventoryClickEvent clickAtRawSlot(int rawSlot) {
-        InventoryClickEvent event = mock(InventoryClickEvent.class);
-        when(event.getRawSlot()).thenReturn(rawSlot);
-        return event;
-    }
 
     private static String counts(AtomicInteger a, AtomicInteger b, AtomicInteger c) {
         return "A=" + a.get() + ",B=" + b.get() + ",C=" + c.get();
@@ -350,7 +342,7 @@ public class GridViewComponentCellRepaintTest {
         @Override
         @NotNull
         public Widget build(@NotNull BuildContext context) {
-            TextButton.Builder builder = TextButton.builder().text(label);
+            TextButton.Builder builder = TextButton.builder().text(Text.plain(label));
             if (explicitSlot >= 0) {
                 builder.slot(explicitSlot);
             }
@@ -371,7 +363,7 @@ public class GridViewComponentCellRepaintTest {
         @Override
         @NotNull
         public Widget build(@NotNull BuildContext context) {
-            return TextButton.builder().text(label).onClick(() -> clicks.incrementAndGet()).build();
+            return TextButton.builder().text(Text.plain(label)).onClick(() -> clicks.incrementAndGet()).build();
         }
     }
 
@@ -392,7 +384,7 @@ public class GridViewComponentCellRepaintTest {
     private static final class StatefulItemCellState extends State<StatefulItemCell> {
         @Override
         public Widget build(@NotNull BuildContext context) {
-            return ItemDisplay.builder(new ItemStack(getWidget().material)).build();
+            return ItemDisplay.builder(ItemSpec.builder(getWidget().material).build()).build();
         }
     }
 
@@ -427,13 +419,8 @@ public class GridViewComponentCellRepaintTest {
     private static final class StatefulLabelCellState extends State<StatefulLabelCell> {
         @Override
         public Widget build(@NotNull BuildContext context) {
-            return TextButton.builder().text(getWidget().label).build();
+            return TextButton.builder().text(Text.plain(getWidget().label)).build();
         }
     }
 
-    private static final class TestGui extends Gui {
-        TestGui(Player player, String id, String title, int rows) {
-            super(player, id, title, rows);
-        }
-    }
 }

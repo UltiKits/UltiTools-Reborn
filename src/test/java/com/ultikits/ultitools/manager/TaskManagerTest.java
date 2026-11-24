@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.lang.reflect.Method;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -12,10 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
-import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitScheduler;
-import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -331,6 +331,7 @@ class TaskManagerTest {
         @DisplayName("cancelAll should only affect the specified plugin")
         void cancelAllOnlyAffectsTargetPlugin() {
             UltiToolsPlugin otherPlugin = mock(UltiToolsPlugin.class);
+            when(otherPlugin.getPluginName()).thenReturn("OtherPlugin");
             ServiceWithScheduled bean1 = new ServiceWithScheduled();
             ServiceWithDelayedTask bean2 = new ServiceWithDelayedTask();
 
@@ -401,7 +402,7 @@ class TaskManagerTest {
     // === #410: scanAndSchedule must not leak already-scheduled tasks when a LATER
     // @Scheduled method's own scheduling call throws mid-scan ===
     //
-    // Bukkit.getScheduler() is replaced with a Mockito mock for these tests (rather than
+    // The PaperBackend delivery seam is replaced with a Mockito mock for these tests (rather than
     // relying on MockBukkit's real BukkitSchedulerMock, which never rejects a scheduling call
     // regardless of plugin state) so the SECOND scheduling call can be made to throw
     // deterministically, exactly as the real IllegalPluginAccessException would if the host
@@ -415,13 +416,14 @@ class TaskManagerTest {
                 + "the first task in its owning bucket, and that task is cancellable")
         void earlierTaskSurvivesALaterThrowAndStaysCancellable() {
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+                PaperBackend mockScheduler = mock(PaperBackend.class);
+                taskManager = new TaskManager(new PaperSchedulerEngine(mockPlugin,
+                        Logger.getLogger("TaskManagerTest.backend"), mockScheduler));
                 bukkit.when(Bukkit::getLogger).thenReturn(
                         Logger.getLogger("TaskManagerTest.MidScanFailureTests.earlierTaskSurvives"));
 
-                BukkitTask firstTask = mock(BukkitTask.class);
-                when(mockScheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+                ScheduledTask firstTask = mock(ScheduledTask.class);
+                when(mockScheduler.global(any(), anyLong()))
                         .thenReturn(firstTask)
                         .thenThrow(new RuntimeException(
                                 "simulated: host plugin became disabled mid-registration"));
@@ -449,12 +451,13 @@ class TaskManagerTest {
         @DisplayName("a bean with a single @Scheduled method that throws leaves nothing behind")
         void singleScheduledMethodThatThrowsLeavesNothingBehind() {
             try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
-                bukkit.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+                PaperBackend mockScheduler = mock(PaperBackend.class);
+                taskManager = new TaskManager(new PaperSchedulerEngine(mockPlugin,
+                        Logger.getLogger("TaskManagerTest.backend"), mockScheduler));
                 bukkit.when(Bukkit::getLogger).thenReturn(
                         Logger.getLogger("TaskManagerTest.MidScanFailureTests.singleThrows"));
 
-                when(mockScheduler.runTaskTimer(any(Plugin.class), any(Runnable.class), anyLong(), anyLong()))
+                when(mockScheduler.global(any(), anyLong()))
                         .thenThrow(new RuntimeException("simulated scheduling failure"));
 
                 OneScheduledMethodBean bean = new OneScheduledMethodBean();

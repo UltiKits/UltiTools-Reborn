@@ -15,7 +15,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitTask;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -30,6 +29,7 @@ import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.TaskManager;
+import com.ultikits.ultitools.manager.TaskManagerTestAccess;
 import com.ultikits.ultitools.testutil.BindingTimingConfig;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
@@ -39,7 +39,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  * -- through the real {@code final} {@link UltiToolsPlugin#reloadSelf()}, the real
  * {@link PluginManager#applyReloadedConfigBindings} and a real {@link TaskManager} on MockBukkit's
  * real scheduler -- each config-bound {@code @Scheduled} method has exactly ONE live task. Live
- * tasks are counted in the scheduler itself (pending, not cancelled, owned by the host plugin),
+ * tasks are counted by annotation handle identity (pending and not cancelled),
  * not inferred from how often the method ran, and this holds both when the bound value changed
  * (the reschedule path) and when it did not (the no-op path). Run counts are asserted as well, as
  * a second, independent symptom of a duplicated timer.
@@ -115,15 +115,9 @@ class UltiToolsPluginReloadLiveTaskCountTest {
         MockBukkitHelper.safeUnmock();
     }
 
-    /** Pending, not-cancelled tasks the host plugin owns -- every task TaskManager schedules. */
+    /** Live annotation handles, independent of the one-shot Paper delivery chain. */
     private int liveTasks() {
-        int live = 0;
-        for (BukkitTask task : Bukkit.getScheduler().getPendingTasks()) {
-            if (!task.isCancelled() && task.getOwner() == host) {
-                live++;
-            }
-        }
-        return live;
+        return TaskManagerTestAccess.activeHandles(taskManager).size();
     }
 
     private void advanceTo(int tick) {
