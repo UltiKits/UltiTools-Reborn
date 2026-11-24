@@ -22,23 +22,26 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 /** Container-driven guards that remain effective without Bukkit's executor interface. */
 class PluginManagerCommandDiscoveryTest {
-    @BeforeEach void setUp() { MockBukkitHelper.ensureCleanState(); MockBukkit.mock(); }
+    @BeforeEach void setUp() {
+        MockBukkitHelper.ensureCleanState();
+        MockBukkit.mock();
+    }
     @AfterEach void tearDown() { MockBukkitHelper.safeUnmock(); }
 
     @Test void missingCooldownValidatorIsStillRefused() {
-        rejects(new MissingCooldown(), false, "CmdCD");
+        assertRejected(new MissingCooldown(), false, "CmdCD");
     }
     @Test void missingUsageLockValidatorIsStillRefused() {
-        rejects(new MissingLock(), false, "UsageLimit");
+        assertRejected(new MissingLock(), false, "UsageLimit");
     }
     @Test void unknownNamedCompleterIsStillRefused() {
-        rejects(new UnknownCompleter(), false, "@cmd1-not-registered");
+        assertRejected(new UnknownCompleter(), false, "@cmd1-not-registered");
     }
     @Test void externalConfigBindingIsStillRefused() {
-        rejects(new BoundExternal(), true, "external plugins");
+        assertRejected(new BoundExternal(), true, "external plugins");
     }
 
-    private static void rejects(BaseCommandExecutor executor, boolean external, String reason) {
+    private static void assertRejected(BaseCommandExecutor executor, boolean external, String reason) {
         SimpleContainer container = new SimpleContainer();
         container.registerSingleton("executor", executor);
         assertThat(container.getBeanNamesForType(BaseCommandExecutor.class)).containsExactly("executor");

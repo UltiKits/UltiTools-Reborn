@@ -13,6 +13,9 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.command.BrigadierCommand;
 import com.ultikits.ultitools.command.engine.CommandEngine;
+import com.ultikits.ultitools.command.engine.CommandCompilationException;
+import com.ultikits.ultitools.exceptions.ErrorCode;
+import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.context.SimpleContainer;
 
@@ -43,8 +46,9 @@ public class CommandManager {
             String description, String... aliases) {
         BaseCommandExecutor executor = plugin.getContext().getBean(clazz);
         CmdExecutor annotation = annotation(executor);
-        if (annotation != null) engine.register(plugin, plugin.getPluginName(), executor, plugin.i18n(description),
-                permission, annotation.requireOp(), Arrays.asList(aliases));
+        if (annotation != null) registerOwned(plugin, plugin.getPluginName(), executor, () ->
+                engine.register(plugin, plugin.getPluginName(), executor, plugin.i18n(description), permission,
+                        annotation.requireOp(), Arrays.asList(aliases.length == 0 ? annotation.alias() : aliases)));
     }
 
     /**
@@ -88,7 +92,11 @@ public class CommandManager {
      * Registers a framework-owned command during enable.
      * @param executor the executor
      */
-    public void registerCoreCommand(BaseCommandExecutor executor) { registerExecutor(CORE_OWNER, CORE_OWNER, executor, null); }
+    public void registerCoreCommand(BaseCommandExecutor executor) {
+        CmdExecutor annotation = annotation(executor);
+        if (annotation != null) engine.register(CORE_OWNER, CORE_OWNER, executor, annotation.description(),
+                annotation.permission(), annotation.requireOp(), Arrays.asList(annotation.alias()));
+    }
 
     /**
      * Registers external executors once per bean identity, using raw descriptions.
@@ -110,7 +118,7 @@ public class CommandManager {
                     CmdExecutor annotation = annotation(executor);
                     if (annotation != null && !annotation.manualRegister()) registerExecutor(owner, ownerName, executor, module);
                 } else if (bean instanceof BrigadierCommand command) {
-                    engine.register(owner, ownerName, command);
+                    registerOwned(owner, ownerName, command, () -> engine.register(owner, ownerName, command));
                 }
             }
         }
@@ -126,7 +134,21 @@ public class CommandManager {
         CmdExecutor annotation = annotation(executor);
         if (annotation == null) return;
         String description = module == null ? annotation.description() : module.i18n(annotation.description());
-        engine.register(owner, ownerName, executor, description, annotation.permission(), annotation.requireOp(), Arrays.asList(annotation.alias()));
+        registerOwned(owner, ownerName, executor, () -> engine.register(owner, ownerName, executor, description,
+                annotation.permission(), annotation.requireOp(), Arrays.asList(annotation.alias())));
+    }
+
+    private void registerOwned(Object owner, String ownerName, Object executor, Runnable registration) {
+        try {
+            registration.run();
+        } catch (CommandCompilationException failure) {
+            engine.unregister(owner);
+            String message = "Cannot load module " + ownerName + ": executor " + executor.getClass().getName()
+                    + ": " + failure.getMessage() + ". Change @CmdMapping formats to use distinct literal prefixes, "
+                    + "one parameter name/type per position, terminal <name...> arrays, and registered custom type parsers.";
+            Bukkit.getLogger().severe(message);
+            throw new PluginModuleException(ErrorCode.COMMAND_ANNOTATION_UNENFORCEABLE, message, failure);
+        }
     }
 
     @Nullable

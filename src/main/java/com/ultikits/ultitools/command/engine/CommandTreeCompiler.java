@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.arguments.ArgumentType;
 import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
@@ -25,9 +26,6 @@ import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
-import com.mojang.brigadier.suggestion.Suggestions;
-import com.mojang.brigadier.suggestion.SuggestionsBuilder;
-import java.util.concurrent.CompletableFuture;
 
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 
@@ -35,7 +33,9 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 final class CommandTreeCompiler {
     private final NativeArgumentTypes nativeTypes;
 
-    CommandTreeCompiler(NativeArgumentTypes nativeTypes) { this.nativeTypes = nativeTypes; }
+    CommandTreeCompiler(NativeArgumentTypes nativeTypes) {
+        this.nativeTypes = nativeTypes;
+    }
 
     @FunctionalInterface interface Invocation {
         int run(CommandContext<CommandSourceStack> context, Method method, Map<String, Object> values)
@@ -55,6 +55,7 @@ final class CommandTreeCompiler {
     CompiledCommand compile(BaseCommandExecutor executor, String description, List<String> aliases,
             String permission, boolean requireOp, Invocation invocation, Command<CommandSourceStack> help) {
         rejectDuplicateFormats(executor);
+        if (aliases.isEmpty()) throw new CommandCompilationException(executor.getClass().getName() + ": missing command labels");
         List<String> labels = aliases.stream().map(s -> s.toLowerCase(Locale.ROOT)).toList();
         Spec root = new Spec(labels.getFirst(), null, null);
         List<Method> methods = new ArrayList<>(executor.getMappings().values());
@@ -72,14 +73,14 @@ final class CommandTreeCompiler {
         LiteralCommandNode<CommandSourceStack> tree = (LiteralCommandNode<CommandSourceStack>)
                 build(root, invocation, new SuggestionBridge(executor), executor.getClass(), List.of());
         var rootBuilder = tree.createBuilder().requires(source ->
-                CommandAccess.root(permission, requireOp, source));
+                CommandAccess.root(permission, requireOp, source) && CommandAccess.classVisible(executor.getClass(), source));
         if (tree.getCommand() == null) rootBuilder.executes(help);
         var guardedRoot = rootBuilder.build();
         tree.getChildren().forEach(guardedRoot::addChild);
-        tree = visibleLiteral(guardedRoot, source -> CommandAccess.classVisible(executor.getClass(), source));
-        if (tree.getChild(helpLiteral) == null) tree.addChild(visibleLiteral(
-                LiteralArgumentBuilder.<CommandSourceStack>literal(helpLiteral).executes(help).build(),
-                source -> CommandAccess.classVisible(executor.getClass(), source)));
+        tree = guardedRoot;
+        if (tree.getChild(helpLiteral) == null) tree.addChild(
+                LiteralArgumentBuilder.<CommandSourceStack>literal(helpLiteral).executes(help)
+                        .requires(source -> CommandAccess.classVisible(executor.getClass(), source)).build());
         return new CompiledCommand(labels.getFirst(), labels.subList(1, labels.size()), description, tree, signature.toString());
     }
 
@@ -102,20 +103,7 @@ final class CommandTreeCompiler {
         Spec current = root;
         List<String> names = new ArrayList<>();
         for (int i = 0; i < parts.length; i++) {
-            String part = parts[i];
-            ArgumentMapping argument = null;
-            String name = part.toLowerCase(Locale.ROOT);
-            if (part.startsWith("<") && part.endsWith(">")) {
-                boolean greedy = part.endsWith("...>");
-                if (greedy && i != parts.length - 1) throw invalid(owner, method, format, "greedy parameter must be last");
-                name = part.substring(1, part.length() - (greedy ? 4 : 1));
-                Parameter parameter = parameters.get(name);
-                if (parameter == null) throw invalid(owner, method, format, "missing @CmdParam for " + name);
-                names.add(name);
-                try { argument = ArgumentMapping.of(parameter.getType(), greedy, nativeTypes); }
-                catch (CommandCompilationException failure) { throw invalid(owner, method, format, failure.getMessage()); }
-            }
-            current = child(current, name, argument, owner, method, format);
+            current = addPart(current, owner, method, format, parts, i, parameters, names);
         }
         for (String name : parameters.keySet()) {
             if (!names.contains(name)) throw invalid(owner, method, format, "@CmdParam " + name + " is absent from format");
@@ -123,6 +111,27 @@ final class CommandTreeCompiler {
         if (current.method != null) throw invalid(owner, method, format, "duplicate path with " + current.method.getName());
         current.method = method;
         current.format = format;
+    }
+
+    private Spec addPart(Spec parent, Class<?> owner, Method method, String format, String[] parts, int index,
+            Map<String, Parameter> parameters, List<String> names) {
+        String part = parts[index];
+        if (!part.startsWith("<") || !part.endsWith(">")) {
+            return child(parent, part.toLowerCase(Locale.ROOT), null, owner, method, format);
+        }
+        boolean greedy = part.endsWith("...>");
+        if (greedy && index != parts.length - 1) throw invalid(owner, method, format, "greedy parameter must be last");
+        String name = part.substring(1, part.length() - (greedy ? 4 : 1));
+        Parameter parameter = parameters.get(name);
+        if (parameter == null) throw invalid(owner, method, format, "missing @CmdParam for " + name);
+        names.add(name);
+        ArgumentMapping argument;
+        try {
+            argument = ArgumentMapping.of(parameter.getType(), greedy, nativeTypes);
+        } catch (CommandCompilationException failure) {
+            throw invalid(owner, method, format, failure.getMessage());
+        }
+        return child(parent, name, argument, owner, method, format);
     }
 
     private Spec child(Spec parent, String name, ArgumentMapping argument, Class<?> owner, Method method, String format) {
@@ -160,9 +169,9 @@ final class CommandTreeCompiler {
         List<Method> uses = methods(spec);
         ArgumentBuilder<CommandSourceStack, ?> builder = spec.argument == null
                 ? LiteralArgumentBuilder.<CommandSourceStack>literal(spec.name)
-                : RequiredArgumentBuilder.<CommandSourceStack, Object>argument(spec.name, cast(spec.argument.type()))
-                        .suggests(suggestions.provider(uses, spec.name, spec.argument.type()));
-        if (uses.size() == 1) builder.requires(source -> CommandAccess.mapping(uses.getFirst(), source));
+                : argumentBuilder(spec.name, spec.argument.type(), suggestions, uses);
+        builder.requires(source -> uses.isEmpty()
+                || uses.stream().anyMatch(method -> CommandAccess.suggestible(owner, method, source)));
         if (spec.method != null) builder.executes(new MappingCommand(spec.method, path, null, invocation));
         for (Spec child : spec.children.values()) {
             builder.then(build(child, invocation, suggestions, owner, path));
@@ -174,10 +183,7 @@ final class CommandTreeCompiler {
                 builder.executes(new MappingCommand(child.method, greedyPath, child.name, invocation));
             }
         }
-        CommandNode<CommandSourceStack> result = builder.build();
-        return result instanceof LiteralCommandNode<CommandSourceStack> literal
-                ? visibleLiteral(literal, source -> uses.stream().anyMatch(method -> CommandAccess.suggestible(owner, method, source)))
-                : result;
+        return builder.build();
     }
 
     private static List<Method> methods(Spec spec) {
@@ -187,23 +193,10 @@ final class CommandTreeCompiler {
         return List.copyOf(methods);
     }
 
-    private static LiteralCommandNode<CommandSourceStack> visibleLiteral(LiteralCommandNode<CommandSourceStack> node,
-            java.util.function.Predicate<CommandSourceStack> visible) {
-        var filtered = new LiteralCommandNode<CommandSourceStack>(node.getLiteral(), node.getCommand(),
-                node.getRequirement(), node.getRedirect(), node.getRedirectModifier(), node.isFork()) {
-            @Override public CompletableFuture<Suggestions> listSuggestions(CommandContext<CommandSourceStack> context,
-                    SuggestionsBuilder builder) {
-                return canUse(context.getSource()) && visible.test(context.getSource())
-                        ? super.listSuggestions(context, builder) : builder.buildFuture();
-            }
-        };
-        node.getChildren().forEach(filtered::addChild);
-        return filtered;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static com.mojang.brigadier.arguments.ArgumentType<Object> cast(com.mojang.brigadier.arguments.ArgumentType<?> type) {
-        return (com.mojang.brigadier.arguments.ArgumentType<Object>) type;
+    private static <T> RequiredArgumentBuilder<CommandSourceStack, T> argumentBuilder(String name, ArgumentType<T> type,
+            SuggestionBridge suggestions, List<Method> uses) {
+        return RequiredArgumentBuilder.<CommandSourceStack, T>argument(name, type)
+                .suggests(suggestions.provider(uses, name, type));
     }
 
     private static int invoke(CommandContext<CommandSourceStack> context, Method method, List<Spec> path,
@@ -244,7 +237,9 @@ final class CommandTreeCompiler {
         Method method;
         String format;
         Spec(String name, ArgumentMapping argument, Method firstMethod) {
-            this.name = name; this.argument = argument; this.firstMethod = firstMethod;
+            this.name = name;
+            this.argument = argument;
+            this.firstMethod = firstMethod;
         }
     }
 }

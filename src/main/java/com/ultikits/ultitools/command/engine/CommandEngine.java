@@ -3,6 +3,9 @@ package com.ultikits.ultitools.command.engine;
 import java.util.List;
 import java.util.Locale;
 import com.ultikits.ultitools.command.BrigadierCommand;
+import java.util.Arrays;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import java.util.logging.Logger;
 import org.bukkit.Bukkit;
 import org.jetbrains.annotations.ApiStatus;
@@ -41,8 +44,16 @@ public final class CommandEngine {
     public boolean register(Object owner, String ownerName, BaseCommandExecutor executor, String description,
             String permission, boolean requireOp, List<String> aliases) {
         installer.ensureInstalled();
-        var invocation = new CommandInvocation(executor, aliases.getFirst().toLowerCase(Locale.ROOT));
-        var command = compiler.compile(executor, description, aliases, permission, requireOp, invocation::run, invocation::help);
+        List<String> labels = aliases;
+        if (labels.isEmpty()) {
+            CmdExecutor annotation = MergedAnnotationResolver.find(executor.getClass(), CmdExecutor.class);
+            if (annotation == null || annotation.alias().length == 0) {
+                throw new CommandCompilationException(executor.getClass().getName() + ": missing command labels");
+            }
+            labels = Arrays.asList(annotation.alias());
+        }
+        var invocation = new CommandInvocation(executor, labels.getFirst().toLowerCase(Locale.ROOT));
+        var command = compiler.compile(executor, description, labels, permission, requireOp, invocation::run, invocation::help);
         var replies = new FrameworkReplies(executor, command.tree(),
                 (input, source) -> bindings.dispatch(command.label(), input, source));
         var decorated = new CompiledCommand(command.label(), command.aliases(), command.description(), replies.tree(), command.signature());

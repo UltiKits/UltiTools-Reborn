@@ -8,13 +8,15 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.tree.CommandNode;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 
 /** Separates lifecycle-registered shapes from live module instances. */
 final class CommandBindings {
-    record Binding(Object owner, String ownerName, Object instance, CompiledCommand command) {}
     private final Map<String, Binding> candidates = new LinkedHashMap<>();
     private final Map<String, Binding> active = new ConcurrentHashMap<>();
     private final Map<String, String> delivered = new LinkedHashMap<>();
@@ -28,11 +30,14 @@ final class CommandBindings {
     }
 
     synchronized boolean bind(Object owner, String ownerName, Object instance, CompiledCommand command) {
-        Binding previous = candidates.get(command.label());
-        if (previous != null && !Objects.equals(owner, previous.owner())) {
-            logger.severe("Command /" + command.label() + " from " + ownerName + " (" + instance.getClass().getName()
-                    + ") conflicts with " + previous.ownerName() + " (" + previous.instance().getClass().getName() + "); rejected.");
-            return false;
+        for (String label : labels(command)) {
+            for (Binding previous : candidates.values()) {
+                if (!Objects.equals(owner, previous.owner()) && labels(previous.command()).contains(label)) {
+                    logger.severe("Command /" + label + " from " + ownerName + " (" + instance.getClass().getName()
+                            + ") conflicts with " + previous.ownerName() + " (" + previous.instance().getClass().getName() + "); rejected.");
+                    return false;
+                }
+            }
         }
         Binding binding = new Binding(owner, ownerName, instance, command);
         candidates.put(command.label(), binding);
@@ -44,6 +49,12 @@ final class CommandBindings {
             if (initialComplete) warnDeferred(binding);
         }
         return true;
+    }
+
+    private static List<String> labels(CompiledCommand command) {
+        List<String> labels = new ArrayList<>(command.aliases());
+        labels.add(command.label());
+        return labels;
     }
 
     private void warnDeferred(Binding binding) {
@@ -79,15 +90,15 @@ final class CommandBindings {
     }
 
     int dispatch(String label, String input, CommandSourceStack source)
-            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+            throws CommandSyntaxException {
         Binding binding = find(label);
         if (binding == null) throw ProxyTreeFactory.unknown();
         var proxy = new ProxyTreeFactory(this).create(label, binding.command().tree());
         String actual = input.split("\\s+", 2)[0];
-        var root = com.mojang.brigadier.builder.LiteralArgumentBuilder.<CommandSourceStack>literal(actual)
+        var root = LiteralArgumentBuilder.<CommandSourceStack>literal(actual)
                 .requires(proxy.getRequirement()).executes(proxy.getCommand()).build();
         proxy.getChildren().forEach(root::addChild);
-        var dispatcher = new com.mojang.brigadier.CommandDispatcher<CommandSourceStack>();
+        var dispatcher = new CommandDispatcher<CommandSourceStack>();
         dispatcher.getRoot().addChild(root);
         return dispatcher.execute(input, source);
     }
@@ -123,4 +134,6 @@ final class CommandBindings {
         }
         initialComplete = true;
     }
+    record Binding(Object owner, String ownerName, Object instance, CompiledCommand command) { }
+
 }

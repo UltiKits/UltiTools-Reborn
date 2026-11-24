@@ -1,7 +1,7 @@
 package com.ultikits.ultitools.command.engine;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 import java.util.List;
 import java.util.logging.Logger;
 import com.mojang.brigadier.arguments.StringArgumentType;

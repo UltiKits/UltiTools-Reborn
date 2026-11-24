@@ -21,7 +21,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.StringReader;
-import com.mojang.brigadier.arguments.*;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;

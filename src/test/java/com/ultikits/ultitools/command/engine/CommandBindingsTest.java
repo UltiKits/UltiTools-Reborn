@@ -1,7 +1,8 @@
 package com.ultikits.ultitools.command.engine;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Handler;
@@ -69,6 +70,26 @@ class CommandBindingsTest {
         bindings.onCommands(commands);
         assertThat(commands.getDispatcher().execute("probe ping", mock(CommandSourceStack.class))).isEqualTo(1);
         assertThat(messages).anyMatch(s -> s.contains("first") && s.contains("second") && s.contains("java.lang.Object"));
+    }
+
+    @Test void ownershipConflictsCoverPrimaryAgainstAliasAliasAgainstPrimaryAndAliasAgainstAlias() {
+        for (String spelling : List.of("probe", "alias")) {
+            Logger logger = Logger.getAnonymousLogger();
+            List<String> messages = capture(logger);
+            var bindings = new CommandBindings(logger, () -> { /* No client synchronization. */ });
+            Object owner = new Object();
+            Object intruder = new Object();
+            CompiledCommand first = command("probe", "same", 1);
+            assertThat(bindings.bind(owner, "first", owner, new CompiledCommand("probe", List.of("alias"),
+                    first.description(), first.tree(), first.signature()))).isTrue();
+            assertThat(bindings.bind(intruder, "second", intruder, command(spelling, "same", 2))).isFalse();
+            CompiledCommand other = command("other", "same", 3);
+            assertThat(bindings.bind(intruder, "second", intruder, new CompiledCommand("other", List.of(spelling),
+                    other.description(), other.tree(), other.signature()))).isFalse();
+            assertThat(bindings.ownerByLabel(spelling)).isSameAs(owner);
+            assertThat(bindings.ownerByLabel("other")).isNull();
+            assertThat(messages).hasSize(2).allMatch(message -> message.contains("first") && message.contains("second"));
+        }
     }
 
     @Test void freshRootsAfterStartWaitForAnEventAndCloseReleasesAllOwners() {

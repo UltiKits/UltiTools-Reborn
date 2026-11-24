@@ -13,8 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.mojang.brigadier.CommandDispatcher;
-import com.mojang.brigadier.arguments.IntegerArgumentType;
-import com.mojang.brigadier.arguments.StringArgumentType;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -26,7 +24,10 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 class CommandTreeCompilerTest {
     private final CommandTreeCompiler compiler = new CommandTreeCompiler(new StringNativeArgumentTypes());
 
-    @BeforeEach void setUp() { MockBukkitHelper.ensureCleanState(); MockBukkit.mock(); }
+    @BeforeEach void setUp() {
+        MockBukkitHelper.ensureCleanState();
+        MockBukkit.mock();
+    }
     @AfterEach void tearDown() { MockBukkitHelper.safeUnmock(); }
 
     @Test void literalAndArgumentShareTheSameParent() {
@@ -54,10 +55,10 @@ class CommandTreeCompilerTest {
                 .hasMessageContaining("two");
     }
 
-    @Test void duplicateNormalizedPathIsRejected() { rejects(new Duplicate(), "duplicate"); }
-    @Test void nonTerminalGreedyIsRejected() { rejects(new MiddleGreedy(), "last"); }
-    @Test void unmappedTypeIsRejected() { rejects(new Unmapped(), "type"); }
-    @Test void parameterAbsentFromFormatIsRejected() { rejects(new Absent(), "value"); }
+    @Test void duplicateNormalizedPathIsRejected() { assertRejected(new Duplicate(), "duplicate"); }
+    @Test void nonTerminalGreedyIsRejected() { assertRejected(new MiddleGreedy(), "last"); }
+    @Test void unmappedTypeIsRejected() { assertRejected(new Unmapped(), "type"); }
+    @Test void parameterAbsentFromFormatIsRejected() { assertRejected(new Absent(), "value"); }
 
     @Test void aDifferentArgumentMappingChangesTheSignature() {
         assertThat(compile(new IntegerCommand()).signature()).isNotEqualTo(compile(new StringCommand()).signature());
@@ -66,7 +67,7 @@ class CommandTreeCompilerTest {
     private CompiledCommand compile(BaseCommandExecutor executor) {
         return compiler.compile(executor, "test", (context, method, values) -> 1, context -> 1);
     }
-    private void rejects(BaseCommandExecutor executor, String text) {
+    private void assertRejected(BaseCommandExecutor executor, String text) {
         assertThatThrownBy(() -> compile(executor)).isInstanceOf(CommandCompilationException.class)
                 .hasMessageContaining(executor.getClass().getName()).hasMessageContaining(text);
     }

@@ -10,11 +10,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.lang.reflect.Method;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import com.ultikits.ultitools.command.engine.CommandTestSupport.CommandsEvent;
+import com.ultikits.ultitools.command.engine.CommandTestSupport.PluginLifecycle;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.bukkit.command.CommandSender;
-import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,14 +32,12 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
-import io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager;
 import io.papermc.paper.plugin.lifecycle.event.handler.LifecycleEventHandler;
 import io.papermc.paper.plugin.lifecycle.event.registrar.ReloadableRegistrarEvent;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 
 /** Real connector -> manager -> lifecycle registrar regression; no legacy Bukkit executor cast. */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-@SuppressWarnings({"PMD.AvoidAccessibilityAlteration", "unchecked"})
 class ConnectorPathRegistrationTest {
     private static final String LABEL = "connectorpathbasecmd";
     private PluginManager pluginManager;
@@ -53,9 +53,11 @@ class ConnectorPathRegistrationTest {
         MockBukkitHelper.ensureCleanState();
         MockBukkit.mock();
         pluginManager = new PluginManager();
-        LifecycleEventManager<Plugin> lifecycle = mock(LifecycleEventManager.class);
-        doAnswer(call -> { handler.set(call.getArgument(1)); return null; }).when(lifecycle)
-                .registerEventHandler(eq(LifecycleEvents.COMMANDS), any(LifecycleEventHandler.class));
+        PluginLifecycle lifecycle = mock(PluginLifecycle.class);
+        doAnswer(call -> {
+            handler.set(call.getArgument(1));
+            return null;
+        }).when(lifecycle).registerEventHandler(eq(LifecycleEvents.COMMANDS), any());
         CommandManager manager = new CommandManager();
         TestHelper.mockUltiToolsInstance(plugin -> {
             when(plugin.getCommandManager()).thenReturn(manager);
@@ -94,16 +96,16 @@ class ConnectorPathRegistrationTest {
         return module;
     }
 
-    private void register(UltiToolsPlugin module) throws Exception {
-        Method method = PluginManager.class.getDeclaredMethod("registerBukkit", UltiToolsPlugin.class);
-        method.setAccessible(true);
+    private void register(UltiToolsPlugin module) throws Throwable {
+        var method = MethodHandles.privateLookupIn(PluginManager.class, MethodHandles.lookup()).findVirtual(
+                PluginManager.class, "registerBukkit", MethodType.methodType(void.class, UltiToolsPlugin.class));
         method.invoke(pluginManager, module);
     }
 
     private RecordingCommands fireCommands() {
         assertThat(handler.get()).isNotNull();
         var commands = new RecordingCommands();
-        ReloadableRegistrarEvent<Commands> event = mock(ReloadableRegistrarEvent.class);
+        CommandsEvent event = mock(CommandsEvent.class);
         when(event.registrar()).thenReturn(commands);
         handler.get().run(event);
         return commands;

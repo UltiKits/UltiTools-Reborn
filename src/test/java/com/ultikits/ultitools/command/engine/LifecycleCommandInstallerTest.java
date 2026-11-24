@@ -1,18 +1,22 @@
 package com.ultikits.ultitools.command.engine;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import java.util.logging.Logger;
-import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
-import io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager;
 import io.papermc.paper.plugin.lifecycle.event.handler.LifecycleEventHandler;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 
 class LifecycleCommandInstallerTest {
     @Test void installationIsIdempotent() {
-        LifecycleEventManager<Plugin> manager = mock(LifecycleEventManager.class);
+        CommandTestSupport.PluginLifecycle manager = mock(CommandTestSupport.PluginLifecycle.class);
         var bindings = new CommandBindings(Logger.getAnonymousLogger(), () -> {});
         var installer = new LifecycleCommandInstaller(() -> manager, bindings, Logger.getAnonymousLogger());
         installer.ensureInstalled();
@@ -21,7 +25,7 @@ class LifecycleCommandInstallerTest {
         assertThat(installer.isInstalled()).isTrue();
     }
     @Test void aLifecycleRefusalIsLoggedAndCanBeRetried() {
-        LifecycleEventManager<Plugin> manager = mock(LifecycleEventManager.class);
+        CommandTestSupport.PluginLifecycle manager = mock(CommandTestSupport.PluginLifecycle.class);
         doThrow(new IllegalStateException("outside onEnable")).doNothing()
                 .when(manager).registerEventHandler(eq(LifecycleEvents.COMMANDS), any(LifecycleEventHandler.class));
         Logger logger = mock(Logger.class);

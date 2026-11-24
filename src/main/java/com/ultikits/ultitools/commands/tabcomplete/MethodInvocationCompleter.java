@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.commands.tabcomplete;
 
+import org.bukkit.Bukkit;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -266,7 +267,7 @@ public class MethodInvocationCompleter implements TabCompleter {
     }
 
     private static Command resolveCommand(String label) {
-        var server = org.bukkit.Bukkit.getServer();
+        var server = Bukkit.getServer();
         return server == null || label == null ? null : server.getCommandMap().getCommand(label);
     }
 

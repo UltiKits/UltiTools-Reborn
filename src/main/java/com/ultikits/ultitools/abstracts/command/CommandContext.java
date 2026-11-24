@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import java.lang.reflect.Array;
 import lombok.Builder;
 import lombok.Getter;
 import org.bukkit.command.CommandSender;
@@ -164,7 +165,7 @@ public final class CommandContext {
     public Object getParamValue(String name) {
         Object value = parsedParams.get(name);
         if (value != null && value.getClass().isArray()) {
-            return java.lang.reflect.Array.getLength(value) == 0 ? null : java.lang.reflect.Array.get(value, 0);
+            return Array.getLength(value) == 0 ? null : Array.get(value, 0);
         }
         return value;
     }

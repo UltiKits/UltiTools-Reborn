@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.command.engine;
 
 import java.util.UUID;
+import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -34,6 +35,7 @@ final class PaperNativeArgumentTypes implements NativeArgumentTypes {
     }
     @Override public Object resolve(Class<?> type, Object value, CommandSourceStack source) throws CommandSyntaxException {
         if (type.equals(Player.class)) return ((PlayerSelectorArgumentResolver) value).resolve(source).getFirst();
+        if (type.equals(OfflinePlayer.class)) return Bukkit.getOfflinePlayer((String) value);
         if (type.equals(Location.class)) {
             var position = ((FinePositionResolver) value).resolve(source);
             return new Location(source.getLocation().getWorld(), position.x(), position.y(), position.z());

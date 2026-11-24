@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.jetbrains.annotations.ApiStatus;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
@@ -21,7 +22,6 @@ import javax.annotation.Nullable;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
-import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import com.google.common.collect.BiMap;
@@ -353,7 +353,7 @@ public abstract class BaseCommandExecutor {
      * @param context the complete, typed invocation context
      * @return true after handling the invocation
      */
-    @org.jetbrains.annotations.ApiStatus.Internal
+    @ApiStatus.Internal
     public final boolean invokeTyped(CommandContext context) {
         joinDispatchedExecutors();
         ValidatorChain.ChainValidationResult validationResult = validatorChain.validate(context);
@@ -381,7 +381,7 @@ public abstract class BaseCommandExecutor {
      * Gives the compiler this executor's help literal.
      * @return the help literal
      */
-    @org.jetbrains.annotations.ApiStatus.Internal
+    @ApiStatus.Internal
     public final String helpCommand() { return getHelpCommand(); }
 
     /**
@@ -392,7 +392,7 @@ public abstract class BaseCommandExecutor {
      * @return custom suggestions, or null to retain native argument suggestions
      */
     @Nullable
-    @org.jetbrains.annotations.ApiStatus.Internal
+    @ApiStatus.Internal
     public final List<String> suggestions(CommandSender sender, String label, String[] args) {
         return suggest(sender, label, args);
     }
@@ -626,7 +626,7 @@ public abstract class BaseCommandExecutor {
      * @return {@code true} always, indicating that the help invocation was handled
      * @since 6.3.0
      */
-    @org.jetbrains.annotations.ApiStatus.Internal
+    @ApiStatus.Internal
     public final boolean handleGatedHelp(CommandContext context) {
         for (CommandValidator validator : validatorChain.getValidators()) {
             if (!(validator instanceof SenderTypeValidator) && !(validator instanceof PermissionValidator)) {

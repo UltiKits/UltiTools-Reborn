@@ -16,7 +16,6 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -261,7 +260,7 @@ class BaseCommandExecutorTest {
             
             assertTrue(result);
             assertTrue(executor.helpCalled);
-            org.mockito.Mockito.verify(mockPlayer).sendMessage(org.mockito.ArgumentMatchers.contains("未知指令"));
+            verify(mockPlayer).sendMessage(contains("未知指令"));
         }
         
 

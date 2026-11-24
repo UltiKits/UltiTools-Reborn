@@ -1,8 +1,18 @@
 package com.ultikits.ultitools.manager;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.times;
 import java.util.List;
 import org.bukkit.command.CommandSender;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,6 +62,13 @@ class CommandManagerTest {
         manager.register(module, Fixture.class, "custom", "custom description", "custom", "other");
         verify(engine).register(module, "module", own, "translated:custom description", "custom", false,
                 List.of("custom", "other"));
+    }
+    @Test void explicitRegistrationWithoutAliasesUsesTheAnnotationLabels() {
+        Fixture own = new Fixture();
+        container.registerSingleton("own", own);
+        manager.register(module, Fixture.class, "custom", "description");
+        verify(engine).register(module, "module", own, "translated:description", "custom", false,
+                List.of("test", "alias"));
     }
     @Test void theShortOverloadAllowsManualRegistration() {
         Manual manual = new Manual();

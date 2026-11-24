@@ -2,7 +2,15 @@ package com.ultikits.ultitools.command.engine;
 
 import java.lang.reflect.Array;
 import com.mojang.brigadier.StringReader;
-import com.mojang.brigadier.arguments.*;
+import java.util.ArrayList;
+import com.mojang.brigadier.arguments.ArgumentType;
+import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
+import com.mojang.brigadier.arguments.FloatArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.LongArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.ultikits.ultitools.abstracts.command.parser.TypeParserRegistry;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
@@ -28,7 +36,7 @@ record ArgumentMapping(Class<?> javaType, boolean greedy, ArgumentType<?> type, 
         if (narrow != null) return narrow;
         try { return nativeTypes.type(type); }
         catch (CommandCompilationException absent) {
-            var parser = com.ultikits.ultitools.abstracts.command.parser.TypeParserRegistry.getInstance().getParser(type);
+            var parser = TypeParserRegistry.getInstance().getParser(type);
             if (parser == null) throw absent;
             return new TypeParserArgumentType<>(parser);
         }
@@ -57,7 +65,7 @@ record ArgumentMapping(Class<?> javaType, boolean greedy, ArgumentType<?> type, 
         if (javaType.equals(String.class)) return text;
         Class<?> element = javaType.getComponentType();
         if (element.equals(String.class)) return text.isBlank() ? new String[0] : text.trim().split("\\s+");
-        var values = new java.util.ArrayList<Object>();
+        var values = new ArrayList<Object>();
         StringReader reader = new StringReader(text);
         reader.skipWhitespace();
         while (reader.canRead()) {

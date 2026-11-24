@@ -1,8 +1,12 @@
 package com.ultikits.ultitools.command.engine;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -16,7 +20,11 @@ import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.ValidatorChain;
-import com.ultikits.ultitools.annotations.command.*;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdParam;
+import com.ultikits.ultitools.annotations.command.RunAsync;
+import com.ultikits.ultitools.annotations.command.CmdSender;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 
 class CommandDispatchTest {

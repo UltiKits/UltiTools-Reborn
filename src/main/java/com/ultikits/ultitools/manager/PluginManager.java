@@ -527,11 +527,7 @@ public class PluginManager {
         if (plugin == null) {
             return false;
         }
-        boolean result = attemptPluginRegistration(plugin);
-        if (result) {
-            registerBukkit(plugin);
-        }
-        return result;
+        return attemptPluginRegistration(plugin);
     }
 
     /**
@@ -585,11 +581,7 @@ public class PluginManager {
             logPluginInitializationFailure(plugin.getClass(), plugin.getPluginName(), e);
             return false;
         }
-        boolean result = attemptPluginRegistration(plugin);
-        if (result) {
-            registerBukkit(plugin);
-        }
-        return result;
+        return attemptPluginRegistration(plugin);
     }
 
     /**
@@ -2722,16 +2714,16 @@ public class PluginManager {
                 // unloaded and the new version's context gets closed too -- leaving the module
                 // with neither version, while it was originally running fine.
                 //
-                // Doing it here does not race the old version for commands: registerBukkit(), the
-                // method that actually registers Bukkit commands, is only called after this
-                // method returns -- at this point the new version hasn't registered a single
-                // command yet.
+                // The new copy has not registered its command trees yet. Keep that final
+                // registration inside this failure boundary so a compiler refusal tears down
+                // the listed module through the same existing unload path.
                 //
                 // #562: the superseded copies' registrations, released before this copy's
                 // container refresh, stay released -- the copies are unloaded next.
                 discardSupersededRegistrations(plugin);
                 unregisterSupersededVersions(plugin);
                 onPluginRegistered(plugin);
+                registerBukkit(plugin);
             } else {
                 if (taskManager != null) { taskManager.cancelAll(plugin); }
                 try { plugin.getContext().close(); }

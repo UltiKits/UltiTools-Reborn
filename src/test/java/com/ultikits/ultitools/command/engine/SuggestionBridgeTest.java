@@ -1,14 +1,16 @@
 package com.ultikits.ultitools.command.engine;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 import java.util.List;
 import java.util.logging.Logger;
 import org.bukkit.command.CommandSender;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
-import com.ultikits.ultitools.annotations.command.*;
+import com.ultikits.ultitools.annotations.command.CmdExecutor;
+import com.ultikits.ultitools.annotations.command.CmdMapping;
+import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 
 class SuggestionBridgeTest {

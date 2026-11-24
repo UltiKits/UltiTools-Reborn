@@ -2,19 +2,14 @@ package com.ultikits.ultitools.command.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
-import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -26,11 +21,6 @@ import com.ultikits.ultitools.command.BrigadierCommand;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.manager.CommandManager;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import io.papermc.paper.command.brigadier.Commands;
-import io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager;
-import io.papermc.paper.plugin.lifecycle.event.handler.LifecycleEventHandler;
-import io.papermc.paper.plugin.lifecycle.event.registrar.ReloadableRegistrarEvent;
-import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 
 class BrigadierCommandRegistrationTest {
     @Test void moduleBeanAliasesRegisterOnceAndUnloadingHidesTheLiveTree() throws Exception {
@@ -82,24 +72,12 @@ class BrigadierCommandRegistrationTest {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    static AtomicReference<LifecycleEventHandler<ReloadableRegistrarEvent<Commands>>> lifecycle(UltiTools plugin) {
-        LifecycleEventManager<Plugin> manager = mock(LifecycleEventManager.class);
-        when(plugin.getLifecycleManager()).thenReturn(manager);
-        var handler = new AtomicReference<LifecycleEventHandler<ReloadableRegistrarEvent<Commands>>>();
-        doAnswer(call -> { handler.set(call.getArgument(1)); return null; }).when(manager)
-                .registerEventHandler(eq(LifecycleEvents.COMMANDS), any(LifecycleEventHandler.class));
-        return handler;
+    static CommandTestSupport.Lifecycle lifecycle(UltiTools plugin) {
+        return CommandTestSupport.lifecycle(plugin);
     }
 
-    @SuppressWarnings("unchecked")
-    static RecordingCommands fire(AtomicReference<LifecycleEventHandler<ReloadableRegistrarEvent<Commands>>> handler) {
-        var commands = new RecordingCommands();
-        ReloadableRegistrarEvent<Commands> event = mock(ReloadableRegistrarEvent.class);
-        when(event.registrar()).thenReturn(commands);
-        assertThat(handler.get()).as("the real engine must install a commands callback").isNotNull();
-        handler.get().run(event);
-        return commands;
+    static RecordingCommands fire(CommandTestSupport.Lifecycle lifecycle) {
+        return lifecycle.fire();
     }
 
     static class AliasingContainer extends SimpleContainer {

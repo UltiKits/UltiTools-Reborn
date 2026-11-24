@@ -11,6 +11,9 @@ import java.util.ArrayList;
 import java.util.List;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
+import com.mojang.brigadier.tree.ArgumentCommandNode;
+import com.ultikits.ultitools.annotations.command.CmdTarget;
 import org.junit.jupiter.api.Test;
 import com.mojang.brigadier.CommandDispatcher;
 import com.ultikits.ultitools.UltiTools;
@@ -50,8 +53,8 @@ class CommandVisibilityTest {
             var shared = dispatcher.getRoot().getChild("test").getChild("shared");
             assertThat(shared.canUse(source)).isTrue();
             assertThat(shared.getChild("secret").canUse(source)).isFalse();
-            var suggestions = dispatcher.getCompletionSuggestions(dispatcher.parse("test shared ", source)).join();
-            assertThat(suggestions.getList()).extracting(value -> value.getText()).contains("open").doesNotContain("secret");
+            var suggestions = CommandTestSupport.clientSuggestions(dispatcher, "test shared ", source);
+            assertThat(suggestions).contains("open").doesNotContain("secret");
             dispatcher.execute("test shared missing", source);
             assertThat(replies).isNotEmpty().allMatch(value -> !value.contains("secret"));
             dispatcher.execute("test SHARED SECRET", source);
@@ -62,6 +65,18 @@ class CommandVisibilityTest {
         }
     }
 
+    @Test void rebuiltRequirementsHideConsoleOnlyPathsFromPlayersAndExposeThemToConsole() {
+        var dispatcher = dispatcher(new Fixture());
+        var player = CommandDispatchTest.source(mock(Player.class));
+        var console = CommandDispatchTest.source(mock(CommandSender.class));
+        var root = dispatcher.getRoot().getChild("test");
+        assertThat(root.getChild("console").canUse(player)).isFalse();
+        assertThat(root.getChild("console").canUse(console)).isTrue();
+        assertThat(root.getChild("args")).isNotNull();
+        var fallback = (ArgumentCommandNode<?, ?>) root.getChild("args");
+        assertThat(fallback.getCustomSuggestions()).isNull();
+    }
+
     @Test void aSharedArgumentDoesNotInvokeAnUnauthorizedProvider() {
         Fixture executor = new Fixture();
         var dispatcher = dispatcher(executor);
@@ -69,6 +84,28 @@ class CommandVisibilityTest {
         var suggestions = dispatcher.getCompletionSuggestions(dispatcher.parse("test choose ", source)).join();
         assertThat(suggestions.getList()).extracting(value -> value.getText()).contains("public").doesNotContain("private");
         assertThat(executor.privateSuggestions).isZero();
+    }
+
+    @Test void serverCompletionMergesHiddenLiteralsOutsideAnArgumentProvidersFilteredResult() {
+        var dispatcher = dispatcher(new ServerCompletionLimit());
+        var source = CommandDispatchTest.source(mock(Player.class));
+        assertThat(CommandTestSupport.clientSuggestions(dispatcher, "limit ", source))
+                .contains("public").doesNotContain("secret", "console");
+        var server = dispatcher.getCompletionSuggestions(dispatcher.parse("limit ", source)).join();
+        // Pin the remaining platform boundary rather than claiming the argument provider can filter sibling results.
+        assertThat(server.getList()).extracting(value -> value.getText()).contains("public", "secret", "console");
+    }
+
+    @CmdExecutor(alias = "limit")
+    static class ServerCompletionLimit extends BaseCommandExecutor {
+        @CmdMapping(format = "<value>")
+        public void value(@CmdParam(value = "value", suggest = "values") String value) { /* Suggestion control. */ }
+        public List<String> values() { return List.of("public"); }
+        @CmdMapping(format = "secret", permission = "fixture.secret")
+        public void secret() { /* Permission-hidden sibling. */ }
+        @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
+        @CmdMapping(format = "console") public void console() { /* Sender-hidden sibling. */ }
+        @Override protected void handleHelp(CommandSender sender) { /* Suggestion control. */ }
     }
 
     static CommandDispatcher<CommandSourceStack> dispatcher(BaseCommandExecutor executor) {
@@ -86,6 +123,8 @@ class CommandVisibilityTest {
     static class Fixture extends BaseCommandExecutor {
         int privateCalls;
         int privateSuggestions;
+        @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
+        @CmdMapping(format = "console") public void console() { /* Console-only visibility control. */ }
         @CmdMapping(format = "shared open") public void open() { /* Public sibling control. */ }
         @CmdMapping(format = "shared secret", permission = "fixture.secret") public void secret() { privateCalls++; }
         @CmdMapping(format = "choose <value> a", permission = "fixture.secret")

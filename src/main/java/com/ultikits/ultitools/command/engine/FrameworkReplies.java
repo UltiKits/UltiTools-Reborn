@@ -1,15 +1,13 @@
 package com.ultikits.ultitools.command.engine;
 
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -24,15 +22,16 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.bukkit.ChatColor;
 
-/** Framework replies and case normalization derived from a single walk over the typed tree. */
+/** Framework replies implemented only through callbacks retained by Paper's node mirror. */
 final class FrameworkReplies {
-    @FunctionalInterface interface Redispatch {
-        int run(String input, CommandSourceStack source) throws CommandSyntaxException;
-    }
     private final BaseCommandExecutor executor;
     private final LiteralCommandNode<CommandSourceStack> original;
     private final Redispatch redispatch;
     private final ThreadLocal<Boolean> retrying = new ThreadLocal<>();
+
+    @FunctionalInterface interface Redispatch {
+        int run(String input, CommandSourceStack source) throws CommandSyntaxException;
+    }
 
     FrameworkReplies(BaseCommandExecutor executor, LiteralCommandNode<CommandSourceStack> original, Redispatch redispatch) {
         this.executor = executor;
@@ -41,114 +40,85 @@ final class FrameworkReplies {
     }
 
     LiteralCommandNode<CommandSourceStack> tree() {
-        return (LiteralCommandNode<CommandSourceStack>) decorate(original, true, false, null);
+        return (LiteralCommandNode<CommandSourceStack>) decorate(original, true);
     }
 
-    private CommandNode<CommandSourceStack> decorate(CommandNode<CommandSourceStack> node, boolean root, boolean greedy,
-            String parentFallback) {
-        var builder = node.createBuilder();
+    private CommandNode<CommandSourceStack> decorate(CommandNode<CommandSourceStack> node, boolean root) {
         Command<CommandSourceStack> body = node.getCommand();
-        boolean noBareMapping = root && !(body instanceof CommandTreeCompiler.MappingCommand);
-        builder.executes(body == null || noBareMapping ? this::reply : context -> {
-            try { return body.run(context); }
-            catch (CommandSyntaxException exception) { return invocationFailure(context, exception); }
-        });
-        String fallbackName = null;
-        if (!greedy) {
-            fallbackName = "__ultitools_unmatched";
-            while (node.getChild(fallbackName) != null) fallbackName += "_";
+        boolean replyOnly = body == null || (root && !(body instanceof CommandTreeCompiler.MappingCommand));
+        if (node instanceof ArgumentCommandNode<CommandSourceStack, ?> argument) {
+            return decorateArgument(argument, body, replyOnly);
         }
-        for (var child : node.getChildren()) {
-            builder.then(decorate(child, false, greedy(child), fallbackName));
-        }
-        if (fallbackName != null) {
-            String name = fallbackName;
-            // Forward only when this fallback consumed the cursor; ordinary children already supply suggestions.
-            builder.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument(name, StringArgumentType.greedyString())
-                    .suggests((context, suggestions) -> consumedFallback(context, suggestions, name)
-                            ? suggestFromTree(context, suggestions) : suggestions.buildFuture()).executes(this::reply));
-        }
-        var decorated = builder.build();
-        if (decorated instanceof LiteralCommandNode<CommandSourceStack> literal
-                && node instanceof LiteralCommandNode<CommandSourceStack> originalLiteral) {
-            return forwardLiteralSuggestions(literal, originalLiteral, fallbackName);
-        }
-        if (decorated instanceof ArgumentCommandNode<CommandSourceStack, ?> argument) {
-            return forwardArgumentSuggestions(argument, parentFallback, fallbackName);
-        }
-        return decorated;
+        var builder = node.createBuilder().executes(context -> execute(context, body, replyOnly));
+        node.getChildren().forEach(child -> builder.then(decorate(child, false)));
+        addFallback(node, builder);
+        return builder.build();
     }
 
-    private static LiteralCommandNode<CommandSourceStack> forwardLiteralSuggestions(
-            LiteralCommandNode<CommandSourceStack> node, LiteralCommandNode<CommandSourceStack> original, String fallback) {
-        var copy = new LiteralCommandNode<CommandSourceStack>(node.getLiteral(), node.getCommand(), node.getRequirement(),
-                node.getRedirect(), node.getRedirectModifier(), node.isFork()) {
-            @Override public CompletableFuture<Suggestions> listSuggestions(CommandContext<CommandSourceStack> context,
-                    SuggestionsBuilder builder) { return original.listSuggestions(context, builder); }
-            @Override public Collection<? extends CommandNode<CommandSourceStack>> getRelevantNodes(StringReader input) {
-                return relevant(node, input, fallback);
+    private <T> CommandNode<CommandSourceStack> decorateArgument(ArgumentCommandNode<CommandSourceStack, T> node,
+            Command<CommandSourceStack> body, boolean replyOnly) {
+        var builder = node.createBuilder().executes(context -> execute(context, body, replyOnly))
+                .suggests(this::suggestFromTree);
+        node.getChildren().forEach(child -> builder.then(decorate(child, false)));
+        addFallback(node, builder);
+        return builder.build();
+    }
+
+    private void addFallback(CommandNode<CommandSourceStack> node,
+            ArgumentBuilder<CommandSourceStack, ?> builder) {
+        if (greedy(node)) return;
+        String name = "args";
+        while (node.getChild(name) != null) name += "_";
+        // No custom suggestions: a fallback must not create an ask-server completion node.
+        builder.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument(name, StringArgumentType.greedyString())
+                .executes(this::reply));
+    }
+
+    private int execute(CommandContext<CommandSourceStack> context, Command<CommandSourceStack> body, boolean replyOnly)
+            throws CommandSyntaxException {
+        if (replyOnly) return reply(context);
+        if (!Boolean.TRUE.equals(retrying.get()) && needsRewrite(context)) return reply(context);
+        try {
+            return body.run(context);
+        } catch (CommandSyntaxException failure) {
+            return invocationFailure(context, failure);
+        }
+    }
+
+    /** Ordinary successful argument paths are not parsed again. Only a competing literal or fallback needs a walk. */
+    private boolean needsRewrite(CommandContext<CommandSourceStack> context) {
+        CommandNode<CommandSourceStack> parent = original;
+        for (var parsed : context.getNodes()) {
+            if (parsed.getRange().getStart() == 0) continue;
+            CommandNode<CommandSourceStack> node = parent.getChild(parsed.getNode().getName());
+            if (node == null) return true;
+            if (node instanceof ArgumentCommandNode<CommandSourceStack, ?>) {
+                StringReader reader = new StringReader(context.getInput());
+                reader.setCursor(parsed.getRange().getStart());
+                if (literal(parent, token(reader)) != null) return true;
             }
-        };
-        node.getChildren().forEach(copy::addChild);
-        return copy;
-    }
-
-    private static boolean consumedFallback(CommandContext<CommandSourceStack> context, SuggestionsBuilder builder, String name) {
-        return context.getNodes().stream().anyMatch(parsed -> parsed.getNode().getName().equals(name)
-                && parsed.getRange().getStart() == builder.getStart());
-    }
-
-    private static <T> ArgumentCommandNode<CommandSourceStack, T> forwardArgumentSuggestions(
-            ArgumentCommandNode<CommandSourceStack, T> node, String parentFallback, String fallback) {
-        var copy = new ArgumentCommandNode<CommandSourceStack, T>(node.getName(), node.getType(), node.getCommand(), node.getRequirement(),
-                node.getRedirect(), node.getRedirectModifier(), node.isFork(),
-                (context, builder) -> parentFallback != null && consumedFallback(context, builder, parentFallback)
-                        ? builder.buildFuture() : node.listSuggestions(context, builder)) {
-            @Override public Collection<? extends CommandNode<CommandSourceStack>> getRelevantNodes(StringReader input) {
-                return relevant(node, input, fallback);
-            }
-        };
-        node.getChildren().forEach(copy::addChild);
-        return copy;
-    }
-
-    private static Collection<? extends CommandNode<CommandSourceStack>> relevant(CommandNode<CommandSourceStack> node,
-            StringReader input, String fallbackName) {
-        if (fallbackName == null) return node.getRelevantNodes(input);
-        StringReader word = new StringReader(input);
-        int start = word.getCursor();
-        while (word.canRead() && word.peek() != ' ') word.skip();
-        String token = word.getString().substring(start, word.getCursor());
-        for (var child : node.getChildren()) {
-            if (child instanceof LiteralCommandNode<CommandSourceStack> literal && literal.getLiteral().equalsIgnoreCase(token)) {
-                var fallback = node.getChild(fallbackName);
-                // Retain literal priority, but unlike Brigadier's exact-only selection keep the
-                // framework fallback reachable when that literal is hidden or needs normalization.
-                return literal.getLiteral().equals(token) ? List.of(literal, fallback) : List.of(fallback);
-            }
+            parent = node;
         }
-        return node.getRelevantNodes(input);
+        return false;
     }
 
     private CompletableFuture<Suggestions> suggestFromTree(CommandContext<CommandSourceStack> context, SuggestionsBuilder builder) {
-        if (!original.canUse(context.getSource()) || !CommandAccess.classVisible(executor.getClass(), context.getSource())) {
-            return builder.buildFuture();
-        }
+        if (!original.canUse(context.getSource())) return builder.buildFuture();
         String input = builder.getInput();
-        String actualLabel = input.split("\\s+", 2)[0];
-        var root = new LiteralCommandNode<CommandSourceStack>(actualLabel, original.getCommand(), original.getRequirement(),
-                original.getRedirect(), original.getRedirectModifier(), original.isFork());
-        original.getChildren().forEach(root::addChild);
+        String label = input.split("\\s+", 2)[0];
         var dispatcher = new CommandDispatcher<CommandSourceStack>();
+        var root = new LiteralCommandNode<CommandSourceStack>(label, original.getCommand(), original.getRequirement(),
+                original.getRedirect(), original.getRedirectModifier(), original.isFork());
+        original.getChildren().stream().filter(child -> child.canUse(context.getSource()))
+                .forEach(child -> root.addChild(visibleCopy(child, context.getSource())));
         dispatcher.getRoot().addChild(root);
-        var parsed = dispatcher.parse(input, context.getSource());
-        var suggestion = parsed.getContext().findSuggestionContext(input.length());
-        StringReader cursor = new StringReader(input);
-        cursor.setCursor(Math.min(suggestion.startPos, input.length()));
-        var candidates = suggestion.parent.getRelevantNodes(cursor);
-        if (candidates.size() == 1 && candidates.iterator().next() instanceof LiteralCommandNode<CommandSourceStack> literal
-                && !literal.canUse(context.getSource())) return builder.buildFuture();
-        return dispatcher.getCompletionSuggestions(parsed);
+        return dispatcher.getCompletionSuggestions(dispatcher.parse(input, context.getSource()));
+    }
+
+    private static CommandNode<CommandSourceStack> visibleCopy(CommandNode<CommandSourceStack> node, CommandSourceStack source) {
+        var copy = node.createBuilder().build();
+        node.getChildren().stream().filter(child -> child.canUse(source)).forEach(child -> copy.addChild(visibleCopy(child, source)));
+        return copy;
     }
 
     private static boolean greedy(CommandNode<CommandSourceStack> node) {
@@ -169,10 +139,13 @@ final class FrameworkReplies {
     private int reply(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         if (new CommandInvocation(executor, original.getLiteral()).refused(context)) return Command.SINGLE_SUCCESS;
         Walk walk = walk(context.getInput(), context.getSource());
-        if (!walk.canonical().equals(context.getInput()) && !Boolean.TRUE.equals(retrying.get())) {
+        if (!walk.blocked() && !walk.canonical().equals(context.getInput()) && !Boolean.TRUE.equals(retrying.get())) {
             retrying.set(true);
-            try { return redispatch.run(walk.canonical(), context.getSource()); }
-            finally { retrying.remove(); }
+            try {
+                return redispatch.run(walk.canonical(), context.getSource());
+            } finally {
+                retrying.remove();
+            }
         }
         var sender = context.getSource().getSender();
         if (walk.parseError() != null) {
@@ -183,7 +156,9 @@ final class FrameworkReplies {
             executor.handleGatedHelp(new CommandInvocation(executor, original.getLiteral()).context(context));
         } else {
             Set<String> formats = new LinkedHashSet<>();
-            collectUsages(walk.deepest(), context.getSource(), formats);
+            if (!walk.blocked() || !collectOwnUsage(walk.deepest(), context.getSource(), formats)) {
+                collectUsages(walk.deepest(), context.getSource(), formats);
+            }
             if (formats.isEmpty() && walk.deepest().getName().equalsIgnoreCase(executor.helpCommand())) {
                 formats.add(executor.helpCommand());
             }
@@ -193,72 +168,95 @@ final class FrameworkReplies {
         return Command.SINGLE_SUCCESS;
     }
 
-    /** The only input traversal: literals are normalized, arguments use their own parsers. */
+    /** The recovery walk uses the compiled tree's argument parsers and preserves quoted/greedy argument contents. */
     private Walk walk(String input, CommandSourceStack source) {
         StringReader reader = new StringReader(input);
-        while (reader.canRead() && !Character.isWhitespace(reader.peek())) reader.skip();
+        StringBuilder canonical = new StringBuilder(token(reader));
         reader.skipWhitespace();
         CommandNode<CommandSourceStack> deepest = original;
         int depth = 0;
-        String parseError = null;
-        List<Replacement> replacements = new ArrayList<>();
         while (reader.canRead()) {
+            int start = reader.getCursor();
             Step step;
-            try { step = next(deepest, reader, source); }
-            catch (CommandSyntaxException failure) { parseError = failure.getRawMessage().getString(); break; }
-            if (step == null) break;
+            try {
+                step = next(deepest, reader, source);
+            } catch (CommandSyntaxException failure) {
+                return new Walk(deepest, depth, input, failure.getRawMessage().getString(), false);
+            }
+            if (step == null) {
+                canonical.append(' ').append(input.substring(start));
+                break;
+            }
+            if (!step.node().canUse(source)) return new Walk(deepest, depth + 1, input, null, true);
+            canonical.append(' ').append(step.literal() == null ? input.substring(start, step.end()) : step.literal());
             deepest = step.node();
-            if (step.literal() != null) replacements.add(step.literal());
             reader.setCursor(step.end());
             reader.skipWhitespace();
             depth++;
         }
-        StringBuilder canonical = new StringBuilder(input);
-        for (int i = replacements.size() - 1; i >= 0; i--) {
-            Replacement replacement = replacements.get(i);
-            canonical.replace(replacement.start(), replacement.end(), replacement.value());
-        }
-        return new Walk(deepest, depth, canonical.toString(), parseError);
+        return new Walk(deepest, depth, canonical.toString(), null, false);
     }
 
     private static Step next(CommandNode<CommandSourceStack> parent, StringReader reader, CommandSourceStack source)
             throws CommandSyntaxException {
         StringReader word = new StringReader(reader);
-        int start = word.getCursor();
-        while (word.canRead() && !Character.isWhitespace(word.peek())) word.skip();
-        String token = word.getString().substring(start, word.getCursor());
+        LiteralCommandNode<CommandSourceStack> literal = literal(parent, token(word));
+        if (literal != null) return new Step(literal, word.getCursor(), literal.getLiteral());
         for (var child : parent.getChildren()) {
-            if (child instanceof LiteralCommandNode<CommandSourceStack> literal
-                    && literal.canUse(source) && literal.getLiteral().equalsIgnoreCase(token)) {
-                return new Step(child, word.getCursor(), new Replacement(start, word.getCursor(), literal.getLiteral()));
+            if (child instanceof ArgumentCommandNode<CommandSourceStack, ?> argument && child.canUse(source)) {
+                Step step = argument(argument, reader, source);
+                if (step != null) return step;
             }
         }
-        for (var child : parent.getChildren()) {
-            if (!(child instanceof ArgumentCommandNode<CommandSourceStack, ?> argument) || !child.canUse(source)) continue;
-            StringReader trial = new StringReader(reader);
-            try {
-                argument.getType().parse(trial, source);
-                if (trial.getCursor() > start && (!trial.canRead() || Character.isWhitespace(trial.peek()))) {
-                    return new Step(child, trial.getCursor(), null);
-                }
-            } catch (CommandSyntaxException failure) {
-                if (argument.getType() instanceof TypeParserArgumentType<?>) throw failure;
-                // Built-in type failures use the framework usage; no string matcher is consulted.
+        return null;
+    }
+
+    private static Step argument(ArgumentCommandNode<CommandSourceStack, ?> node, StringReader reader, CommandSourceStack source)
+            throws CommandSyntaxException {
+        StringReader trial = new StringReader(reader);
+        try {
+            node.getType().parse(trial, source);
+            if (trial.getCursor() > reader.getCursor() && (!trial.canRead() || Character.isWhitespace(trial.peek()))) {
+                return new Step(node, trial.getCursor(), null);
             }
+        } catch (CommandSyntaxException failure) {
+            if (customParser(node)) throw failure;
+        }
+        return null;
+    }
+
+    private static boolean customParser(ArgumentCommandNode<CommandSourceStack, ?> node) {
+        return node.getType() instanceof TypeParserArgumentType<?>;
+    }
+
+    private static String token(StringReader reader) {
+        int start = reader.getCursor();
+        while (reader.canRead() && !Character.isWhitespace(reader.peek())) reader.skip();
+        return reader.getString().substring(start, reader.getCursor());
+    }
+
+    private static LiteralCommandNode<CommandSourceStack> literal(CommandNode<CommandSourceStack> parent, String token) {
+        for (var child : parent.getChildren()) {
+            if (child instanceof LiteralCommandNode<CommandSourceStack> literal && literal.getLiteral().equalsIgnoreCase(token)) return literal;
         }
         return null;
     }
 
     private void collectUsages(CommandNode<CommandSourceStack> node, CommandSourceStack source, Set<String> usages) {
         if (!node.canUse(source)) return;
-        if (node.getCommand() instanceof CommandTreeCompiler.MappingCommand mapping
-                && CommandAccess.suggestible(executor.getClass(), mapping.method(), source)) {
-            usages.add(mapping.method().getAnnotation(CmdMapping.class).format());
-        }
+        collectOwnUsage(node, source, usages);
         node.getChildren().forEach(child -> collectUsages(child, source, usages));
     }
 
-    private record Walk(CommandNode<CommandSourceStack> deepest, int depth, String canonical, String parseError) {}
-    private record Step(CommandNode<CommandSourceStack> node, int end, Replacement literal) {}
-    private record Replacement(int start, int end, String value) {}
+    private boolean collectOwnUsage(CommandNode<CommandSourceStack> node, CommandSourceStack source, Set<String> usages) {
+        if (node.getCommand() instanceof CommandTreeCompiler.MappingCommand mapping
+                && CommandAccess.suggestible(executor.getClass(), mapping.method(), source)) {
+            usages.add(mapping.method().getAnnotation(CmdMapping.class).format());
+            return true;
+        }
+        return false;
+    }
+
+    private record Walk(CommandNode<CommandSourceStack> deepest, int depth, String canonical, String parseError, boolean blocked) { }
+    private record Step(CommandNode<CommandSourceStack> node, int end, String literal) { }
 }

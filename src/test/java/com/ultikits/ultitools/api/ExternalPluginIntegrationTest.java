@@ -29,7 +29,6 @@ import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.manager.TaskManager;
 
 /**
  * Integration tests for the External Plugin API.

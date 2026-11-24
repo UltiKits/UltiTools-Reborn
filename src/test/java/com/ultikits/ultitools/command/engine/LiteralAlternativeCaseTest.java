@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.command.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doAnswer;
@@ -80,11 +82,11 @@ class LiteralAlternativeCaseTest {
         assertThat(executor.bodies).isZero();
         assertThat(replies).containsExactly("指令正确用法");
     }
-    @Test void anUnavailableExactLiteralStillReceivesTheFrameworkReply() throws Exception {
-        assertThat(dispatcher.execute("test secret", source)).isEqualTo(1);
+    @Test void anUnavailableExactLiteralIsRejectedByBrigadierBeforeAnyCallback() {
+        assertThatThrownBy(() -> dispatcher.execute("test secret", source)).isInstanceOf(CommandSyntaxException.class);
         assertThat(executor.route).isNull();
         assertThat(executor.bodies).isZero();
-        assertThat(replies).containsExactly("指令正确用法");
+        assertThat(replies).isEmpty();
     }
     @Test void unrelatedArgumentValuesAndOrdinaryLowercaseLiteralsStillExecute() throws Exception {
         assertThat(dispatcher.execute("test info all", source)).isEqualTo(1);
@@ -95,6 +97,19 @@ class LiteralAlternativeCaseTest {
         assertThat(executor.route).isEqualTo("words:free Words");
         assertThat(executor.bodies).isEqualTo(3);
     }
+    @Test void tradeStyleLiteralWinsOverASingleStringParameterForEveryCase() throws Exception {
+        for (String spelling : List.of("accept", "ACCEPT", "Accept")) {
+            Trade trade = new Trade();
+            var commands = CommandTestSupport.dispatcher(trade, "trade");
+            assertThat(commands.execute("trade " + spelling, source)).isEqualTo(1);
+            assertThat(trade.route).isEqualTo("accepted");
+            assertThat(trade.calls).isEqualTo(1);
+        }
+        Trade quoted = new Trade();
+        assertThat(CommandTestSupport.dispatcher(quoted, "trade").execute("trade \"Accept\"", source)).isEqualTo(1);
+        assertThat(quoted.route).isEqualTo("player:Accept");
+    }
+
     @Test void handWrittenTreesKeepTheirOwnCaseSensitiveRouting() throws Exception {
         var raw = LiteralArgumentBuilder.<CommandSourceStack>literal("raw")
                 .then(LiteralArgumentBuilder.<CommandSourceStack>literal("all").executes(context -> 11))
@@ -109,23 +124,45 @@ class LiteralAlternativeCaseTest {
         assertThat(commands.getDispatcher().execute("raw all", source)).isEqualTo(11);
     }
 
+    @CmdExecutor(alias = "trade") static class Trade extends BaseCommandExecutor {
+        String route;
+        int calls;
+        Trade() { super(ValidatorChain.builder().build()); }
+        @CmdMapping(format = "<player>") public void player(@CmdParam("player") String player) {
+            route = "player:" + player;
+            calls++;
+        }
+        @CmdMapping(format = "accept") public void accept() {
+            route = "accepted";
+            calls++;
+        }
+        @Override protected void handleHelp(CommandSender sender) { sender.sendMessage("help"); }
+    }
+
     @CmdExecutor(alias = "test") static class Fixture extends BaseCommandExecutor {
         String route;
         int bodies;
         Fixture() { super(ValidatorChain.builder().build()); }
-        @CmdMapping(format = "info all") public void all() { route = "all"; bodies++; }
-        @CmdMapping(format = "secret", permission = "probe.secret") public void secret() { route = "secret"; bodies++; }
+        @CmdMapping(format = "info all") public void all() { route = "all";
+            bodies++; }
+        @CmdMapping(format = "secret", permission = "probe.secret") public void secret() { route = "secret";
+            bodies++; }
         @CmdMapping(format = "info <text>") public void argument(@CmdParam("text") String text) {
-            route = "argument:" + text; bodies++;
+            route = "argument:" + text;
+            bodies++;
         }
         @CmdMapping(format = "after <name> add") public void literalAfter(@CmdParam("name") String name) {
-            route = "literal:" + name; bodies++;
+            route = "literal:" + name;
+            bodies++;
         }
         @CmdMapping(format = "after <name> <action>") public void argumentAfter(@CmdParam("name") String name,
-                @CmdParam("action") String action) { route = "argument:" + action; bodies++; }
+                @CmdParam("action") String action) { route = "argument:" + action;
+            bodies++; }
         @CmdMapping(format = "<words...>") public void words(@CmdParam("words") String[] words) {
-            route = "words:" + String.join(" ", words); bodies++;
+            route = "words:" + String.join(" ", words);
+            bodies++;
         }
-        @Override protected void handleHelp(CommandSender sender) { route = "help"; bodies++; }
+        @Override protected void handleHelp(CommandSender sender) { route = "help";
+            bodies++; }
     }
 }
