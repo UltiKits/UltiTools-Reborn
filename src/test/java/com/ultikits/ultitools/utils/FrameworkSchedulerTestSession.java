@@ -21,7 +21,10 @@ final class FrameworkSchedulerTestSession implements AutoCloseable {
 
     @Override
     public void close() {
-        engine.retire(scheduler);
-        FrameworkScheduling.uninstall(scheduler);
+        try {
+            engine.retire(scheduler);
+        } finally {
+            FrameworkScheduling.uninstall(scheduler);
+        }
     }
 }

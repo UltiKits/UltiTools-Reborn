@@ -81,10 +81,16 @@ class CloudOutboxListenerTest {
 
     @AfterEach
     void tearDown() {
-        CloudTestAccess.reset();
-        clearUltiToolsInstance();
-        frameworkScheduler.close();
-        MockBukkitHelper.safeUnmock();
+        try {
+            CloudTestAccess.reset();
+            clearUltiToolsInstance();
+        } finally {
+            try {
+                if (frameworkScheduler != null) { frameworkScheduler.close(); }
+            } finally {
+                MockBukkitHelper.safeUnmock();
+            }
+        }
     }
 
     @Test

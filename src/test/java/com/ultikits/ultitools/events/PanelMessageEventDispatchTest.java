@@ -226,13 +226,19 @@ class PanelMessageEventDispatchTest {
 
         @AfterEach
         void tearDown() throws Exception {
-            engine.retire(scheduler);
-            FrameworkScheduling.uninstall(scheduler);
-            eventBus.shutdown();
-            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-            instanceField.setAccessible(true);
-            instanceField.set(null, null);
-            MockBukkitHelper.safeUnmock();
+            try {
+                if (engine != null && scheduler != null) { engine.retire(scheduler); }
+            } finally {
+                try {
+                    if (scheduler != null) { FrameworkScheduling.uninstall(scheduler); }
+                    if (eventBus != null) { eventBus.shutdown(); }
+                    Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+                    instanceField.setAccessible(true);
+                    instanceField.set(null, null);
+                } finally {
+                    MockBukkitHelper.safeUnmock();
+                }
+            }
         }
 
         @Test
@@ -364,13 +370,19 @@ class PanelMessageEventDispatchTest {
 
         @AfterEach
         void tearDown() throws Exception {
-            engine.retire(scheduler);
-            FrameworkScheduling.uninstall(scheduler);
-            eventBus.shutdown();
-            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-            instanceField.setAccessible(true);
-            instanceField.set(null, null);
-            MockBukkitHelper.safeUnmock();
+            try {
+                if (engine != null && scheduler != null) { engine.retire(scheduler); }
+            } finally {
+                try {
+                    if (scheduler != null) { FrameworkScheduling.uninstall(scheduler); }
+                    if (eventBus != null) { eventBus.shutdown(); }
+                    Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+                    instanceField.setAccessible(true);
+                    instanceField.set(null, null);
+                } finally {
+                    MockBukkitHelper.safeUnmock();
+                }
+            }
         }
 
         /** Every {@code [PanelMessageEvent]}-tagged WARNING line logged so far. */

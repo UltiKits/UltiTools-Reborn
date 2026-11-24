@@ -121,14 +121,20 @@ class PanelResponderIsolationTracerTest {
     @AfterEach
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // clears UltiTools' instance field, as other tests do
     void tearDown() throws Exception {
-        aRelease.countDown();
-        registry.shutdown();
-        eventBus.shutdown();
-        Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-        instanceField.setAccessible(true);
-        instanceField.set(null, null);
-        frameworkScheduler.close();
-        MockBukkitHelper.safeUnmock();
+        try {
+            if (aRelease != null) { aRelease.countDown(); }
+            if (registry != null) { registry.shutdown(); }
+            if (eventBus != null) { eventBus.shutdown(); }
+            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+            instanceField.setAccessible(true);
+            instanceField.set(null, null);
+        } finally {
+            try {
+                if (frameworkScheduler != null) { frameworkScheduler.close(); }
+            } finally {
+                MockBukkitHelper.safeUnmock();
+            }
+        }
     }
 
     /** Whether {@code thread} is the very thread that ran {@link #setUp}, the server's primary thread. */

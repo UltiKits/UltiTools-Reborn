@@ -108,7 +108,8 @@ public class UpdateManager {
      * Schedules the check on an asynchronous task, unless {@link #stop()} was already called.
      * Called once per {@code onEnable}, from the framework's start-up task.
      *
-     * @param plugin the plugin that owns the task (UltiTools)
+     * @param plugin unused since 7.0; retained for source compatibility with framework callers.
+     *               The framework scheduler owns the task.
      * @since 6.3.0
      */
     public void start(Plugin plugin) {

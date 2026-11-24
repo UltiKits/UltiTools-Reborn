@@ -93,10 +93,16 @@ class InMemeryTeleportServiceTest {
 
     @AfterEach
     void tearDown() {
-        engine.retire(scheduler);
-        FrameworkScheduling.uninstall(scheduler);
-        clearStaticMaps();
-        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        try {
+            if (engine != null && scheduler != null) { engine.retire(scheduler); }
+        } finally {
+            try {
+                if (scheduler != null) { FrameworkScheduling.uninstall(scheduler); }
+                clearStaticMaps();
+            } finally {
+                com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+            }
+        }
     }
     
     @SuppressWarnings({"unchecked", "PMD.AvoidAccessibilityAlteration"})

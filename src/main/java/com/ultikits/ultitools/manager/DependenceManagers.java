@@ -40,7 +40,7 @@ public class DependenceManagers {
         context.registerSingleton("ultiTools", plugin);
         initScheduling(plugin);
         initInventoryAPI(plugin);
-        initCoreServices(plugin);
+        initCoreServices();
     }
 
     /** Installs the framework owner before any core service can schedule work. */
@@ -65,10 +65,9 @@ public class DependenceManagers {
     /**
      * Initialize core services provided by UltiTools-API.
      *
-     * @param plugin the main plugin instance, needed to schedule the deferred economy start-up
-     *               report (Codex P2, PR #463) via the Bukkit scheduler
+     * The framework scheduler defers the economy start-up report until the first server tick.
      */
-    private void initCoreServices(UltiTools plugin) {
+    private void initCoreServices() {
         // Register TeleportService
         InMemeryTeleportService teleportService = new InMemeryTeleportService();
         context.registerSingleton("inMemeryTeleportService", teleportService);

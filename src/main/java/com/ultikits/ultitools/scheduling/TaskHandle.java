@@ -32,6 +32,12 @@ public interface TaskHandle {
      * {@link java.util.concurrent.CancellationException} for {@link TaskState#CANCELLED}
      * (including owner unload), or {@link TaskRetiredException} for {@link TaskState#RETIRED}.
      *
+     * <p>A one-shot body failure from {@link TaskContext#run(Runnable)},
+     * {@link TaskContext#runLater(java.time.Duration, Runnable)} or {@link TaskContext#execute(Runnable)}
+     * is also logged exactly once at WARNING with its owner's name and original throwable.
+     * A {@link TaskContext#supply(java.util.function.Supplier)} failure is reported only through its
+     * future unless that future was cancelled after the body started.
+     *
      * <p>This is a minimal stage: callers cannot complete or cancel the task through it.
      * Non-async dependent actions run on the thread completing the stage.
      */

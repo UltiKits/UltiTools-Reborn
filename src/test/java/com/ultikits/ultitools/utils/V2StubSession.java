@@ -169,6 +169,19 @@ public final class V2StubSession implements AutoCloseable {
                     .recordFrameworkCalls(plugin, scheduler);
         }
         FrameworkScheduling.install(scheduler);
+        try {
+            startCloud(serverRoot, state);
+        } catch (Exception | Error failure) {
+            try {
+                close();
+            } catch (Exception | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
+        }
+    }
+
+    private void startCloud(Path serverRoot, Path state) throws Exception {
         CloudTestAccess.useTemporaryCredentials(state);
         stub = UltiCloudStub.start(UltiCloudStub.Options.defaults().accessLog(temp.resolve("access.log"))
                 .acceptCredential(CREDENTIAL, SERVER_ID));
@@ -333,22 +346,34 @@ public final class V2StubSession implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        PluginInitiationUtils.startAcceptingPanelMessages();
-        CloudSession.current().invalidate();
-        if (features != null) {
-            features.shutdown();
+        try {
+            PluginInitiationUtils.startAcceptingPanelMessages();
+            CloudSession.current().invalidate();
+            if (features != null) {
+                features.shutdown();
+            }
+            responders.shutdown();
+            if (stub != null) {
+                stub.close();
+            }
+        } finally {
+            try {
+                CloudTestAccess.reset();
+            } finally {
+                try {
+                    if (scheduler != null) {
+                        try {
+                            schedulerEngine.retire(schedulerOwner);
+                        } finally {
+                            FrameworkScheduling.uninstall(scheduler);
+                        }
+                    }
+                } finally {
+                    Field instance = UltiTools.class.getDeclaredField("ultiTools");
+                    instance.setAccessible(true);
+                    instance.set(null, null);
+                }
+            }
         }
-        responders.shutdown();
-        if (stub != null) {
-            stub.close();
-        }
-        CloudTestAccess.reset();
-        if (scheduler != null) {
-            schedulerEngine.retire(schedulerOwner);
-            FrameworkScheduling.uninstall(scheduler);
-        }
-        Field instance = UltiTools.class.getDeclaredField("ultiTools");
-        instance.setAccessible(true);
-        instance.set(null, null);
     }
 }

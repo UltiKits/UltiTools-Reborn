@@ -406,7 +406,7 @@ class DependenceManagersTest {
     class InitCoreServicesRegistrationTests {
 
         /**
-         * Drives the ACTUAL {@code initCoreServices(UltiTools)} private method -- not a
+         * Drives the ACTUAL {@code initCoreServices()} private method -- not a
          * reproduction of lines 70-81 -- so this test fails the moment the real registration shape in
          * {@code DependenceManagers} changes, not just when a copy of it drifts out of sync.
          *
@@ -436,13 +436,13 @@ class DependenceManagersTest {
             FrameworkScheduling.install(scheduler);
             try {
 
-                // Act: invoke the real private initCoreServices(UltiTools) method -- the exact
+                // Act: invoke the real private initCoreServices() method -- the exact
                 // code path DependenceManagers' own constructor runs, not a hand-copied
                 // reproduction of it.
                 java.lang.reflect.Method initCoreServices =
-                        DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                        DependenceManagers.class.getDeclaredMethod("initCoreServices");
                 initCoreServices.setAccessible(true); // NOPMD
-                initCoreServices.invoke(managers, mock(UltiTools.class));
+                initCoreServices.invoke(managers);
 
                 // Assert: each interface-typed lookup resolves without throwing.
                 TeleportService teleportService = assertDoesNotThrow(
@@ -479,9 +479,9 @@ class DependenceManagersTest {
          * <p>
          * Asserts the OBSERVABLE fix directly: the report must be handed to
          * the framework's global context as a deferred task, and must NOT have already logged
-         * anything by the time {@code initCoreServices(UltiTools)} returns (the mock scheduler
+         * anything by the time {@code initCoreServices()} returns (the mock scheduler
          * never actually runs the captured task, so any log call caught here can only have
-         * happened synchronously, during {@code initCoreServices(UltiTools)} itself).
+         * happened synchronously, during {@code initCoreServices()} itself).
          */
         @Test
         @DisplayName("logStartupState() is deferred via the framework scheduler, not called synchronously (Codex P2, PR #463)")
@@ -491,7 +491,7 @@ class DependenceManagersTest {
             setField(managers, "context", context);
 
             Logger mockUltiToolsLogger = mock(Logger.class);
-            UltiTools mockUltiTools = TestHelper.mockUltiToolsInstance(
+            TestHelper.mockUltiToolsInstance(
                     ultiTools -> when(ultiTools.getLogger()).thenReturn(mockUltiToolsLogger));
 
             Scheduler scheduler = mock(Scheduler.class);
@@ -501,9 +501,9 @@ class DependenceManagersTest {
             try {
 
                 java.lang.reflect.Method initCoreServices =
-                        DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                        DependenceManagers.class.getDeclaredMethod("initCoreServices");
                 initCoreServices.setAccessible(true); // NOPMD
-                initCoreServices.invoke(managers, mockUltiTools);
+                initCoreServices.invoke(managers);
 
                 // The economy start-up report must be handed to the scheduler as a deferred task,
                 // not run inline.

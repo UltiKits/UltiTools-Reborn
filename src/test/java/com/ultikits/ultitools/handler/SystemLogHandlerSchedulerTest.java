@@ -2,12 +2,22 @@ package com.ultikits.ultitools.handler;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.listeners.PlayerJoinListener;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import me.clip.placeholderapi.PlaceholderAPI;
+import java.util.logging.Handler;
+import java.util.logging.Logger;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.mockbukkit.mockbukkit.plugin.PluginMock;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.TriggerContext;
 import com.ultikits.ultitools.manager.UltiPanelLogTransmitter;
@@ -17,6 +27,7 @@ import com.ultikits.ultitools.scheduling.TaskHandle;
 import com.ultikits.ultitools.scheduling.internal.PaperBackend;
 import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -38,17 +49,22 @@ class SystemLogHandlerSchedulerTest {
     private PaperSchedulerEngine engine;
     private Scheduler scheduler;
     private SystemLogHandler handler;
+    private UltiPanelLogTransmitter transmitter;
     private ErrorReportCollector collector;
     private MockedStatic<UltiTools> tools;
+    private Logger taskLogger;
 
     @BeforeEach
     void setUp() {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         Plugin host = MockBukkit.createMockPlugin();
-        engine = new PaperSchedulerEngine(host, host.getLogger(), PaperBackend.live(host));
+        taskLogger = Logger.getAnonymousLogger();
+        taskLogger.setUseParentHandlers(false);
+        engine = new PaperSchedulerEngine(host, taskLogger, PaperBackend.live(host));
         scheduler = engine.newOwner("UltiTools");
-        handler = new SystemLogHandler(mock(UltiPanelLogTransmitter.class));
+        transmitter = mock(UltiPanelLogTransmitter.class);
+        handler = new SystemLogHandler(transmitter);
         collector = mock(ErrorReportCollector.class);
         UltiTools plugin = mock(UltiTools.class);
         when(plugin.getErrorReportCollector()).thenReturn(collector);
@@ -58,9 +74,15 @@ class SystemLogHandlerSchedulerTest {
 
     @AfterEach
     void tearDown() {
-        engine.retire(scheduler);
-        tools.close();
-        MockBukkitHelper.safeUnmock();
+        try {
+            if (engine != null && scheduler != null) { engine.retire(scheduler); }
+        } finally {
+            try {
+                if (tools != null) { tools.close(); }
+            } finally {
+                MockBukkitHelper.safeUnmock();
+            }
+        }
     }
 
     @Test
@@ -77,6 +99,48 @@ class SystemLogHandlerSchedulerTest {
         TriggerContext trigger = capturedTrigger(thrown.get());
         assertThat(trigger.getTriggerType()).isEqualTo(TriggerContext.TriggerType.SCHEDULED);
         assertThat(trigger.getTriggerDetail()).isEqualTo("Scheduler");
+    }
+
+    @Test
+    void joinCommandFailureIsLoggedOnceAndAttributedToTheScheduler() throws NoSuchMethodException {
+        PluginMock papi = PluginMock.builder().withPluginName("PlaceholderAPI").build();
+        server.getPluginManager().registerLoadedPlugin(papi);
+        server.getPluginManager().enablePlugin(papi);
+        server.getCommandMap().register("papi", new Command("papi") {
+            @Override
+            public boolean execute(CommandSender sender, String label, String[] arguments) {
+                throw new IllegalStateException("join command failure");
+            }
+        });
+        Handler capture = mock(Handler.class);
+        taskLogger.addHandler(capture);
+        FrameworkScheduling.install(scheduler);
+        try (MockedStatic<PlaceholderAPI> placeholders = mockStatic(PlaceholderAPI.class)) {
+            placeholders.when(() -> PlaceholderAPI.isRegistered(anyString()))
+                    .thenReturn(true);
+            placeholders.when(() -> PlaceholderAPI.isRegistered("player")).thenReturn(false);
+            new PlayerJoinListener().onPlayerJoin(new PlayerJoinEvent(server.addPlayer(), "joined"));
+            server.getScheduler().performTicks(30);
+
+            ArgumentCaptor<LogRecord> records = ArgumentCaptor.forClass(LogRecord.class);
+            verify(capture).publish(records.capture());
+            LogRecord warning = records.getValue();
+            assertThat(warning.getLevel()).isEqualTo(Level.WARNING);
+            assertThat(warning.getMessage()).contains("UltiTools");
+            assertThat(warning.getThrown()).isInstanceOf(IllegalStateException.class)
+                    .hasMessage("join command failure");
+            handler.publish(warning);
+            verify(transmitter).sendLog(eq("warning"), anyString(), anyString(), eq(warning.getThrown()));
+            // WARNING is streamed without an error report. Classify the original throwable directly,
+            // without promoting its level or inventing execution frames.
+            TriggerContext trigger = ReflectionUtil.invoke(handler, SystemLogHandler.class.getDeclaredMethod(
+                    "inferTriggerFromStackTrace", Throwable.class), warning.getThrown());
+            assertThat(trigger.getTriggerType()).isEqualTo(TriggerContext.TriggerType.SCHEDULED);
+            assertThat(trigger.getTriggerDetail()).isEqualTo("Scheduler");
+        } finally {
+            FrameworkScheduling.uninstall(scheduler);
+            taskLogger.removeHandler(capture);
+        }
     }
 
     @ParameterizedTest

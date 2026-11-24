@@ -40,11 +40,16 @@ import com.ultikits.ultitools.scheduling.TaskHandle;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import java.time.Duration;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
+import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.entity.Entity;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.spy;
 
 /**
  * Tracer for UltiTools-Reborn#621 on the protocol v2 path (rewritten in plan 22-23; the v1 tracer drove the removed v1
@@ -95,9 +100,15 @@ class ShutdownPanelMessageTracerTest {
 
     @AfterEach
     void tearDown() throws Exception {
-        session.close();
-        server.getScheduler().shutdown();
-        MockBukkitHelper.safeUnmock();
+        try {
+            if (session != null) { session.close(); }
+        } finally {
+            try {
+                if (server != null) { server.getScheduler().shutdown(); }
+            } finally {
+                MockBukkitHelper.safeUnmock();
+            }
+        }
     }
 
     private static String sha256(byte[] bytes) throws java.security.NoSuchAlgorithmException {
@@ -363,25 +374,46 @@ class ShutdownPanelMessageTracerTest {
         private ValidatingScheduler validating;
 
         Scheduler recordFrameworkCalls(Plugin plugin, Scheduler live) {
-            Scheduler scheduler = mock(Scheduler.class, org.mockito.AdditionalAnswers.delegatesTo(live));
-            TaskContext global = spy(live.global());
-            doReturn(global).when(scheduler).global();
-            doAnswer(call -> {
-                getScheduler().check(plugin, "runTask");
-                return live.global().run(call.getArgument(0, Runnable.class));
-            }).when(global).run(any(Runnable.class));
-            doAnswer(call -> {
-                getScheduler().check(plugin, "runTaskLater");
-                return live.global().runLater(call.getArgument(0, Duration.class),
-                        call.getArgument(1, Runnable.class));
-            }).when(global).runLater(any(), any());
-            doAnswer(call -> {
-                getScheduler().check(plugin, "runTaskTimer");
-                Consumer<? super TaskHandle> body = call.getArgument(2);
-                return live.global().runRepeating(call.getArgument(0, Duration.class),
-                        call.getArgument(1, Duration.class), body);
-            }).when(global).runRepeating(any(), any(), any());
+            Scheduler scheduler = mock(Scheduler.class, delegatesTo(live));
+            doReturn(recordContext(plugin, live.global(), "")).when(scheduler).global();
+            doReturn(recordContext(plugin, live.async(), "Asynchronously")).when(scheduler).async();
+            doAnswer(call -> recordContext(plugin, live.entity(call.getArgument(0, Entity.class)), "Entity"))
+                    .when(scheduler).entity(any(Entity.class));
+            doAnswer(call -> recordContext(plugin, live.region(call.getArgument(0, Location.class)), "Region"))
+                    .when(scheduler).region(any(Location.class));
+            doAnswer(call -> recordContext(plugin, live.region(call.getArgument(0, World.class),
+                    call.getArgument(1, Integer.class), call.getArgument(2, Integer.class)), "Region"))
+                    .when(scheduler).region(any(World.class), anyInt(), anyInt());
             return scheduler;
+        }
+
+        private TaskContext recordContext(Plugin plugin, TaskContext live, String suffix) {
+            TaskContext context = mock(TaskContext.class, delegatesTo(live));
+            doAnswer(call -> {
+                getScheduler().check(plugin, "runTask" + suffix);
+                return live.run(call.getArgument(0, Runnable.class));
+            }).when(context).run(any(Runnable.class));
+            doAnswer(call -> {
+                getScheduler().check(plugin, "runTaskLater" + suffix);
+                return live.runLater(call.getArgument(0, Duration.class), call.getArgument(1, Runnable.class));
+            }).when(context).runLater(any(), any());
+            doAnswer(call -> {
+                getScheduler().check(plugin, "runTaskTimer" + suffix);
+                Consumer<? super TaskHandle> body = call.getArgument(2);
+                return live.runRepeating(call.getArgument(0, Duration.class),
+                        call.getArgument(1, Duration.class), body);
+            }).when(context).runRepeating(any(), any(), any());
+            doAnswer(call -> {
+                getScheduler().check(plugin, "supply" + suffix);
+                Supplier<?> body = call.getArgument(0);
+                return live.supply(body);
+            }).when(context).supply(any());
+            doAnswer(call -> {
+                getScheduler().check(plugin, "execute" + suffix);
+                live.execute(call.getArgument(0, Runnable.class));
+                return null;
+            }).when(context).execute(any());
+            return context;
         }
 
         @Override

@@ -98,21 +98,30 @@ class CloudLogoutRevokeTest {
     @AfterEach
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     void tearDown() throws Exception {
-        replyAllowed.countDown();
-        server.getScheduler().waitAsyncTasksFinished();
-        CloudSession.current().invalidate();
-        if (gateway != null) { gateway.stop(500); }
-        http.stop(0);
-        CloudSession.resetForTesting();
-        ApiRateLimiter.resetAll();
-        HttpRequestUtils.resetBaseUrl();
-        CredentialStore.clearTargetPathForTesting();
-        CredentialStore.clearOldLocationForTesting();
-        frameworkScheduler.close();
-        MockBukkitHelper.safeUnmock();
-        Field instance = UltiTools.class.getDeclaredField("ultiTools");
-        instance.setAccessible(true);
-        instance.set(null, null);
+        try {
+            replyAllowed.countDown();
+            if (server != null) { server.getScheduler().waitAsyncTasksFinished(); }
+            CloudSession.current().invalidate();
+            if (gateway != null) { gateway.stop(500); }
+            if (http != null) { http.stop(0); }
+            CloudSession.resetForTesting();
+            ApiRateLimiter.resetAll();
+            HttpRequestUtils.resetBaseUrl();
+            CredentialStore.clearTargetPathForTesting();
+            CredentialStore.clearOldLocationForTesting();
+        } finally {
+            try {
+                if (frameworkScheduler != null) { frameworkScheduler.close(); }
+            } finally {
+                try {
+                    MockBukkitHelper.safeUnmock();
+                } finally {
+                    Field instance = UltiTools.class.getDeclaredField("ultiTools");
+                    instance.setAccessible(true);
+                    instance.set(null, null);
+                }
+            }
+        }
     }
 
     @Test

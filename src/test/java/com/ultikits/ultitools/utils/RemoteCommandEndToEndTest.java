@@ -97,12 +97,18 @@ class RemoteCommandEndToEndTest {
 
     @AfterEach
     void tearDown() {
-        if (isolatedCloudState) {
-            server.getScheduler().waitAsyncTasksFinished();
-            CloudTestAccess.reset();
+        try {
+            if (isolatedCloudState) {
+                server.getScheduler().waitAsyncTasksFinished();
+                CloudTestAccess.reset();
+            }
+        } finally {
+            try {
+                if (frameworkScheduler != null) { frameworkScheduler.close(); }
+            } finally {
+                MockBukkitHelper.safeUnmock();
+            }
         }
-        frameworkScheduler.close();
-        MockBukkitHelper.safeUnmock();
     }
 
     @ParameterizedTest(name = "{index}: {0}")

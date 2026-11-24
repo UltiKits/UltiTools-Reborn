@@ -6,6 +6,8 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.bukkit.World;
@@ -55,11 +57,19 @@ class PaperBackendLiveTest {
     }
 
     @Test
-    void asyncNowAndDelayed_runOffTickThread() {
+    void asyncNowAndDelayed_runOffTickThread() throws InterruptedException {
         List<Thread> threads = new CopyOnWriteArrayList<>();
-        backend.async(task -> threads.add(Thread.currentThread()), 0);
-        backend.async(task -> threads.add(Thread.currentThread()), 100_000_000);
+        CountDownLatch executed = new CountDownLatch(2);
+        backend.async(task -> {
+            threads.add(Thread.currentThread());
+            executed.countDown();
+        }, 0);
+        backend.async(task -> {
+            threads.add(Thread.currentThread());
+            executed.countDown();
+        }, 100_000_000);
         server.getScheduler().performTicks(3);
+        assertThat(executed.await(10, TimeUnit.SECONDS)).as("both async bodies executed").isTrue();
         server.getScheduler().waitAsyncTasksFinished();
         assertThat(threads).hasSize(2).doesNotContain(Thread.currentThread());
     }
@@ -82,7 +92,7 @@ class PaperBackendLiveTest {
         player.disconnect();
         // V5: disconnect changes online state but EntityMock validity remains true in 4.123.0.
         assertThat(player.isOnline()).isFalse();
-        System.out.println("SCH1 V5 PlayerMock after disconnect: valid=" + player.isValid());
+        assertThat(player.isValid()).isTrue();
         RetiringBackend retiring = new RetiringBackend(backend);
         retiring.retire(player);
         AtomicInteger runs = new AtomicInteger();

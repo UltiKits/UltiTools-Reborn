@@ -273,12 +273,18 @@ class ModuleRequestEndToEndTest {
 
         @AfterEach
         void tearDown() throws Exception {
-            eventBus.shutdown();
-            Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
-            instanceField.setAccessible(true);
-            instanceField.set(null, null);
-            frameworkScheduler.close();
-            MockBukkitHelper.safeUnmock();
+            try {
+                if (eventBus != null) { eventBus.shutdown(); }
+                Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
+                instanceField.setAccessible(true);
+                instanceField.set(null, null);
+            } finally {
+                try {
+                    if (frameworkScheduler != null) { frameworkScheduler.close(); }
+                } finally {
+                    MockBukkitHelper.safeUnmock();
+                }
+            }
         }
 
         @Test
