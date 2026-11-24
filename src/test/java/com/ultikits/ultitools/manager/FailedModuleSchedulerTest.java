@@ -109,8 +109,8 @@ class FailedModuleSchedulerTest {
         try (PluginManagerFirstAssemblyTest.FixtureJarClassLoader loader =
                      new PluginManagerFirstAssemblyTest.FixtureJarClassLoader(buildModuleJar().toFile(),
                              getClass().getClassLoader(), "com.ultikits.testfixtures.schedulerfailure.")) {
-            Class<? extends UltiToolsPlugin> moduleClass = Class.forName(
-                    SchedulerFailureModule.class.getName(), true, loader).asSubclass(UltiToolsPlugin.class);
+            Class<? extends UltiToolsPlugin> moduleClass = loader.loadClass(
+                    SchedulerFailureModule.class.getName()).asSubclass(UltiToolsPlugin.class);
             moduleClass.getField("failurePoint").set(null, failurePoint);
             setManagerField("classLoader", loader);
             boolean registered = suppliedInstance

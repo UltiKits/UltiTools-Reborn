@@ -19,7 +19,11 @@ public class SchedulerFailureModule extends UltiToolsPlugin {
     @Autowired public Scheduler scheduler;
 
     public SchedulerFailureModule() {
-        constructed = this;
+        remember(this);
+    }
+
+    private static void remember(SchedulerFailureModule module) {
+        constructed = module;
     }
 
     @PostConstruct
