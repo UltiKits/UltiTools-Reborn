@@ -345,6 +345,28 @@ records the audit's behaviour in that release, not its availability in 7.0.0.
 模块扫描诊断仍通过插件日志报告跳过的类；JAR 结构检查、100 MB 大小上限和 10,000 条目上限保留，
 但并不隔离已加载代码。下方 6.3.0 的历史记录不代表 7.0.0 仍提供该审计。
 
+## Notifications, toasts and holograms (as of 7.0.0)
+
+`widgets.Toast` and `NotificationService#sendToastNotification` are removed. The advancement
+implementation depended on deprecated, version-unstable server internals, and message text
+containing quotes could break its generated JSON. Use `sendTitleNotification`,
+`sendActionBarNotification` or chat instead. Rebuild callers against 7.0 after migrating.
+NotificationService signatures change separately in 7.0; see the follow-up section.
+
+`widgets.Hologram`, which spawned an invisible armour stand for each text line, is also removed.
+Use Paper's native `TextDisplay` API instead; a single display can contain multiple lines.
+The following example uses the framework's `Messages` service for shared text and disables
+entity persistence. The caller owns the display and removes it when no longer needed.
+
+```java
+TextDisplay display = location.getWorld().spawn(location, TextDisplay.class, d -> {
+    d.text(messages.shared(Text.of(messages.key("hologram.welcome"))));
+    d.setBillboard(Display.Billboard.CENTER);
+    d.setPersistent(false);
+});
+// later: display.remove();
+```
+
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
 - **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
