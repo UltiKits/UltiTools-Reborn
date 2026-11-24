@@ -4,6 +4,7 @@ ui:
   "yes": "是"
   "no": "否"
   submit: "提交"
+  cancel: "取消"
 text:
   fallback:
     time_zone: "后备语言：<language>（系统时区 <zone>；可在 config.yml 中设置 fallback-language 覆盖）"
