@@ -15,7 +15,8 @@ import com.ultikits.ultitools.utils.VersionUtils;
 
 import lombok.Getter;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitTask;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -54,7 +55,7 @@ public class UpdateManager {
     private volatile boolean stopped;
 
     /** The scheduled check, cancelled by {@link #stop()}; {@code null} until {@link #start(Plugin)}. */
-    private volatile BukkitTask task;
+    private volatile TaskHandle task;
 
     /**
      * What the last completed check could not confirm, in lookup order: {@link #FRAMEWORK_NAME}
@@ -114,7 +115,7 @@ public class UpdateManager {
         if (stopped) {
             return;
         }
-        task = plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::checkUpdatesSync);
+        task = FrameworkScheduling.scheduler().async().run(this::checkUpdatesSync);
     }
 
     /**
@@ -127,7 +128,7 @@ public class UpdateManager {
      */
     public void stop() {
         stopped = true;
-        BukkitTask scheduled = task;
+        TaskHandle scheduled = task;
         if (scheduled != null) {
             scheduled.cancel();
         }
