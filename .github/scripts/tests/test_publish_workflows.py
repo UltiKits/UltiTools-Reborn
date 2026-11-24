@@ -1043,7 +1043,7 @@ def zip_bytes(entries):
     return buffer.getvalue()
 
 
-PLUGIN_YML = ("name: UltiTools\nversion: '%s'\nmain: com.ultikits.ultitools.UltiTools\napi-version: '1.19'\n"
+PLUGIN_YML = ("name: UltiTools\nversion: '%s'\nmain: com.ultikits.ultitools.UltiTools\napi-version: '26.3'\n"
               % VERSION).encode()
 
 PRODUCT_FILES = (".github/scripts/release_artifacts.py", ".github/scripts/check-gpg-expiry.sh",
@@ -1150,7 +1150,7 @@ class ReleaseFixture(object):
         target = self.checkout / "target"
         target.mkdir()
         (target / PAYLOADS["primary"]).write_bytes(zip_bytes([
-            ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\n"), ("plugin.yml", PLUGIN_YML),
+            ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\n"), ("paper-plugin.yml", PLUGIN_YML),
             ("com/ultikits/ultitools/UltiTools.class", b"\xca\xfe\xba\xbe accepted")]))
         (target / PAYLOADS["sources"]).write_bytes(zip_bytes([
             ("com/ultikits/ultitools/UltiTools.java", b"package com.ultikits.ultitools;\nclass UltiTools {}\n")]))

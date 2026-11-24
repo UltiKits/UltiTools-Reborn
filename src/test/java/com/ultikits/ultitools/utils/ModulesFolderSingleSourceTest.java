@@ -100,7 +100,7 @@ class ModulesFolderSingleSourceTest {
     @DisplayName("the class loader, the scan, install, update and uninstall call modulesFolder; the records folder comes from the same data folder")
     void everyCallerUsesTheOneMethod() throws IOException {
         String ultiTools = read("UltiTools.java");
-        assertThat(body(ultiTools, "URL[] getModuleUrls")).contains("modulesFolder(");
+        assertThat(body(read("bootstrap/UltiToolsBootstrap.java"), "URL[] classPath")).contains("modulesFolder(");
         assertThat(body(ultiTools, "void initPluginModules")).contains("modulesFolder(");
         String install = read("utils/PluginInstallUtils.java");
         // 18-40: both install entry points delegate to installReporting, which hands the known version

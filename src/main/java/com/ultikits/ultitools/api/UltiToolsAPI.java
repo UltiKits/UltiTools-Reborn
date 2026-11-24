@@ -73,7 +73,7 @@ public final class UltiToolsAPI {
      */
     public static void connect(JavaPlugin plugin, Class<?>... additionalEntities) {
         if (UltiTools.getInstance() == null) {
-            throw new IllegalStateException("UltiTools is not loaded! Add 'depend: [UltiTools]' to your plugin.yml");
+            throw new IllegalStateException("UltiTools is not loaded! Declare UltiTools as a dependency: dependencies.server.UltiTools in paper-plugin.yml, or depend: [UltiTools] in plugin.yml");
         }
         if (adapters.containsKey(plugin)) {
             Bukkit.getLogger().log(Level.WARNING,

@@ -64,7 +64,7 @@ POM_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 PLUGIN_YML = """name: UltiTools
 version: '${project.version}'
 main: com.ultikits.ultitools.UltiTools
-api-version: '1.19'
+api-version: '26.3'
 """
 
 FAKE_MVN = r'''#!{python} -I
@@ -95,14 +95,18 @@ if "verify" in argv:
 
     plugin_version = "9.9.9" if variant == "wrong-plugin-version" else version
     main = [("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\n"),
-            ("plugin.yml", ("name: UltiTools\nversion: '%s'\nmain: com.ultikits.ultitools.UltiTools\n"
-                            "api-version: '1.19'\n" % plugin_version).encode()),
+            ("paper-plugin.yml", ("name: UltiTools\nversion: '%s'\nmain: com.ultikits.ultitools.UltiTools\n"
+                            "api-version: '26.3'\n" % plugin_version).encode()),
             ("com/ultikits/ultitools/UltiTools.class", b"\xca\xfe\xba\xbe" + stamp),
             ("com/ultikits/ultitools/Shaded.class", b"\xca\xfe\xba\xbe" + stamp)]
     if variant == "no-main-class":
         main = [e for e in main if e[0] != "com/ultikits/ultitools/UltiTools.class"]
     if variant == "no-plugin-yml":
-        main = [e for e in main if e[0] != "plugin.yml"]
+        main = [e for e in main if e[0] != "paper-plugin.yml"]
+    if variant == "legacy-plugin-yml":
+        main.append(("plugin.yml", b"name: legacy\n"))
+    if variant == "nested-paper-descriptor":
+        main = [("nested/" + name if name == "paper-plugin.yml" else name, data) for name, data in main]
     jar("UltiTools-API-%s.jar" % version, main)
     jar("original-UltiTools-API-%s.jar" % version, [("com/ultikits/ultitools/UltiTools.class", b"\xca\xfe")])
     sources = [("com/ultikits/ultitools/UltiTools.java", b"package com.ultikits.ultitools;\nclass UltiTools {}\n")]
@@ -404,7 +408,7 @@ class ReleaseFixture(object):
         self.git_raw("config", "url.file://%s.insteadOf" % self.origin, REPO_URL)
         (self.work / ".gitignore").write_text("target/\n.flattened-pom.xml\n")
         (self.work / "src/main/resources").mkdir(parents=True)
-        (self.work / "src/main/resources/plugin.yml").write_text(PLUGIN_YML)
+        (self.work / "src/main/resources/paper-plugin.yml").write_text(PLUGIN_YML)
         self.commit_pom(PRIOR, "release " + PRIOR)
         self.git_raw("tag", "v" + PRIOR)
         self.commit_pom(VERSION, "prepare " + VERSION)
@@ -723,7 +727,7 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertEqual(manifest["product_tree"], self.fx.git_raw("rev-parse", "HEAD^{tree}"))
         self.assertEqual(manifest["prior_served_version"], PRIOR)
         self.assertIsNone(manifest["identify_string"])
-        self.assertEqual(manifest["plugin_api_version"], "1.19")
+        self.assertEqual(manifest["plugin_api_version"], "26.3")
         self.assertEqual(manifest["filename"], PRIMARY)
         self.assertEqual(manifest["sha256"], sha256_file(self.retain / PRIMARY))
         self.assertEqual(manifest["bytes"], (self.retain / PRIMARY).stat().st_size)
@@ -751,6 +755,21 @@ class TracerHandoffTests(HandoffTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("main_class_missing", result.stdout.decode())
         self.assertFalse(self.retain.exists(), "nothing may be retained from a rejected build")
+
+    def test_prepare_refuses_legacy_root_descriptor(self):
+        result = self.prepare(env={"FAKE_MVN_VARIANT": "legacy-plugin-yml"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("legacy_plugin_yml_present", result.stdout.decode())
+        self.assertFalse(self.retain.exists())
+
+    def test_dry_run_refuses_legacy_and_nonroot_descriptors(self):
+        for variant, reason in (("legacy-plugin-yml", "legacy root plugin.yml"),
+                                ("nested-paper-descriptor", "no root paper-plugin.yml")):
+            with self.subTest(variant=variant):
+                result = self.fx.run_release("--dry-run", env={"FAKE_MVN_VARIANT": variant})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(reason, result.stdout.decode())
+                self.assertEqual(self.fx.gh_writes(), [])
 
     def test_prepare_refuses_sources_jar_without_java_sources(self):
         result = self.prepare(env={"FAKE_MVN_VARIANT": "sources-without-java"})
