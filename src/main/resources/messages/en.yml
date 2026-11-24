@@ -4,6 +4,7 @@ ui:
   "yes": "Yes"
   "no": "No"
   submit: "Submit"
+  cancel: "Cancel"
 text:
   fallback:
     time_zone: "Fallback language: <language> (system time zone <zone>; set fallback-language in config.yml to override)"
