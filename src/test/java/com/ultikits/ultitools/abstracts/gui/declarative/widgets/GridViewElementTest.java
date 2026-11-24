@@ -149,7 +149,7 @@ public class GridViewElementTest {
 
         @Override
         public Widget build(BuildContext context) {
-            return TextButton.builder().text("n=" + count).build();
+            return TextButton.builder().text(com.ultikits.ultitools.text.Text.plain("n=" + count)).build();
         }
     }
 
