@@ -97,7 +97,9 @@ language, configured fallback, module source language, then the key. Put only op
 examples, overwritten at startup; edit the parent override file, not the reference. A module reload
 re-reads its overrides; framework catalogue overrides currently require a restart. **6.x language
 files and custom language names are not migrated.** Legacy `§` / `&` colour codes are not interpreted
-in new catalogues; use MiniMessage tags.
+in new catalogues; use MiniMessage tags. While the legacy path coexists, its custom files still
+work there; new `Messages` resolve a custom configured name to its official prefix language
+(`zh-myserver` → `zh`, unmatched safe names → `en`) without importing the old file or adding a warning.
 
 中文补充：7.0 新装默认两个语言设置均为 `auto`；玩家按客户端语言显示，后备语言仅按上列系统时区
 ID 选择中文，其余使用英文（不是按 UTC 偏移判断）。云主机、容器常为 UTC，因而默认英文，与 6.x
@@ -106,7 +108,8 @@ ID 选择中文，其余使用英文（不是按 UTC 偏移判断）。云主机
 也不会自动改写。时区选择只在启动和配置重载时解析，玩家运行中改客户端语言仍立即生效。
 模块随包使用 `messages/<语言>.yml`，服主在上级覆盖文件里只写需要修改的条目；`reference/` 是每次
 启动重写的只读参考，不要修改。模块重载会重读模块覆盖，框架覆盖暂需重启。6.x 语言文件与自定义
-名称不自动迁移；新目录的 `§`、`&` 不解释为颜色码。
+名称不自动迁移；新目录的 `§`、`&` 不解释为颜色码。并存期间旧路径仍读取自定义文件；新引擎只按旧
+官方前缀选基础语言（`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不导入旧文件或新增告警。
 
 ### Add the Dependency
 

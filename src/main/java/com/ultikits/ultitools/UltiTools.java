@@ -502,6 +502,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 return engine.fallback().getLanguage();
             }
         }
+        String configured = getConfig().getString("language");
+        if (!com.ultikits.ultitools.text.internal.LocaleNames.isAutomatic(configured)) {
+            return configured;
+        }
         return com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver
                 .forConfig(this::getConfig, getLogger()).fallback().getLanguage();
     }

@@ -46,6 +46,9 @@ and `"no"`. `§` and `&` colour codes are not interpreted in these new catalogue
   are not automatically converted to the new catalogues. Re-create the required overrides
   with dotted keys and MiniMessage syntax. The old `i18n` path remains temporarily while its
   callers migrate; its eventual removal is a separate change, not part of this engine addition.
+  During coexistence, the legacy path still loads custom files as before. New `Messages` use the
+  official prefix of a custom configured name (`zh-myserver` → `zh`, unmatched safe names → `en`)
+  without treating that custom file as a new catalogue or adding an invalid-locale warning.
 
 中文补充：7.0 的新装 `language` 与 `fallback-language` 均默认 `auto`。玩家跟随客户端语言；后备
 语言只按上述 11 个系统时区 ID 选 `zh`，其他选 `en`，不按时差猜测。云主机和容器常用 UTC，因此
@@ -55,6 +58,8 @@ and `"no"`. `§` and `&` colour codes are not interpreted in these new catalogue
 翻译顺序为请求语言、后备语言、模块源语言、键本身；参数仍按请求语言格式化。服主只改上级覆盖
 文件，`reference/` 是框架每次启动重写的只读参考；模块覆盖可重载，框架覆盖暂需重启。6.x 的语言
 文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。
+并存期间旧路径照旧读取自定义文件；新 `Messages` 将自定义配置名按旧官方前缀归到基础语言
+（`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不读取该旧文件，也不新增非法 locale 警告。
 
 ## Adventure chat confirmation callbacks (as of 7.0.0)
 

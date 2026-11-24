@@ -115,11 +115,16 @@ class CatalogueLoaderTest {
         Files.writeString(reference.resolve("fr.yml"), "stale: removed\n");
         Files.writeString(reference.resolve("en.yml"), "edited: ineffective\n");
         assertThat(loader.writeReferences(shipped, operator)).isEmpty();
+        String header;
+        try (var input = getClass().getResourceAsStream("/messages/reference-header.txt")) {
+            assertThat(input).as("The bilingual reference header is a bundled UTF-8 resource").isNotNull();
+            header = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
         String copy = Files.readString(reference.resolve("en.yml"));
-        assertThat(copy).startsWith(CatalogueLoader.REFERENCE_HEADER).endsWith(bundled);
+        assertThat(copy).startsWith(header).endsWith(bundled);
         assertThat(copy).contains("edits here have no effect", "修改此处无效", "同名覆盖文件");
         assertThat(Files.readAllBytes(reference.resolve("en.yml")))
-                .isEqualTo((CatalogueLoader.REFERENCE_HEADER + bundled).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                .isEqualTo((header + bundled).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         assertThat(reference.resolve("fr.yml")).doesNotExist();
         assertThat(Files.readString(operator.resolve("en.yml"))).isEqualTo(override);
         assertThat(loader.withOverrides(shipped, operator).catalogue().lookup("greeting", List.of(Locale.ENGLISH)))

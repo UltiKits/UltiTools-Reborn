@@ -8,10 +8,12 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
+import java.nio.file.Path;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
@@ -22,6 +24,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
@@ -406,6 +409,8 @@ class DependenceManagersTest {
     @Nested
     @DisplayName("initCoreServices real registration shape (regression: PR #352 UAT)")
     class InitCoreServicesRegistrationTests {
+        @TempDir
+        Path temporary;
 
         /**
          * Drives the ACTUAL {@code initCoreServices(UltiTools)} private method -- not a
@@ -445,7 +450,10 @@ class DependenceManagersTest {
                 java.lang.reflect.Method initCoreServices =
                         DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
                 initCoreServices.setAccessible(true); // NOPMD
-                initCoreServices.invoke(managers, mock(UltiTools.class));
+                UltiTools core = mock(UltiTools.class);
+                when(core.getLogger()).thenReturn(Logger.getAnonymousLogger());
+                when(core.getDataFolder()).thenReturn(temporary.toFile());
+                initCoreServices.invoke(managers, core);
 
                 // Assert: each interface-typed lookup resolves without throwing.
                 TeleportService teleportService = assertDoesNotThrow(
@@ -465,6 +473,8 @@ class DependenceManagersTest {
                         "EmailService is aliased under two names (:80-81) -- must not be seen as two "
                                 + "ambiguous candidates");
                 assertThat(emailService).isNotNull();
+            } finally {
+                context.close();
             }
         }
 
@@ -491,9 +501,11 @@ class DependenceManagersTest {
             SimpleContainer context = new SimpleContainer();
             setField(managers, "context", context);
 
-            Logger mockUltiToolsLogger = mock(Logger.class);
-            UltiTools mockUltiTools = TestHelper.mockUltiToolsInstance(
-                    ultiTools -> when(ultiTools.getLogger()).thenReturn(mockUltiToolsLogger));
+            Logger mockUltiToolsLogger = spy(Logger.getAnonymousLogger());
+            UltiTools mockUltiTools = TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockUltiToolsLogger);
+                when(ultiTools.getDataFolder()).thenReturn(temporary.toFile());
+            });
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
                 BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
@@ -512,6 +524,8 @@ class DependenceManagersTest {
                 // ran too early.
                 verify(mockUltiToolsLogger, never()).info(anyString());
                 verify(mockUltiToolsLogger, never()).warning(anyString());
+            } finally {
+                context.close();
             }
         }
     }

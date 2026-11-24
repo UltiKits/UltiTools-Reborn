@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.text.internal;
 
+import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.text.LocaleResolver;
+import java.util.List;
 import java.time.ZoneId;
 import java.util.Locale;
 import java.util.Objects;
@@ -94,14 +96,25 @@ public final class ConfiguredLocaleResolver implements LocaleResolver {
                 && Objects.equals(previous.rawFallback(), rawFallback)) {
             return previous;
         }
-        Optional<Locale> forced = LocaleNames.parse(rawLanguage);
-        if (forced.isEmpty() && !LocaleNames.isAutomatic(rawLanguage)) {
-            warn("language", rawLanguage);
-        }
+        Optional<Locale> forced = configuredLanguage(rawLanguage);
         Fallback selection = selectFallback(rawFallback, forced);
         Snapshot current = new Snapshot(rawLanguage, rawFallback, forced, selection);
         cached = current;
         return current;
+    }
+
+    private Optional<Locale> configuredLanguage(@Nullable String raw) {
+        Optional<Locale> explicit = LocaleNames.parse(raw);
+        if (explicit.isPresent() || LocaleNames.isAutomatic(raw)) {
+            return explicit;
+        }
+        if (Localized.isSafeLanguageCode(raw)) {
+            // Retain 6.x custom names without interpreting their files as new catalogues.
+            String base = Localized.officialLanguageOf(raw, List.of("en", "zh"));
+            return Optional.of(base == null ? Locale.ENGLISH : Locale.forLanguageTag(base));
+        }
+        warn("language", raw);
+        return Optional.empty();
     }
 
     private Fallback selectFallback(@Nullable String raw, Optional<Locale> forced) {

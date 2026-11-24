@@ -29,6 +29,7 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class TextEngineLocaleConfigurationTest {
@@ -113,6 +114,38 @@ class TextEngineLocaleConfigurationTest {
                 assertThat(info(records)).hasSize(1);
                 // nosemgrep: java.lang.security.audit.path-traversal.path-traversal
                 assertThat(Files.readString(file)).isEqualTo(original); // Test-owned fixed config file.
+            } finally {
+                root.close();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"zh-myserver,zh", "en-myserver,en", "myserver,en", "zh_custom,en", "ZH-myserver,en",
+            "zh-CN-myserver,zh"})
+    void customLanguageWithRootEngine_usesTheLegacyBaseWithoutNewWarnings(String name, String base) throws Exception {
+        YamlConfiguration config = new YamlConfiguration();
+        config.set("language", name);
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = logger(records);
+        AtomicInteger reads = new AtomicInteger();
+        var resolver = ConfiguredLocaleResolver.forConfig(() -> config, logger, () -> {
+            reads.incrementAndGet();
+            return ZoneId.of("UTC");
+        });
+        try (TextEngine engine = frameworkEngine(resolver, logger)) {
+            SimpleContainer root = new SimpleContainer();
+            root.registerSingleton(TextEngine.class.getName(), engine);
+            try {
+                Locale expected = Locale.forLanguageTag(base);
+                assertThat(resolver.forced()).contains(expected);
+                assertThat(engine.fallback()).isEqualTo(expected);
+                assertThat(records).noneMatch(record -> Level.WARNING.equals(record.getLevel()));
+                UltiTools core = core(config, logger, root);
+                initialize(core);
+                assertThat(core.i18n("Module '%s' reloaded.")).isEqualTo(legacyReloadMessage(expected));
+                assertThat(records).noneMatch(record -> record.getMessage().startsWith("Invalid language locale:"));
+                assertThat(reads).hasValue(0);
             } finally {
                 root.close();
             }
