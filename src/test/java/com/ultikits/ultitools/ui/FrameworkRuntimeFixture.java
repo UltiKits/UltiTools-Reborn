@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.ui;
 
 import com.ultikits.ultitools.scheduling.ManualScheduler;
+import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.text.FixedLocaleResolver;
 import com.ultikits.ultitools.text.InMemoryMessages;
 import com.ultikits.ultitools.ui.container.FrameworkContainerRuntime;
@@ -11,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.UnaryOperator;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -21,7 +23,7 @@ import org.mockbukkit.mockbukkit.entity.PlayerMock;
 /** Real session and container runtimes; only the scheduler and screen backends are test probes. */
 public final class FrameworkRuntimeFixture implements AbstractUiServiceContractTest.Fixture {
     private final ManualScheduler.Engine clock = new ManualScheduler.Engine();
-    private final RecordingScheduler scheduler = new RecordingScheduler(clock.scheduler("FrameworkUi"));
+    private final RecordingScheduler scheduler;
     private final List<LogRecord> warnings = new CopyOnWriteArrayList<>();
     private final Map<String, UiService> services = new HashMap<>();
     private final FrameworkContainerRuntime containers;
@@ -31,7 +33,12 @@ public final class FrameworkRuntimeFixture implements AbstractUiServiceContractT
         this(defaultContainers());
     }
     public FrameworkRuntimeFixture(FrameworkContainerRuntime containers) {
+        this(containers, UnaryOperator.identity());
+    }
+    /** Decorates the framework scheduler to exercise submission failures without changing the runtime. */
+    public FrameworkRuntimeFixture(FrameworkContainerRuntime containers, UnaryOperator<Scheduler> schedulerDecorator) {
         this.containers = containers;
+        scheduler = new RecordingScheduler(schedulerDecorator.apply(clock.scheduler("FrameworkUi")));
         Logger logger = Logger.getAnonymousLogger();
         logger.setUseParentHandlers(false);
         logger.addHandler(new Handler() {

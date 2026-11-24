@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
@@ -83,22 +84,40 @@ public final class FrameworkContainerRuntime implements ContainerRuntime {
         group.unloading = true;
         group.deadline = unloadWaitOverride == null ? deadlineNanos
                 : Math.min(deadlineNanos, System.nanoTime() + unloadWaitOverride.toNanos());
-        group.containers.forEach(container -> container.prepareUnload(group.deadline));
+        forEachContainer(group, "Container unload prepare failed", container -> container.prepareUnload(group.deadline));
     }
     @Override public void startUnloadCommits(UiOwner owner) {
         checkThread();
         OwnerContainers group = owners.get(owner);
-        if (group != null) { group.containers.forEach(FrameworkSlotContainer::startUnloadCommit); }
+        if (group != null) { forEachContainer(group, "Container unload start failed", FrameworkSlotContainer::startUnloadCommit); }
     }
     @Override public void finishUnload(UiOwner owner, long deadlineNanos) {
         checkThread();
         OwnerContainers group = owners.get(owner);
         if (group == null) { return; }
         if (!group.unloading) { prepareUnload(owner, deadlineNanos); }
-        try { group.containers.forEach(FrameworkSlotContainer::unload); }
+        try { forEachContainer(group, "Container unload finish failed", FrameworkSlotContainer::unload); }
         finally {
-            owners.remove(owner);
+            if (group.containers.isEmpty()) { owners.remove(owner); }
         }
+    }
+    void ended(UiOwner owner, FrameworkSlotContainer container) {
+        checkThread();
+        OwnerContainers group = owners.get(owner);
+        if (group != null) { group.containers.remove(container); }
+    }
+    private static void forEachContainer(OwnerContainers group, String step, Consumer<FrameworkSlotContainer> action) {
+        VirtualMachineError fatal = null;
+        for (FrameworkSlotContainer container : new ArrayList<>(group.containers)) {
+            try { action.accept(container); }
+            catch (VirtualMachineError failure) {
+                container.warn(step, failure);
+                if (fatal == null) { fatal = failure; }
+            } catch (Throwable failure) {
+                container.warn(step, failure);
+            }
+        }
+        if (fatal != null) { throw fatal; }
     }
     private static final class OwnerContainers {
         final List<FrameworkSlotContainer> containers = new ArrayList<>();

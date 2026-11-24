@@ -46,7 +46,8 @@ class FrameworkSlotContainerTest extends FrameworkContainerTestSupport {
         fixture.unload(first);
         assertThat(old.state()).isEqualTo(ContainerState.ENDED);
         assertThat(replacement.state()).isEqualTo(ContainerState.EDITABLE);
-        ViewerItems side = side(); side.cursor(stone(3));
+        ViewerItems side = side();
+        side.cursor(stone(3));
         assertThat(containers.engine().apply(grid(replacement), viewer, side, new Gesture.Place(FIRST, false))).isTrue();
         fixture.unload(second);
         assertThat(viewer.getInventory().getItem(0)).isEqualTo(stone(3));
@@ -89,7 +90,8 @@ class FrameworkSlotContainerTest extends FrameworkContainerTestSupport {
     }
     @Test void policyReturningNullIsRefusedAndLogged() {
         SlotContainer container = service.container(returning(1).policy(request -> null).build());
-        ViewerItems side = side(); side.cursor(stone(2));
+        ViewerItems side = side();
+        side.cursor(stone(2));
         assertThat(containers.engine().apply(grid(container), viewer, side, new Gesture.Place(FIRST, false))).isFalse();
         assertThat(side.cursor()).isEqualTo(stone(2));
         assertThat(fixture.warnings()).singleElement().satisfies(record ->
@@ -199,7 +201,8 @@ class FrameworkSlotContainerTest extends FrameworkContainerTestSupport {
         UiOwner token = mock(UiOwner.class);
         when(token.name()).thenReturn("foreign");
         SlotContainer foreign = otherRuntime.create(token, ContainerSpec.template(1).build(), directHost(new ArrayList<>()));
-        ViewerItems side = side(); side.cursor(stone(2));
+        ViewerItems side = side();
+        side.cursor(stone(2));
         assertThat(containers.engine().apply(grid(foreign), viewer, side, new Gesture.Place(FIRST, false))).isFalse();
         assertThat(foreign.get(0).isEmpty()).isTrue();
         foreign.end();

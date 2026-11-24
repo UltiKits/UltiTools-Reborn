@@ -167,11 +167,18 @@ public final class FrameworkSlotContainer implements SlotContainer {
         }
         PendingCommit work = new PendingCommit(new ContainerSnapshot(contents, baseline, ++sequence), state,
                 System.nanoTime() + spec.commitTimeout().toNanos());
+        if (!unloading) {
+            try {
+                work.timeout = host.scheduler().global().runLater(spec.commitTimeout(),
+                        () -> finishCommit(work, StoreAnswer.unknown(new TimeoutException("Commit timeout")), true));
+            } catch (Exception | LinkageError failure) {
+                warn("Commit timeout submission failed before write", failure);
+                throw failure;
+            }
+        }
         pending = work;
         state = ContainerState.COMMITTING;
         redraw();
-        work.timeout = host.scheduler().global().runLater(spec.commitTimeout(),
-                () -> finishCommit(work, StoreAnswer.unknown(new TimeoutException("Commit timeout")), true));
         try {
             Objects.requireNonNull(store.write(work.snapshot), "store stage")
                     .whenComplete((answer, failure) -> recordAnswer(work, answer, failure));
@@ -182,7 +189,8 @@ public final class FrameworkSlotContainer implements SlotContainer {
     }
     private void recordAnswer(PendingCommit work, @Nullable StoreAnswer answer, @Nullable Throwable failure) {
         StoreAnswer resolved = failure == null && answer != null ? answer : StoreAnswer.unknown(failure);
-        work.answer.complete(resolved);
+        if (failure == null) { work.answer.complete(resolved); }
+        else { work.answer.completeExceptionally(failure); }
         onThread(() -> finishCommit(work, resolved, false));
     }
     private void onThread(Runnable action) {
@@ -268,7 +276,12 @@ public final class FrameworkSlotContainer implements SlotContainer {
     private void endAfterCommit(CompletableFuture<EndOutcome> result) {
         CompletionStage<CommitOutcome> selected = unloadCommit;
         if (selected == null) {
-            selected = state == ContainerState.COMMITTING ? Objects.requireNonNull(pending).stage : startCommit();
+            try {
+                selected = state == ContainerState.COMMITTING ? Objects.requireNonNull(pending).stage : startCommit();
+            } catch (Exception | LinkageError failure) {
+                ending = null;
+                throw failure;
+            }
         }
         selected.thenAccept(outcome -> endNow(result, switch (outcome) {
             case WRITTEN -> EndOutcome.COMMITTED;
@@ -283,9 +296,12 @@ public final class FrameworkSlotContainer implements SlotContainer {
     }
     private void clearAndEnd() {
         contents = new ArrayList<>(StackMath.empty(size()));
+        baseline = Collections.emptyList();
+        pending = null;
         ledger.clear();
         viewers.clear();
         state = ContainerState.ENDED;
+        runtime.ended(owner, this);
         redraw();
     }
 
@@ -318,7 +334,9 @@ public final class FrameworkSlotContainer implements SlotContainer {
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
             finishCommit(work, StoreAnswer.unknown(failure), true);
-        } catch (ExecutionException | TimeoutException failure) {
+        } catch (ExecutionException failure) {
+            finishCommit(work, StoreAnswer.unknown(failure.getCause()), false);
+        } catch (TimeoutException failure) {
             finishCommit(work, StoreAnswer.unknown(failure), true);
         }
     }
@@ -350,7 +368,8 @@ public final class FrameworkSlotContainer implements SlotContainer {
         catch (Exception | LinkageError failure) { warn("Undelivered handler failed", failure); }
     }
     void warn(String message, @Nullable Throwable failure) {
-        LogRecord record = new LogRecord(Level.WARNING, message + " for owner " + owner());
+        LogRecord record = new LogRecord(Level.WARNING,
+                message + " for owner " + owner() + " container " + Integer.toHexString(System.identityHashCode(this)));
         record.setThrown(failure);
         host.warn(record);
     }

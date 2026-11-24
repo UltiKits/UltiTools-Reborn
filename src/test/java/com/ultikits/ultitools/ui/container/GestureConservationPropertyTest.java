@@ -30,7 +30,6 @@ class GestureConservationPropertyTest extends FrameworkContainerTestSupport {
     private static final int STEPS = 2500;
 
     @Test void seededSequencesConserveStorageAndNeverChangeTemplateViewers() {
-        System.out.printf("Gesture conservation seed=%d steps=%d per kind%n", SEED, STEPS);
         Random random = new Random(SEED);
         for (ContainerKind kind : ContainerKind.values()) { runSequence(random, kind); }
         assertThat(STEPS).isGreaterThanOrEqualTo(2000);

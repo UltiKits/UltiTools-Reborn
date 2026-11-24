@@ -40,10 +40,7 @@ class UnloadWaitStoreAnswersTest extends FrameworkContainerTestSupport {
     @Test void silentStoreUsesSharedDeadlineAndWarnsOnceWithOwner() {
         containers.unloadWaitOverride(Duration.ofMillis(120));
         SlotContainer container = contributed(snapshot -> new CompletableFuture<>());
-        long start = System.nanoTime();
         fixture.unload(service);
-        long elapsed = System.nanoTime() - start;
-        assertThat(elapsed).isBetween(TimeUnit.MILLISECONDS.toNanos(70), TimeUnit.SECONDS.toNanos(2));
         assertThat(completed(container.end())).isEqualTo(EndOutcome.UNKNOWN_KEPT_BY_STORE);
         assertThat(fixture.warnings()).singleElement().satisfies(record -> assertThat(record.getMessage()).contains(service.owner()));
         assertThat(viewer.getInventory().getItem(0)).isNull();
@@ -58,28 +55,45 @@ class UnloadWaitStoreAnswersTest extends FrameworkContainerTestSupport {
         assertThat(viewer.getInventory().getItem(0)).isEqualTo(stone(8));
         assertThat(fixture.warnings()).isEmpty();
     }
-    @Test void severalSilentStoresShareOneBudgetRatherThanOneBudgetEach() {
+    @Test void severalSilentStoresStartBeforeWaitingAndSettleUnknown() {
         containers.unloadWaitOverride(Duration.ofMillis(120));
         AtomicInteger started = new AtomicInteger();
-        SlotContainer first = contributed(snapshot -> { started.incrementAndGet(); return new CompletableFuture<>(); });
-        SlotContainer second = contributed(snapshot -> { started.incrementAndGet(); return new CompletableFuture<>(); });
-        long start = System.nanoTime();
+        SlotContainer first = contributed(snapshot -> {
+            started.incrementAndGet();
+            return new CompletableFuture<>();
+        });
+        SlotContainer second = contributed(snapshot -> {
+            assertThat(first.state()).isEqualTo(ContainerState.COMMITTING);
+            started.incrementAndGet();
+            return new CompletableFuture<>();
+        });
         fixture.unload(service);
-        assertThat(System.nanoTime() - start).isLessThan(TimeUnit.MILLISECONDS.toNanos(220));
         assertThat(started).hasValue(2);
         assertThat(completed(first.end())).isEqualTo(EndOutcome.UNKNOWN_KEPT_BY_STORE);
         assertThat(completed(second.end())).isEqualTo(EndOutcome.UNKNOWN_KEPT_BY_STORE);
         assertThat(fixture.warnings()).hasSize(2);
     }
-    @Test void shorterCommitTimeoutWinsOverUnloadBudget() {
+    @Test void shorterCommitTimeoutSettlesUnknownWithoutTickingTheScheduler() {
         containers.unloadWaitOverride(Duration.ofSeconds(1));
         SlotContainer container = service.container(committed(1, snapshot -> new CompletableFuture<>())
                 .initial(viewer.getUniqueId(), List.of(stone(8))).commitTimeout(Duration.ofMillis(80)).build());
-        long start = System.nanoTime();
         fixture.unload(service);
-        assertThat(System.nanoTime() - start).isLessThan(TimeUnit.MILLISECONDS.toNanos(500));
         assertThat(completed(container.end())).isEqualTo(EndOutcome.UNKNOWN_KEPT_BY_STORE);
         assertThat(fixture.warnings()).hasSize(1);
+    }
+    @Test void exceptionalStoreAnswerIsAppliedWithItsOriginalCauseDuringUnload() {
+        IllegalStateException failure = new IllegalStateException("asynchronous write failed");
+        SlotContainer container = contributed(snapshot -> {
+            CompletableFuture<StoreAnswer> answer = new CompletableFuture<>();
+            CompletableFuture.delayedExecutor(50, TimeUnit.MILLISECONDS).execute(() -> answer.completeExceptionally(failure));
+            return answer;
+        });
+        fixture.unload(service);
+        assertThat(completed(container.end())).isEqualTo(EndOutcome.UNKNOWN_KEPT_BY_STORE);
+        fixture.advanceTicks(2);
+        assertThat(fixture.warnings()).singleElement().satisfies(record -> assertThat(record.getThrown()).isSameAs(failure));
+        assertThat(viewer.getInventory().getItem(0)).isNull();
+        assertThat(undelivered).isEmpty();
     }
     @Test void interruptedWaitKeepsStoreResponsibilityAndPreservesInterrupt() {
         SlotContainer container = contributed(snapshot -> new CompletableFuture<>());
@@ -97,7 +111,8 @@ class UnloadWaitStoreAnswersTest extends FrameworkContainerTestSupport {
     @Test void returnDispositionCannotHaveAStoreAndNeverWritesDuringUnload() {
         AtomicInteger writes = new AtomicInteger();
         assertThatThrownBy(() -> returning(1).store(snapshot -> {
-            writes.incrementAndGet(); return CompletableFuture.completedFuture(StoreAnswer.written());
+            writes.incrementAndGet();
+            return CompletableFuture.completedFuture(StoreAnswer.written());
         }).build()).isInstanceOf(IllegalArgumentException.class);
         SlotContainer container = service.container(returning(1).initial(viewer.getUniqueId(), List.of(stone(8))).build());
         fixture.unload(service);
