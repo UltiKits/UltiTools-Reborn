@@ -11,9 +11,14 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Binds a consecutive row-major area of a grid to container indexes. Paging changes firstIndex,
- * never container contents or lifetime. Use it as a layout child with its own startSlot, not as a
- * single GridView cell (a cell assigns one position to its render object).
+ * Binds a consecutive row-major area of a grid to existing container indexes, read-only by default.
+ * Paging changes firstIndex, never container contents or lifetime. A partial last page leaves the
+ * remaining grid slots unbound. Use it as a layout child with its own startSlot, not as a single
+ * GridView cell (a cell assigns one position to its render object).
+ * <pre>{@code
+ * ItemSlotArea.builder(container).firstIndex(page * 9).count(9).build(); // VIEW
+ * ItemSlotArea.builder(container).count(9).mode(BindingMode.EDITABLE).build(); // Explicit opt-in
+ * }</pre>
  * @since 7.0.0
  */
 public class ItemSlotArea extends RenderObjectWidget {
@@ -38,7 +43,7 @@ public class ItemSlotArea extends RenderObjectWidget {
     public SlotContainer getContainer() { return container; }
     /** @return the first visible container index */
     public int getFirstIndex() { return firstIndex; }
-    /** @return the number of visible indexes */
+    /** @return the requested area size, possibly exceeding the remaining container indexes */
     public int getCount() { return count; }
     /** @return the first grid slot */
     public int getStartSlot() { return startSlot; }
@@ -46,26 +51,31 @@ public class ItemSlotArea extends RenderObjectWidget {
     public BindingMode getMode() { return mode; }
     @Override public @NotNull RenderObjectElement createElement() { return new ItemSlotAreaElement(this); }
 
-    /** A non-thread-safe range builder; defaults to all container indexes at slot zero, editable. */
+    /** A non-thread-safe range builder; defaults to all container indexes at slot zero, in VIEW mode. */
     public static class Builder implements WidgetBuilder<ItemSlotArea> {
         private final SlotContainer container;
         private int firstIndex;
         private int count;
         private int startSlot;
-        private BindingMode mode = BindingMode.EDITABLE;
+        private BindingMode mode = BindingMode.VIEW;
         private @Nullable SlotKey key;
 
         Builder(SlotContainer container) {
             this.container = Objects.requireNonNull(container, "container");
             count = container.size();
         }
-        /** @param firstIndex first visible container index @return this builder */
+        /**
+         * @param firstIndex first visible index; negative indexes and indexes at/after a nonempty
+         *                   container's size are rejected by build, even for an empty area.
+         *                   An empty container accepts only zero.
+         * @return this builder
+         */
         public Builder firstIndex(int firstIndex) { this.firstIndex = firstIndex; return this; }
-        /** @param count number of visible indexes (zero is an empty area) @return this builder */
+        /** @param count requested area size (zero is empty); its tail may exceed the container @return this builder */
         public Builder count(int count) { this.count = count; return this; }
         /** @param startSlot first row-major grid index @return this builder */
         public Builder startSlot(int startSlot) { this.startSlot = startSlot; return this; }
-        /** @param mode edit/view mode @return this builder */
+        /** @param mode edit/view mode; moving items requires explicit EDITABLE @return this builder */
         public Builder mode(BindingMode mode) { this.mode = Objects.requireNonNull(mode, "mode"); return this; }
         /** @param key reconciliation key @return this builder */
         public Builder key(@Nullable SlotKey key) { this.key = key; return this; }
@@ -73,11 +83,13 @@ public class ItemSlotArea extends RenderObjectWidget {
         public Builder key(String key) { this.key = SlotKey.of(key); return this; }
 
         /**
-         * @return the immutable range description
-         * @throws IllegalArgumentException if the range is outside the container or a six-row grid
+         * @return the immutable range description; nonexistent tail indexes generate no bindings
+         * @throws IllegalArgumentException if firstIndex is invalid, count is negative, or the
+         *                                  requested area is outside a six-row grid
          */
         @Override public @NotNull ItemSlotArea build() {
-            if (firstIndex < 0 || count < 0 || (long) firstIndex + count > container.size()) {
+            int size = container.size();
+            if (firstIndex < 0 || count < 0 || (size == 0 ? firstIndex != 0 : firstIndex >= size)) {
                 throw new IllegalArgumentException("binding range is outside the container");
             }
             if (startSlot < 0 || startSlot >= 54 || (long) startSlot + count > 54) {

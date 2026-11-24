@@ -2,6 +2,7 @@ package com.ultikits.ultitools.abstracts.gui.declarative.widgets;
 
 import com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiRenderer;
+import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiLogCapture;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiScheduler;
 import com.ultikits.ultitools.abstracts.gui.declarative.engine.GuiTestHarness;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.RenderNode;
@@ -79,7 +80,7 @@ class ItemSlotAreaTest {
         assertThat(area.getCount()).isEqualTo(9);
         assertThat(area.getFirstIndex()).isZero();
         assertThat(area.getStartSlot()).isZero();
-        assertThat(area.getMode()).isEqualTo(BindingMode.EDITABLE);
+        assertThat(area.getMode()).isEqualTo(BindingMode.VIEW);
         RenderObjectElement element = area.createElement();
         element.assignContext(BuildContext.root(mock(Player.class), "area", 2)); element.mount(null);
         RenderNode root = element.getRenderNode();
@@ -102,13 +103,48 @@ class ItemSlotAreaTest {
         when(container.size()).thenReturn(18);
         assertThatThrownBy(() -> ItemSlotArea.builder(container).firstIndex(-1).count(1).build()).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ItemSlotArea.builder(container).count(-1).build()).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ItemSlotArea.builder(container).firstIndex(17).count(2).build()).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ItemSlotArea.builder(container).firstIndex(18).count(1).build()).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ItemSlotArea.builder(container).firstIndex(18).count(0).build()).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ItemSlotArea.builder(container).startSlot(-1).build()).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ItemSlotArea.builder(container).startSlot(54).count(0).build()).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ItemSlotArea.builder(container).startSlot(53).count(2).build()).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ItemSlotArea.builder(container).firstIndex(Integer.MAX_VALUE).count(2).build()).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ItemSlotArea.builder(null)).isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> ItemSlotArea.builder(container).mode(null)).isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void partialLastPageBindsOnlyExistingIndexesWithoutDiagnostics() {
+        SlotContainer container = mock(SlotContainer.class);
+        when(container.size()).thenReturn(10);
+        Player viewer = mock(Player.class);
+        AtomicInteger first = new AtomicInteger();
+        List<Grid> frames = new ArrayList<>();
+        try (ManualScheduler.Engine clock = new ManualScheduler.Engine();
+             GuiLogCapture rendererLog = new GuiLogCapture(GuiRenderer.class);
+             GuiLogCapture schedulerLog = new GuiLogCapture(GuiScheduler.class)) {
+            GuiRenderer renderer = new GuiRenderer(Text.plain("Partial"), 1,
+                    new GuiScheduler(clock.scheduler("UltiTools"), viewer), frames::add);
+            renderer.initialize(() -> ItemSlotArea.builder(container).firstIndex(first.get()).count(9).build(),
+                    BuildContext.root(viewer, "partial", 1));
+            first.set(9); renderer.scheduleBuild(); clock.advanceTicks(1);
+            assertThat(frames).hasSize(2);
+            assertThat(frames.get(1).bindings()).containsOnlyKeys(GridSlot.ofIndex(0));
+            assertThat(frames.get(1).binding(GridSlot.ofIndex(0)).orElseThrow().index()).isEqualTo(9);
+            assertThat(frames.get(1).items()).isEmpty();
+            assertThat(rendererLog.records()).isEmpty();
+            assertThat(schedulerLog.records()).isEmpty();
+            renderer.dispose();
+        }
+    }
+
+    @Test
+    void emptyContainerProducesNoBindingLeaves() {
+        SlotContainer container = mock(SlotContainer.class);
+        RenderObjectElement element = ItemSlotArea.builder(container).count(9).build().createElement();
+        element.assignContext(BuildContext.root(mock(Player.class), "empty", 1)); element.mount(null);
+        assertThat(element.getRenderNode().getChildren()).isEmpty();
+        element.unmount();
     }
 
     @Test

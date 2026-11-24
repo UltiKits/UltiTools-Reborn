@@ -19,7 +19,8 @@ public class ItemSlotAreaElement extends RenderObjectElement {
     @Override protected void updateRenderNode(@NotNull RenderNode renderNode) {
         ItemSlotArea widget = (ItemSlotArea) getWidget();
         renderNode.clearChildren();
-        for (int offset = 0; offset < widget.getCount(); offset++) {
+        int visibleCount = Math.min(widget.getCount(), widget.getContainer().size() - widget.getFirstIndex());
+        for (int offset = 0; offset < visibleCount; offset++) {
             RenderNode leaf = new RenderNode(null, widget.getStartSlot() + offset);
             leaf.setBinding(new SlotBinding(widget.getContainer(), widget.getFirstIndex() + offset, widget.getMode()));
             renderNode.addChild(leaf);
