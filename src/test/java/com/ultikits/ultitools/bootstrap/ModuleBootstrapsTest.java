@@ -113,6 +113,26 @@ class ModuleBootstrapsTest {
         }
     }
 
+    @Test
+    void exceptionWithBrokenMessage_doesNotAbortTheRemainingHooks() throws Exception {
+        String exception = BrokenMessageException.class.getName().replace('.', '/');
+        Path bad = jar(temporary.resolve("a-bad.jar"), descriptor("Bad", "fixture.Bad"),
+                Collections.singletonMap("fixture.Bad", hook("fixture.Bad", exception)));
+        Path good = jar(temporary.resolve("z-good.jar"), descriptor("Good", "fixture.Good"),
+                Collections.singletonMap("fixture.Good", hook("fixture.Good", null)));
+        try (ModuleClassLoader loader = loader(bad, good)) {
+            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission(bad, good), loader, logger);
+            assertThat(run.failures).containsOnlyKeys(bad);
+            assertThat(run.attempted).isEqualTo(2);
+            assertThat(loader.loadClass("fixture.Good").getField("context").get(null)).isNotNull();
+        }
+    }
+
+    public static final class BrokenMessageException extends RuntimeException {
+        public BrokenMessageException(String message) { super(message); }
+        @Override public String getMessage() { throw new IllegalStateException("broken message"); }
+    }
+
     private static ModuleJarAdmission admission(Path... jars) {
         ModuleJarAdmission admission = new ModuleJarAdmission();
         for (Path path : jars) { admission.inspect(path.toFile()); }

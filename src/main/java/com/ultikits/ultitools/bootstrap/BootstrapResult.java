@@ -1,6 +1,5 @@
 package com.ultikits.ultitools.bootstrap;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -21,14 +20,14 @@ import com.ultikits.ultitools.utils.ModuleFileTransactions;
  */
 @ApiStatus.Internal
 public final class BootstrapResult {
-    private final ModuleFileTransactions transactions;
+    private final @Nullable ModuleFileTransactions transactions;
     private final ModuleJarAdmission admission;
     private final ModuleClassLoader classLoader;
     private final @Nullable IOException classPathFailure;
     private final Map<Path, Throwable> bootstrapFailures;
     private final int bootstrapsRun;
 
-    BootstrapResult(ModuleFileTransactions transactions, ModuleJarAdmission admission, ModuleClassLoader classLoader,
+    BootstrapResult(@Nullable ModuleFileTransactions transactions, ModuleJarAdmission admission, ModuleClassLoader classLoader,
                     @Nullable IOException classPathFailure, Map<Path, Throwable> failures, int bootstrapsRun) {
         this.transactions = transactions;
         this.admission = admission;
@@ -38,14 +37,23 @@ public final class BootstrapResult {
         this.bootstrapsRun = bootstrapsRun;
     }
 
-    static BootstrapResult empty(File dataFolder, @Nullable IOException failure) {
-        return new BootstrapResult(new ModuleFileTransactions(dataFolder), new ModuleJarAdmission(),
+    // A failed handover must not repeat filesystem work that may itself have caused the failure.
+    static BootstrapResult failed(IOException failure) {
+        return new BootstrapResult(null, new ModuleJarAdmission(),
                 ModuleClassLoader.create(new java.net.URL[0], BootstrapResult.class.getClassLoader()),
                 failure, Collections.emptyMap(), 0);
     }
 
-    /** @return the original transactions, for post-load observation and delayed translated reports */
-    public ModuleFileTransactions transactions() { return transactions; }
+    /**
+     * @return the original transactions, for post-load observation and delayed translated reports
+     * @throws IllegalStateException if bootstrap failed before transactions could be created
+     */
+    public ModuleFileTransactions transactions() {
+        if (transactions == null) {
+            throw new IllegalStateException("Module transactions are unavailable after bootstrap failure", classPathFailure);
+        }
+        return transactions;
+    }
 
     /** @return this start's admission decisions, shared with discovery */
     public ModuleJarAdmission admission() { return admission; }

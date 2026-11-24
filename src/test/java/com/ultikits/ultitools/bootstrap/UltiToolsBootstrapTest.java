@@ -166,6 +166,35 @@ class UltiToolsBootstrapTest {
     }
 
     @Test
+    void invalidServerRoot_neverEscapesBootstrapOrRebuildsTheBrokenTransactions() {
+        UltiToolsBootstrap bootstrap = new UltiToolsBootstrap();
+        assertThatCode(() -> bootstrap.bootstrap(context(java.nio.file.Paths.get("/UltiTools"))))
+                .doesNotThrowAnyException();
+        assertThat(bootstrap.result()).isNotNull();
+        assertThat(bootstrap.result().classPathFailure()).hasCauseInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void dataDirectoryFailure_isNotLostWhenCreatingThePlugin() throws Exception {
+        BootstrapContext context = mock(BootstrapContext.class);
+        IllegalStateException failure = new IllegalStateException("data directory unavailable");
+        when(context.getDataDirectory()).thenThrow(failure);
+        UltiToolsBootstrap bootstrap = new UltiToolsBootstrap();
+        assertThatCode(() -> bootstrap.bootstrap(context)).doesNotThrowAnyException();
+        PluginProviderContext provider = mock(PluginProviderContext.class);
+        when(provider.getDataDirectory()).thenReturn(dataFolder());
+        List<BootstrapResult> arguments = new ArrayList<>();
+        try (MockedConstruction<UltiTools> constructions = mockConstruction(UltiTools.class,
+                (mock, construction) -> arguments.add((BootstrapResult) construction.arguments().get(0)))) {
+            assertThat(bootstrap.createPlugin(provider)).isSameAs(constructions.constructed().get(0));
+            try (ModuleClassLoader loader = arguments.get(0).classLoader()) {
+                assertThat(arguments.get(0).classPathFailure()).hasCause(failure);
+                assertThat(loader.getURLs()).isEmpty();
+            }
+        }
+    }
+
+    @Test
     void createPlugin_passesTheSameResultOrAnEmptyFallbackToTheExactMainClass() throws Exception {
         UltiToolsBootstrap bootstrap = new UltiToolsBootstrap();
         Path data = dataFolder();

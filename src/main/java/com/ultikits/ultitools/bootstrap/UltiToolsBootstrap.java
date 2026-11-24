@@ -3,7 +3,6 @@ package com.ultikits.ultitools.bootstrap;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.bukkit.plugin.java.JavaPlugin;
@@ -19,23 +18,30 @@ import io.papermc.paper.plugin.bootstrap.BootstrapContext;
 import io.papermc.paper.plugin.bootstrap.PluginBootstrap;
 import io.papermc.paper.plugin.bootstrap.PluginProviderContext;
 
-/** Paper's early-start entry point. Internal; not an API for modules. */
+/**
+ * Paper's early-start entry point. Internal; not an API for modules.
+ * An overall preparation failure is retained for enable, where the framework reports it and is
+ * disabled. It is not a successful start with no modules. Virtual machine failures may propagate.
+ */
 @ApiStatus.Internal
 public final class UltiToolsBootstrap implements PluginBootstrap {
     private static final Logger LOGGER = Logger.getLogger("UltiTools");
     private @Nullable BootstrapResult result;
+    private @Nullable Throwable bootstrapFailure;
 
     @Override
     public void bootstrap(BootstrapContext context) {
-        File dataFolder = null;
+        result = null;
+        bootstrapFailure = null;
         try {
-            dataFolder = context.getDataDirectory().toFile();
-            result = prepare(dataFolder);
+            result = prepare(context.getDataDirectory().toFile());
+        } catch (VirtualMachineError failure) {
+            throw failure;
         } catch (Throwable failure) { // NOPMD - a module failure must never abort the framework bootstrap
-            LOGGER.log(Level.SEVERE, "[UltiTools] Failed to prepare module bootstrap; using an empty module set.", failure);
-            if (dataFolder != null) {
-                result = BootstrapResult.empty(dataFolder, new IOException("Failed to prepare module class path", failure));
-            }
+            bootstrapFailure = failure;
+            // Do not construct transactions again here: their server-root resolution may have failed.
+            ModuleBootstraps.logFailure(LOGGER,
+                    "[UltiTools] Failed to prepare module bootstrap; the framework will be disabled during enable.", failure);
         }
     }
 
@@ -70,12 +76,13 @@ public final class UltiToolsBootstrap implements PluginBootstrap {
 
     @Override
     public JavaPlugin createPlugin(PluginProviderContext context) {
-        BootstrapResult boot = result;
-        if (boot == null) {
-            boot = BootstrapResult.empty(context.getDataDirectory().toFile(), null);
-        }
-        return new UltiTools(boot);
+        return new UltiTools(result());
     }
 
-    @Nullable BootstrapResult result() { return result; }
+    BootstrapResult result() {
+        if (result == null) {
+            result = BootstrapResult.failed(new IOException("Failed to prepare module class path", bootstrapFailure));
+        }
+        return result;
+    }
 }

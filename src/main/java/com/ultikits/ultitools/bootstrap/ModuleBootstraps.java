@@ -31,22 +31,22 @@ final class ModuleBootstraps {
             attempted++;
             try {
                 runOne(module.getKey(), metadata, bootstrapper, loader);
-            } catch (Throwable failure) { // NOPMD - a module failure must never abort the framework bootstrap
-                Throwable cause = failure instanceof InvocationTargetException && failure.getCause() != null
-                        ? failure.getCause() : failure;
+            } catch (VirtualMachineError failure) {
+                throw failure;
+            } catch (Throwable cause) { // NOPMD - a module failure must never abort the framework bootstrap
                 admission.markBootstrapFailed(module.getKey(), cause);
                 failures.put(module.getKey(), cause);
                 // Early output stays English; translated discovery diagnostics follow during enable.
-                logger.log(Level.SEVERE, String.format("[UltiTools] Module '%s' failed in its bootstrap phase (%s): "
+                logFailure(logger, String.format("[UltiTools] Module '%s' failed in its bootstrap phase (%s): "
                         + "%s: %s -- the module is not loaded at this start. Fix or remove the module and restart the server.",
-                        module.getKey().getFileName(), bootstrapper, cause.getClass().getName(), cause.getMessage()), cause);
+                        module.getKey().getFileName(), bootstrapper, cause.getClass().getName(), safeMessage(cause)), cause);
             }
         }
         return new Run(failures, attempted);
     }
 
     private static void runOne(Path jar, PluginYmlReader.PluginYmlInfo metadata, String className,
-                               ClassLoader loader) throws Exception {
+                               ClassLoader loader) throws Throwable {
         Thread thread = Thread.currentThread();
         ClassLoader previous = thread.getContextClassLoader();
         try {
@@ -57,12 +57,40 @@ final class ModuleBootstraps {
             if (!ModuleBootstrap.class.isAssignableFrom(type)) {
                 throw new IllegalStateException("bootstrapper does not implement ModuleBootstrap");
             }
-            ModuleBootstrap hook = type.asSubclass(ModuleBootstrap.class).getConstructor().newInstance();
+            ModuleBootstrap hook = construct(type);
             String declaredName = metadata.getName();
             String name = declaredName == null ? jar.getFileName().toString() : declaredName;
             hook.bootstrap(new Context(name, jar));
         } finally {
             thread.setContextClassLoader(previous);
+        }
+    }
+
+    private static ModuleBootstrap construct(Class<?> type) throws Throwable { // NOPMD - preserve the module constructor's original failure
+        try {
+            return type.asSubclass(ModuleBootstrap.class).getConstructor().newInstance();
+        } catch (InvocationTargetException failure) {
+            throw failure.getCause() == null ? failure : failure.getCause();
+        }
+    }
+
+    private static String safeMessage(Throwable failure) {
+        try {
+            return failure.getMessage();
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
+        } catch (Throwable unavailable) { // NOPMD - a module's diagnostic method must not abort bootstrap
+            return "message unavailable";
+        }
+    }
+
+    static void logFailure(Logger logger, String message, Throwable failure) {
+        try {
+            logger.log(Level.SEVERE, message, failure);
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
+        } catch (Throwable unavailable) { // NOPMD - a logging handler must not let a module abort bootstrap
+            // The failure remains in admission/the handover for enable even if early logging fails.
         }
     }
 

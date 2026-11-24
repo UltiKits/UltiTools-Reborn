@@ -71,13 +71,14 @@ class BootstrapResultTest {
 
     @Test
     void fallback_isAnEmptyModuleSet() throws Exception {
-        BootstrapResult result = BootstrapResult.empty(temporary.toFile(), null);
+        IOException failure = new IOException("bootstrap preparation failed");
+        BootstrapResult result = BootstrapResult.failed(failure);
         try (ModuleClassLoader loader = result.classLoader()) {
             assertThat(loader.getURLs()).isEmpty();
             assertThat(result.bootstrapFailures()).isEmpty();
             assertThat(result.bootstrapsRun()).isZero();
-            assertThat(result.classPathFailure()).isNull();
-            assertThat(result.transactions()).isNotNull();
+            assertThat(result.classPathFailure()).isSameAs(failure);
+            assertThatThrownBy(result::transactions).isInstanceOf(IllegalStateException.class).hasCause(failure);
         }
     }
 }
