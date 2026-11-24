@@ -113,7 +113,7 @@ public final class InMemoryMessages implements Messages {
     private TagResolver argumentResolver(Arg arg, Locale locale, MessageKey key) {
         return TagResolver.resolver(arg.name(), (arguments, context) -> {
             try {
-                return Tag.inserting(formatArgument(arg, locale, arguments, context));
+                return Tag.selfClosingInserting(formatArgument(arg, locale, arguments, context));
             } catch (RuntimeException malformed) {
                 if (reportedFormats.add(new BadFormat(key, locale, arg.name()))) {
                     LogRecord record = new LogRecord(Level.WARNING, "Invalid format for {0} in {1}, argument {2}");
@@ -121,7 +121,7 @@ public final class InMemoryMessages implements Messages {
                     record.setThrown(malformed);
                     logger.log(record);
                 }
-                return Tag.inserting(safeDefault(arg, locale));
+                return Tag.selfClosingInserting(safeDefault(arg, locale));
             }
         });
     }

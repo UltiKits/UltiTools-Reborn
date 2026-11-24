@@ -5,6 +5,141 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Message catalogues and automatic fallback (as of 7.0.0)
+
+7.0 introduces namespace-bound `Messages` and `LocaleResolver`. Modules ship UTF-8
+`messages/<locale>.yml` files containing stable dotted keys and MiniMessage values, optionally
+with `source-language` in their own `plugin.yml` (default `en`). Nested mappings and dotted keys
+are equivalent. Scalar keys and values are read as literal strings, so unquoted `yes`, `no`,
+`Yes`, `true`, `123`, `null` and `~` are not converted to YAML booleans, numbers or nulls.
+Lists and non-scalar keys are rejected with warnings; nested mappings still group dotted paths.
+Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is accepted.
+`§` and `&` colour codes are not interpreted in these new catalogues.
+
+- **New installations:** `language: auto` follows each player's current client locale.
+  `fallback-language: auto` chooses `zh` for the system time-zone IDs `Asia/Shanghai`,
+  `Asia/Urumqi`, `Asia/Hong_Kong`, `Asia/Macau` and their listed aliases `PRC`, `Asia/Chongqing`,
+  `Asia/Chungking`, `Asia/Harbin`, `Asia/Kashgar`, `Hongkong`, `Asia/Macao`; all other IDs choose
+  `en`. UTC offset is deliberately irrelevant: `Asia/Singapore` and `Etc/GMT-8` still choose `en`.
+  Startup and a successful full `/ul reload` resolve this once and report the selected language
+  and reason. Player locale is never cached.
+- **Explicit choices:** `fallback-language: en`, `zh` or another locale always wins, regardless
+  of `language`, and bypasses time-zone detection. An automatic, blank or missing fallback first
+  inherits a concrete `language`; only an automatic, blank or missing `language` uses the time-zone
+  rule. Thus `language: en` with `fallback-language: auto` uses English for both players and console,
+  even in China. A custom language such as `zh-myserver` supplies its official base (`zh`).
+  To choose Chinese on UTC-based hosts or containers, set `fallback-language: zh`
+  in `plugins/UltiTools/config.yml` and execute `/ul reload`.
+- **Existing configurations:** operator files are not rewritten. An existing concrete
+  `language: zh` or `en` with no fallback keeps that language as its fallback, rather than
+  inheriting the newly shipped default through Bukkit defaults. In automatic player mode,
+  a missing fallback uses automatic time-zone selection. This means a new UTC installation
+  defaults to English, unlike 6.x's shipped Chinese default; Chinese clients still receive
+  Chinese whenever their catalogue supplies it. If an operator removed `language` from an existing
+  configuration, 7.0 treats it as `auto`, not the former 6.x Chinese default; it does not restore
+  that key on disk.
+- **Lookup:** requested locale → fallback locale → module source locale → namespaced key;
+  regional locales also try their language-only catalogue. Parameters use the requested
+  rendering locale, even if the message text came from a fallback catalogue. Missing keys
+  warn once per key and requested locale. Ship a base catalogue such as `zh.yml` when supplying
+  `zh_CN.yml` or other regional variants; a regional-only language warns on load but is not selected
+  for other regions or language-only requests.
+- **Operator translations:** put only overrides in
+  `plugins/UltiTools/pluginConfig/<module>/messages/<locale>.yml`, or
+  `plugins/UltiTools/messages/<locale>.yml` for framework messages. New locale files add
+  languages. The framework reads these files but never writes them. It rewrites its own
+  `messages/reference/` examples from shipped bytes at startup; editing those examples has no
+  effect. `/ul reload <module>` reloads module overrides. **Known limitation:** framework
+  catalogue overrides currently reload only on restart, not `/ul reload`; locale configuration
+  itself does reload. A later text-migration change supplies the catalogue-reload hook.
+- **Migration:** 6.x language files, sentence keys, custom language names and operator edits
+  are not automatically converted to the new catalogues. Re-create the required overrides
+  with dotted keys and MiniMessage syntax. The old `i18n` path remains temporarily while its
+  callers migrate; its eventual removal is a separate change, not part of this engine addition.
+  During coexistence, the legacy path still loads custom files as before. New `Messages` use the
+  official prefix of a custom configured name (`zh-myserver` → `zh`, unmatched safe names → `en`)
+  without treating that custom file as a new catalogue or adding an invalid-locale warning.
+
+中文补充：7.0 的新装 `language` 与 `fallback-language` 均默认 `auto`。玩家跟随客户端语言；后备
+语言只按上述 11 个系统时区 ID 选 `zh`，其他选 `en`，不按时差猜测。云主机和容器常用 UTC，因此
+新装默认英文，与 6.x 出厂中文不同；想要中文只需写 `fallback-language: zh` 并执行完整 `/ul reload`。
+具体后备语言始终优先、不探测时区；后备为 `auto`、空白或缺失时，先取具体 `language`，只有
+`language` 也是自动、空白或缺失时才按时区选。`language: en` 加后备 `auto` 在中国也让控制台用英文；
+`zh-myserver` 等自定义名称的后备取官方前缀语言 `zh`。已有配置继续沿用原语言，绝不改写服主文件。
+若服主从已有文件删去了 `language`，7.0 按 `auto` 处理，不再取 6.x 的中文默认，也不把该键写回。
+时区在启动和配置重载时解析，玩家语言每次投递时读取。
+翻译顺序为请求语言、后备语言、模块源语言、键本身；参数仍按请求语言格式化。服主只改上级覆盖
+文件，`reference/` 是框架每次启动重写的只读参考；模块覆盖可重载，框架覆盖暂需重启。6.x 的语言
+文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。
+并存期间旧路径照旧读取自定义文件；新 `Messages` 将自定义配置名按旧官方前缀归到基础语言
+（`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不读取该旧文件，也不新增非法 locale 警告。
+语言标量键和值一律按文字读取（`yes`、`No`、`123`、`null`、`~` 不做 YAML 类型转换），列表与非标量键
+拒绝并告警，嵌套映射仍用于点分键分组。仅读取 `.yml`，`.yaml` 会告警；文件必须为 UTF-8，允许 BOM。
+只带 `zh_CN.yml` 等地区文件却没有 `zh.yml` 时会提示补基础语言文件，不把地区变体回退规则改成模糊匹配。
+
+## Declarative screens use the UI service (as of 7.0.0)
+
+The declarative engine no longer inherits obliviate's `Gui`. It emits immutable `Grid` snapshots;
+`UiService` owns display, click dispatch and session outcomes. Rebuild modules against 7.0.
+
+| 6.x usage | 7.0 replacement |
+|---|---|
+| `super(player, id, "Title", rows)` or the `Component` title overload | `super(ui, scheduler, player, id, Text.plain("Title"), rows)`; pass the module's own injected `UiService` and `Scheduler` |
+| Constructors accepting `InventoryType` | Fixed chest grids with 1–6 rows |
+| `ItemDisplay.builder(itemStack).name("Buy").lore("Details")` | `ItemDisplay.builder(ItemSpec.builder(Material.STONE).name(Text.plain("Buy")).lore(List.of(Text.plain("Details"))).build())` |
+| `TextButton.builder().text("Buy").lore("Details")` | `TextButton.builder().text(Text.plain("Buy")).lore(List.of(Text.plain("Details")))` |
+| `onClick(Consumer<InventoryClickEvent>)` | `onClick(GridAction)`, whose `GridClick` supplies the viewer, slot, click kind and session; `onClick(Runnable)` remains |
+| `IconWrapper.builder(itemStack)` | `ItemSpec.builder(Material.STONE)`; `IconWrapper` is deleted |
+| `getPlayer()` | `viewer()` |
+| `onGuiOpen`, `onGuiClick`, inventory-event `onClose` / `onGuiClose` | Describe content in `build`; put actions on widgets; use `onGuiClose(UiResult<Ack>)` after the tree is disposed |
+| `RenderNodeDiffer` / `DiffResult` | Removed; backend-owned grid comparison replaces engine-owned inventory diffs |
+
+For example, the old string/event-based button:
+
+```java
+super(player, "shop", "Shop", 1);
+// In build(...):
+ItemDisplay.builder(new ItemStack(Material.STONE)).name("Buy")
+    .onClick(event -> event.getWhoClicked().sendMessage("Bought")).build();
+```
+
+becomes a description plus a grid action:
+
+```java
+super(ui, scheduler, player, "shop", Text.plain("Shop"), 1);
+// In build(...):
+ItemDisplay.builder(ItemSpec.builder(Material.STONE).name(Text.plain("Buy")).build())
+    .onClick(click -> click.viewer().sendMessage("Bought")).build();
+```
+
+`open()` now returns a `GridSession`. The title and row count are fixed per page instance.
+Call `open()` on the viewer's entity thread. State mutations happen on the calling thread;
+only rebuilding is marshalled to the viewer's entity thread. Hand off background results with
+`scheduler.entity(viewer).run(...)` before mutating state.
+
+`ItemSlotArea` is new. It binds existing container indexes without copying or moving their items:
+
+```java
+ItemSlotArea.builder(container).firstIndex(page * 9).count(9).startSlot(0).build(); // VIEW
+ItemSlotArea.builder(container).firstIndex(page * 9).count(9).startSlot(0)
+    .mode(BindingMode.EDITABLE).build(); // Explicit opt-in to moving items
+```
+
+A partial last page binds only existing indexes and leaves the remaining area empty. A negative
+`firstIndex`, or one at/after the end of a nonempty container, is rejected. An empty container accepts
+only `firstIndex(0)`. Negative counts and areas outside a six-row grid are also rejected.
+
+中文补充：**7.0 声明式界面不再继承 obliviate `Gui`，改为向界面服务提交不可变 `Grid`。**
+上表与示例给出旧写法到新写法的对应：构造器传模块自己的 `UiService`、`Scheduler` 与 `Text` 标题；
+不再接受 `InventoryType`。`ItemDisplay` 使用 `ItemSpec`，`TextButton` 的名称和说明使用 `Text`；
+点击改为 `GridAction` / `GridClick`（无参 `Runnable` 仍可用）。删除 `IconWrapper`、`RenderNodeDiffer`
+和 `DiffResult`；`getPlayer()` 改为 `viewer()`，旧打开／点击／关闭事件钩子改为组件动作和
+`onGuiClose(UiResult<Ack>)`。`open()` 返回 `GridSession`，每个界面实例的标题和行数固定。
+状态修改在调用线程立即生效，重建才调度到观看者的实体线程；后台结果应先通过模块调度器切回该线程。
+新增 `ItemSlotArea` 默认只读（`VIEW`），允许移动物品必须显式 `.mode(BindingMode.EDITABLE)`；
+末页不足时只绑定存在的下标，其余留空，不移动或复制容器内容。负起始下标、非空容器中大于等于大小的
+起始下标仍拒绝；空容器仅接受起始下标零，负数量和超出六行网格的区域也拒绝。
+
 ## 7.0
 
 - Inject `com.ultikits.ultitools.scheduling.Scheduler` with `@Autowired` in module beans. Each module
@@ -381,11 +516,38 @@ are refused. Previously the cache entry was silently removed without saving. Imp
 bean is not added to cache tracking. Save failures still log a warning and remove the entry;
 this change adds no persistence or retry guarantee.
 
+## Two-stage Paper startup and known limitations (as of 7.0.0)
+
+The framework JAR now contains `paper-plugin.yml`, not `plugin.yml`. Module JARs still use their
+own `plugin.yml`. Paper runs the framework bootstrap before loading worlds; module discovery,
+IoC and normal enable hooks still run during plugin enable. If the entire bootstrap preparation
+fails, the framework reports the retained error and is disabled during enable; it does not run
+successfully with an empty module set.
+
+- **Runtime downloads need network access or a populated cache.** Paper resolves the five coordinates
+  in `ultitools-libraries.txt` before the framework can add its own diagnostics. If a download fails,
+  Paper may report only `Error resolving libraries`. Check connectivity and access to the Maven mirror.
+  To use another mirror, set Paper's `PAPER_DEFAULT_CENTRAL_REPOSITORY` environment variable to its Maven
+  repository URL before starting the server. Already cached libraries can be reused without a download.
+- **Restart the server after changing JARs.** `/ul reload` reloads configuration, not classes. Server
+  `/reload`, plugin-manager hot reload, and disabling then re-enabling UltiTools without a full restart
+  are unsupported: the module loader is closed when the framework disables and is not rebuilt by re-enable.
+- **A stop during world loading can undo a pending update.** Updates are applied before worlds load,
+  but confirmed only after modules finish loading during enable. A stop or crash in that interval leaves
+  the update unconfirmed; the next start restores the previous JAR. Let startup finish before stopping.
+- **A failed module hook is not a separate class sandbox.** Its module is not enabled, but its JAR remains
+  on the shared module class path. Other modules that use its classes can still be affected, especially
+  by a failed static initializer. Do not initialize shared libraries that need Bukkit during bootstrap.
+- **Declare every server-plugin dependency you use.** Declared `depend`/`softdepend` plugins are visible
+  during enable; undeclared plugins are not guaranteed to be visible. A dependency's own loader may expose
+  its transitive dependencies (for example through Vault). Such incidental visibility is not a supported
+  dependency declaration and must not be relied on.
+
 ## Paper and Java baseline (as of 7.0.0-SNAPSHOT)
 
 The baseline is **Paper 26.3 build 258 with Java 25**. The build pins
 `paper-api:26.3.build.258-stable`, compiles with `--release 25` (class major 69), and the
-framework's `plugin.yml` declares `api-version: '26.3'`. Each framework version targets
+framework's `paper-plugin.yml` declares `api-version: '26.3'`. Each framework version targets
 one latest Paper version; compatibility with older servers is not promised.
 
 The former older-Paper API fixture, its retrieval/skip settings and the Java 8 API-signature
@@ -482,6 +644,46 @@ records the audit's behaviour in that release, not its availability in 7.0.0.
 模块扫描诊断仍通过插件日志报告跳过的类；JAR 结构检查、100 MB 大小上限和 10,000 条目上限保留，
 但并不隔离已加载代码。下方 6.3.0 的历史记录不代表 7.0.0 仍提供该审计。
 
+## Notifications, toasts and holograms (as of 7.0.0)
+
+`widgets.Toast` and `NotificationService#sendToastNotification` are removed. The advancement
+implementation depended on deprecated, version-unstable server internals, and message text
+containing quotes could break its generated JSON. Use `sendTitleNotification`,
+`sendActionBarNotification` or chat instead. Rebuild callers against 7.0 after migrating.
+The remaining `NotificationService` signatures will be adjusted separately in subsequent 7.0
+changes and documented in this file when those changes land.
+
+`widgets.Hologram`, which spawned an invisible armour stand for each text line, is also removed.
+Use Paper's native `TextDisplay` API instead; a single display can contain multiple lines.
+The following example uses the module's injected `Messages` service (`messages`) for shared text
+and disables entity persistence. Call `World#spawn` on the thread that owns the location, switching
+with the module's injected `Scheduler` first; `Location#getWorld()` can return null, so check it
+before spawning. The caller owns the display and removes it when no longer needed.
+
+```java
+World world = location.getWorld();
+if (world == null) {
+    throw new IllegalArgumentException("The display location must have a world");
+}
+TextDisplay display = world.spawn(location, TextDisplay.class, d -> {
+    d.text(messages.shared(Text.of(messages.key("hologram.welcome"))));
+    d.setBillboard(Display.Billboard.CENTER);
+    d.setPersistent(false);
+});
+// later: display.remove();
+```
+
+中文补充：7.0.0 删除 `widgets.Toast` 和 `NotificationService#sendToastNotification`，旧实现依赖已弃用、
+跨版本不稳定的服务端内部接口，消息中的引号还可能破坏生成的 JSON。请改用 `sendTitleNotification`、
+`sendActionBarNotification` 或聊天，并在迁移后针对 7.0 重新构建调用方。`NotificationService` 的其余
+方法签名将在 7.0 后续改动中另行调整，届时在本文件单独记录。
+
+`widgets.Hologram` 也被删除，旧实现为每行文字生成一个隐形盔甲架；请改用 Paper 原生 `TextDisplay`，
+单个显示实体即可包含多行文字。示例中的 `messages` 是模块注入的 `Messages` 服务，用于生成共享文本；
+`World#spawn` 必须在拥有目标位置的线程上调用，请先通过模块注入的 `Scheduler` 切换线程，
+并在生成实体前检查可能为 null 的 `Location#getWorld()`。示例关闭实体持久化，调用方负责管理实体，
+不再需要时调用 `display.remove()`。
+
 ## UltiCloud: re-pair with a code (as of 6.4.0)
 
 - **New: `/ulticloud login <code>`** (console only, like `/ulticloud login`). The panel's "Revoke and re-pair"
@@ -563,7 +765,8 @@ explains it; the sections below are the reference and stay authoritative where t
 ## XSeries 14 (as of 6.3.1)
 
 The framework-provided XSeries runtime library moves from **13.7.1 to 14.0.0**;
-Paper still downloads it through `plugin.yml` `libraries:` rather than finding it shaded in the framework JAR.
+In 6.x, Paper downloads it through `plugin.yml` `libraries:` rather than finding it shaded in the framework JAR.
+In 7.0, XSeries is no longer supplied by the framework; modules that use it must shade and relocate their own copy.
 These removed APIs belong to the bundled XSeries library, not to UltiTools-API's own API.
 Third-party modules using XSeries must check these removed public APIs and recompile:
 
@@ -2151,7 +2354,7 @@ explain that release line, not an exception to these five 7.x rules.
 - **MAJOR**: reserved for a change of direction at the framework level. It will not be issued
   merely to clean up deprecated API.
 
-Libraries delivered through `plugin.yml` `libraries:` (for example XSeries) follow their own versioning,
+Runtime libraries (the Paper loader in 7.0, or `plugin.yml` `libraries:` in 6.x) follow their own versioning,
 not this framework's version-number contract.
 
 ### When a public API becomes eligible for removal
@@ -2260,8 +2463,8 @@ So: the *ordering* of module version numbers is consumed by machines, while the 
 MAJOR/MINOR/PATCH is not — that part is addressed to server owners. On the framework side both are
 machine-consumed, which is why its version number does not have the same freedom.
 
-Libraries the framework delivers at runtime through its `plugin.yml` `libraries:` block (XSeries,
-HikariCP, ByteBuddy and the others in [Where runtime dependencies come from](#where-runtime-dependencies-come-from))
+Libraries the framework delivers at runtime through its Paper loader (or its `plugin.yml` `libraries:` block
+in 6.x; see [Where runtime dependencies come from](#where-runtime-dependencies-come-from))
 are not covered by the framework's version number either. They keep their own versioning, and a
 framework MINOR or PATCH release may move one of them to a new major version; that release's notes
 and its entry in this file name the library's removals (for example XSeries 13.7.1 to 14.0.0 in
@@ -3821,10 +4024,9 @@ tell people which floor they are standing on before removing it.
 
 ### Declarative GUI known limitations and author guidance
 
-The limitations collected in [#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)
-remain after the frame and child-ownership corrections in
-[#685](https://github.com/UltiKits/UltiTools-Reborn/pull/685). This is guidance for existing behaviour,
-not a change to lifecycle ordering, exception handling, key matching or grid layout.
+The widget-authoring limitations collected in [#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)
+still apply where described below. The scheduling, session and diagnostic guidance here describes
+7.0's UI-service-based engine, not the old obliviate entry points.
 
 - **A failing `initState` can keep requesting frames.** If it calls `setState` and then throws,
   the page retries once per scheduled frame while open and logs each failure. The frame budget
@@ -3845,25 +4047,33 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   replacement fails to mount. Later frames can then fail with `State is null`. Avoid throwing
   from `build` or `initState`; after correcting the widget, close and reopen the GUI rather than
   relying on another rebuild to repair that wrapper.
-- **Do not close a GUI from inside its `build` method.** Closing disposes the renderer while
-  the running build can still access its root and fail. Close from an event handler instead.
-  A queued rebuild that starts after disposal does nothing; that does not make closing in the
-  middle of an active build safe.
-- **An initial build failure propagates out of `DeclarativeGui.onOpen`.** The first build runs
-  synchronously on the main thread, outside the scheduled frame's per-task exception handler.
-  Do not assume opening a broken widget is swallowed by that handler. Handle expected failures
-  in the widget and render an error state. Normal close releases the mounted tree, provided its
-  disposal callbacks do not themselves throw.
+- **Close through the session.** `GridSession.close()` selects an outcome and schedules completion;
+  it does not synchronously dispose an active build. On result completion the engine cancels pending
+  frames, attempts tree disposal, then invokes `onGuiClose(UiResult<Ack>)`. A disposal failure and a
+  close-hook failure each produce a WARNING naming the screen and module; disposal failure does not
+  prevent the hook. A throwing disposal callback can still leave descendants incompletely cleaned up.
+- **An initial build failure propagates out of `DeclarativeGui.open()`.** The first build runs
+  synchronously on the viewer's entity thread, outside the scheduled frame's per-task exception handler.
+  Opening disposes partial resources and rethrows; it does not display a broken first frame. Handle
+  expected failures inside the widget and render an error state.
+- **Reopening waits for result completion.** Until the previous result completes, `open()` returns
+  the previous session, even if that session has already selected a close outcome. Reopen from the
+  close hook or after the result, not immediately after requesting close.
 - **`GuiScheduler.flush()` is a test utility, not the production frame path.** It drains the
   entire pending queue synchronously without the per-frame budget, and a task failure can
   propagate to its caller. A task that keeps requeuing itself can keep that drain running.
   Use normal scheduled frames in production, not `flush()` to force an update.
-- **A queued task's `Error` is not isolated like an `Exception`.** The per-task handler catches
-  exceptions, not JVM `Error`s such as `StackOverflowError`. An `Error` escapes to the caller of
-  the frame: the server scheduler, or, when the frame runs inline (a `scheduleFrame` or `setState` call
-  on the main thread with no frame running and no delay pending), the code that made that call, such as
-  an event handler; tasks still in the queue do not run in that failed drain. Do not use `Error` for
-  ordinary module failure handling or assume every throwable is caught by the GUI scheduler.
+- **Later frames always run on a later tick in the viewer's entity context.** Ordinary task
+  exceptions produce a WARNING and are isolated. A JVM `Error` produces one SEVERE record and is
+  rethrown unchanged to the scheduling engine; remaining tasks in that frame's budget do not run.
+  The last complete grid stays displayed after a failed build. Do not use `Error` for ordinary module
+  failure handling. State mutation itself is synchronous on the calling thread, not automatically
+  moved into the entity context.
+- **Colliding slots and invalid nodes are author errors.** Out-of-grid nodes and duplicate container
+  indexes on different slots are warned about and skipped. Multiple nodes claiming one grid slot
+  produce a WARNING and the later node wins. Each diagnostic category is logged at most once per
+  location per page instance, including across reopenings. Keep actions stable when possible:
+  allocating a new action each frame makes otherwise identical `GridItem`s unequal to the backend.
 - **One `GridView` cell must produce one rendered leaf.** A wrapper may contain that leaf at
   any depth, but several leaves under the same cell all receive the same computed slot and
   collide. A leaf's explicit `.slot(...)` does not reserve a separate position: the grid's
@@ -3871,12 +4081,17 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   cells instead of relying on collision or click-handler ordering.
 
   中文补充：**声明式 GUI 的已知限制与编写建议**（[#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)）。
-  `initState` 先调用 `setState` 再抛出异常时，页面开着就会每帧重试并记录日志，请在组件内捕获失败并渲染错误状态；
-  需要保留 State 时请为同级子组件使用稳定且互不重复的 `SlotKey`；`State.dispose()` 应可重复调用且不抛异常；
-  单子组件包装器里替换失败后请关闭并重新打开界面；不要在 `build` 中关闭界面；首次构建的异常会从
-  `DeclarativeGui.onOpen` 抛出；`GuiScheduler.flush()` 仅供测试；队列任务抛出的 JVM `Error` 不会被逐任务捕获，
-  会抛给这一帧的调用方（服务器调度器，或帧在主线程内联执行时发起 `scheduleFrame`/`setState` 调用的代码）；
-  `GridView` 的每个格子只应渲染一个叶子组件。
+  `initState` 先请求重建再抛异常时仍可能逐帧重试，应在组件内处理失败；同级 `SlotKey` 必须稳定且唯一，
+  `State.dispose()` 应幂等且不抛异常，单子组件包装器替换失败后应关闭再重开。通过 `GridSession.close()`
+  请求关闭不会同步拆掉正在构建的树；结果完成时先取消帧并尝试清理，再执行关闭钩子。清理和钩子的异常
+  分别记录包含界面与模块的 WARNING，清理失败不阻止钩子，但可能留下未清理完的子组件。
+  首次构建失败从 `DeclarativeGui.open()` 抛出且不显示界面；结果尚未完成时再次 `open()` 仍返回原会话，
+  即使它已选定关闭结果。`GuiScheduler.flush()` 仅供测试，可能持续清空自重排队的任务。
+  后续帧总在下一 tick 的观看者实体线程执行；普通异常记 WARNING，JVM `Error` 记一次 SEVERE 后原样抛给
+  调度引擎，当前帧剩余任务不执行，失败构建保留上一张完整快照。状态修改本身仍在调用线程立即发生。
+  越界节点和不同格子上的重复容器下标记警告并跳过；同一格子被重复占用时记警告、后者覆盖前者；
+  每个界面实例的同类同位置警告只记一次，重开不重置。每帧新建点击动作会令快照不相等；标题按实例固定。
+  `GridView` 每格仅应渲染一个叶子，多叶子会被分配相同位置，显式 `.slot(...)` 也不能避开覆盖。
 
 ### Command bodies run at dispatch (6.3.0) — changed without a migration period
 
@@ -5074,7 +5289,7 @@ older servers are not promised compatibility.
 | Server | Paper (plain Spigot is not supported — the code uses Adventure `Component` throughout) |
 | Build JDK | 25 |
 | Bytecode target | Java 25 (`--release 25`, class major 69) |
-| `api-version` in `plugin.yml` | `26.3` (Bukkit API level, not a module's integer UltiTools API level) |
+| `api-version` in the framework's `paper-plugin.yml` | `26.3` (Paper API level, not a module's integer UltiTools API level) |
 | `api-version` in a module's `plugin.yml` | An integer UltiTools API level, not the Paper version; 7.0 requires at least `700`. A declaration below `700`, missing, empty or non-integer is refused before main-class resolution and excluded from the shared class path; `/upm` uses the same minimum rule |
 | Target server | Paper 26.3 build 258 (`paper-api:26.3.build.258-stable`); not a minimum-version range |
 | Server Java | Java 25, matching the framework bytecode target |
@@ -5181,7 +5396,7 @@ The framework JAR bundles exactly two libraries: obliviate-invs (GUI) and Univer
 
 | Delivery route | Version decided by | Examples |
 |---|---|---|
-| The `libraries:` block in `plugin.yml`, downloaded by Paper from coordinates | **This repository** | commons-dbutils, Java-WebSocket, ByteBuddy, JavaMail (`com.sun.mail:javax.mail`), HikariCP, XSeries |
+| The Paper `UltiToolsLoader`, using the coordinates in `ultitools-libraries.txt` (in 6.x: `plugin.yml` `libraries:`) | **This repository** | commons-dbutils, Java-WebSocket, ByteBuddy, JavaMail (`com.sun.mail:javax.mail`), HikariCP; XSeries was supplied in 6.x only |
 | Shipped by the Paper server itself | **The Paper build the server owner installed** | Gson, MySQL Connector/J, protobuf, slf4j, the SQLite driver, native Adventure, log4j, the Maven resolver Paper uses internally for `libraries:` and its dependencies |
 
 As of 6.3.0, Gson, MySQL Connector/J, protobuf and slf4j are no longer listed under `libraries:`. Paper
@@ -5196,7 +5411,7 @@ delivered at all; the framework uses Paper's native Adventure (see the plan 18-3
 above used to say "three libraries", XSeries among them. From 6.3.0 it is `provided` scope and
 delivered through the `libraries:` route in the table instead, the same way HikariCP already
 was. If you shade this framework's JAR into your own uber-jar, XSeries no longer comes
-along for the ride: declare it yourself (the version in the framework's `plugin.yml` `libraries:` block,
+along for the ride: declare it yourself (in 6.x, the version in the framework's `plugin.yml` `libraries:` block,
 `com.github.cryptomorin:XSeries:14.0.0` as of 6.3.1, or your own pinned version) if your module uses it.
 
 This boundary determines who fixes a third-party security advisory. For anything in the first
@@ -5207,7 +5422,7 @@ server; it only creates the impression that the problem has been fixed.
 Note that Maven's `provided` scope is **not** this boundary: the dependencies of both routes that the
 framework compiles against are declared `provided` in `pom.xml` (for example HikariCP from the first, Gson from the
 second), and the Paper-shipped libraries it does not compile against are not declared at all. What decides the
-category is whether the dependency appears in the `libraries:` block, not the scope.
+category is whether the dependency appears in the Paper loader's coordinate list (the `libraries:` block in 6.x), not the scope.
 
 Server owners are advised to keep up with Paper builds, security builds in particular.
 

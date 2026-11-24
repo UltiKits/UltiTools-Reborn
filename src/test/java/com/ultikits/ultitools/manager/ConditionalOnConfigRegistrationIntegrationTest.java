@@ -71,17 +71,24 @@ import com.ultikits.ultitools.context.SimpleContainer;
 class ConditionalOnConfigRegistrationIntegrationTest {
 
     private ServerMock server;
+    private UltiTools previousUltiTools;
 
     @BeforeEach
     void setUp() {
+        previousUltiTools = UltiTools.getInstance();
         com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
     }
 
     @AfterEach
-    void tearDown() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+    void tearDown() throws Exception {
+        try {
+            // This test publishes a disabled mock; it must not close later tests' scheduling gate.
+            publishUltiToolsInstance(previousUltiTools);
+        } finally {
+            com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        }
     }
 
     private void writeConfig(File tempDir, String content) throws Exception {

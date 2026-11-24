@@ -1654,6 +1654,12 @@ public class PluginManager {
             return null;
         }
 
+        if (admission.getBootstrapFailure() != null) {
+            Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + String.format(
+                    UltiTools.getInstance().i18n("module.bootstrap.failed"), pluginJar.getName()));
+            return null;
+        }
+
         try {
             // Validate the main class name format, then check the module hierarchy below.
             // Do not use loadPluginClass: its com.ultikits. prefix check would reject third-party modules.
@@ -2672,6 +2678,7 @@ public class PluginManager {
      * than once and for a copy that superseded nothing.
      */
     private void restoreSupersededRegistrations(UltiToolsPlugin incoming) {
+        incoming.rollbackMessagePublication();
         runUnregisterStep(incoming, "release the failed copy's tab-completion completers",
                 () -> releaseCompleters(incoming, true));
         runUnregisterStep(incoming, "release the failed copy's EventBus handlers",

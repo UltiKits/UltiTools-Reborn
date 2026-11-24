@@ -194,7 +194,7 @@ public final class LifecycleObserver implements EventSpy {
 '''
 FLAGS = {'normal': [], 'skip-execution': ['-DskipTests'],
          'skip-compilation': ['-Dmaven.test.skip=true']}
-POSITIVES = {'main': ['com/ultikits/ultitools/UltiTools.class', 'plugin.yml'],
+POSITIVES = {'main': ['com/ultikits/ultitools/UltiTools.class', 'paper-plugin.yml'],
              'sources': ['com/ultikits/ultitools/UltiTools.java'],
              'javadoc': ['com/ultikits/ultitools/UltiTools.html']}
 
@@ -273,6 +273,8 @@ def check_artifact(path, kind):
     # Positive product entries precede absence claims: an empty/wrong JAR cannot pass.
     for entry in POSITIVES[kind]:
         require(entry in entries, 'Missing product positive control: ' + entry)
+    if kind == 'main':
+        require('plugin.yml' not in entries, 'Legacy root plugin.yml in ' + str(path))
     require(not any(package in entry for entry in entries for package in (HELPER_PACKAGE, OBSERVER_PACKAGE)), 'Build helper leaked into ' + str(path))
     return {'path': str(path), 'kind': kind, 'sha256': digest(path),
             'bytes': path.stat().st_size, 'positiveEntries': POSITIVES[kind], 'entries': entries}
@@ -587,6 +589,12 @@ def self_test():
             check_artifact(path, kind)
             positives += 1
             jars[kind] = path
+        with zipfile.ZipFile(jars['main'], 'a') as archive:
+            archive.writestr('plugin.yml', b'legacy descriptor')
+        rejects('legacy root descriptor', lambda: check_artifact(jars['main'], 'main'), 'Legacy root plugin.yml')
+        with zipfile.ZipFile(jars['main'], 'w') as archive:
+            for entry in POSITIVES['main']:
+                archive.writestr(entry, b'product positive control')
         rejects('missing artifact', lambda: check_artifact(fixture / 'missing.jar', 'main'), 'Missing exact')
         rejects('wrong artifact', lambda: check_artifact(jars['sources'], 'main'), 'Missing product positive')
         for package in (HELPER_PACKAGE, OBSERVER_PACKAGE):
