@@ -45,9 +45,16 @@ public final class UiRuntime implements AutoCloseable {
     private final Map<UUID, RuntimeSession<?>> active = new HashMap<>();
     private final Map<UUID, ViewerLane> lanes = new HashMap<>();
     private boolean closed;
+    private final long unloadWaitNanos;
+    private @Nullable Long shutdownDeadlineNanos;
 
     /** Creates the runtime with framework-owned scheduling and the server thread. */
     public UiRuntime(Scheduler scheduler, ContainerRuntime containers, Logger logger, Thread serverThread) {
+        this(scheduler, containers, logger, serverThread, Duration.ofSeconds(10));
+    }
+
+    UiRuntime(Scheduler scheduler, ContainerRuntime containers, Logger logger, Thread serverThread, Duration unloadWait) {
+        unloadWaitNanos = unloadWait.toNanos();
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
         this.containers = Objects.requireNonNull(containers, "containers");
         this.logger = Objects.requireNonNull(logger, "logger");
@@ -188,7 +195,7 @@ public final class UiRuntime implements AutoCloseable {
             service.unloadingThread = Thread.currentThread();
             closing = sessions.stream().filter(session -> session.service.equals(service)).toList();
         }
-        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        long deadline = shutdownDeadlineNanos == null ? System.nanoTime() + unloadWaitNanos : shutdownDeadlineNanos;
         RuntimeCleanup cleanup = new RuntimeCleanup(this, service.owner());
         try {
             cleanup.run("Container prepare unload failed", () -> containers.prepareUnload(service.ownerIdentity, deadline));
@@ -266,8 +273,14 @@ public final class UiRuntime implements AutoCloseable {
         if (failure instanceof VirtualMachineError fatal) { throw fatal; }
     }
 
-    @Override public void close() {
+    /** Starts one shared storage-wait budget for the complete server stop; repeated calls never extend it. */
+    public void beginShutdown() {
         checkThread();
+        if (shutdownDeadlineNanos == null) { shutdownDeadlineNanos = System.nanoTime() + unloadWaitNanos; }
+    }
+
+    @Override public void close() {
+        beginShutdown();
         List<RuntimeUiService> services;
         synchronized (lock) {
             if (closed) { return; }

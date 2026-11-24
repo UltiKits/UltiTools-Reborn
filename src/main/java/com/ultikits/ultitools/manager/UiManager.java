@@ -66,6 +66,9 @@ public final class UiManager implements AutoCloseable {
 
     UiRuntime runtime() { return runtime; }
 
+    /** Starts the common stop deadline before the framework unloads its first module. */
+    public void beginShutdown() { runtime.beginShutdown(); }
+
     /** Explicitly closed before root-container destruction retires the framework scheduler. */
     @Override
     public void close() {

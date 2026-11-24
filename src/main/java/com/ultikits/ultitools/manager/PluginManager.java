@@ -1096,6 +1096,7 @@ public class PluginManager {
      * Unregister all plugins.
      */
     public void close() {
+        if (uiManager != null) { uiManager.beginShutdown(); }
         // No configuration is written at server stop (maintainer decision 2026-10-04): each module's never-saved
         // configuration changes are named once during its unload below, just before its entities are released.
         // Disconnect all external plugins first

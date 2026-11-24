@@ -77,6 +77,12 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 拒绝并告警，嵌套映射仍用于点分键分组。仅读取 `.yml`，`.yaml` 会告警；文件必须为 UTF-8，允许 BOM。
 只带 `zh_CN.yml` 等地区文件却没有 `zh.yml` 时会提示补基础语言文件，不把地区变体回退规则改成模糊匹配。
 
+## UI storage waits at shutdown (as of 7.0.0)
+
+All modules share one approximately 10-second UI-storage wait budget at server stop; later modules may receive no remaining wait and finish with `UNKNOWN_KEPT_BY_STORE` without returning items, while an ordinary single-module unload retains its own approximately 10-second limit.
+
+中文补充：停服时所有模块的界面存储等待共用约 10 秒上限，后面的模块可能没有剩余等待时间，按 `UNKNOWN_KEPT_BY_STORE` 结束且不退还物品；非停服的单模块卸载仍各有约 10 秒上限。
+
 ## Declarative screens use the UI service (as of 7.0.0)
 
 The declarative engine no longer inherits obliviate's `Gui`. It emits immutable `Grid` snapshots;

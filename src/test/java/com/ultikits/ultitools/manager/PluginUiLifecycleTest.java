@@ -39,6 +39,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Material;
@@ -51,6 +52,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.mockito.InOrder;
 import org.mockito.MockedStatic;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
@@ -61,6 +63,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
@@ -86,8 +89,8 @@ class PluginUiLifecycleTest {
         DependenceManagers dependencies = mock(DependenceManagers.class);
         Messages messages = mock(Messages.class);
         when(messages.render(any(Text.class), any(Audience.class))).thenReturn(Component.text("UI"));
-        ui = UiManager.create(new RecordingScheduler(clock.scheduler("FrameworkUi")), messages, mock(ItemRenderer.class),
-                Logger.getAnonymousLogger(), Thread.currentThread(), mock(DialogPresenter.class));
+        ui = spy(UiManager.create(new RecordingScheduler(clock.scheduler("FrameworkUi")), messages, mock(ItemRenderer.class),
+                Logger.getAnonymousLogger(), Thread.currentThread(), mock(DialogPresenter.class)));
         when(dependencies.getContext()).thenReturn(parent);
         when(dependencies.getUiManager()).thenReturn(ui);
         when(framework.getDependenceManagers()).thenReturn(dependencies);
@@ -190,12 +193,22 @@ class PluginUiLifecycleTest {
     }
 
     @Test
+    void frameworkStopStartsTheCommonDeadlineBeforeUnloadingAnyModule() throws Exception {
+        UltiToolsPlugin module = load(null, false);
+        plugins.close();
+        InOrder order = inOrder(ui);
+        order.verify(ui).beginShutdown();
+        order.verify(ui).unload(module);
+        assertThat(plugins.getPluginList()).isEmpty();
+    }
+
+    @Test
     void eachTaskCancellationSiteHasAnEarlierUiUnloadInTheSameCleanupPath() throws Exception {
         String source = Files.readString(Path.of("src/main/java/com/ultikits/ultitools/manager/PluginManager.java"));
         String tasks = "taskManager.cancelAll(plugin)";
         String unload = "uiManager.unload(plugin)";
-        assertThat(source.split(java.util.regex.Pattern.quote(tasks), -1)).hasSize(6);
-        assertThat(source.split(java.util.regex.Pattern.quote(unload), -1)).hasSize(6);
+        assertThat(source.split(Pattern.quote(tasks), -1)).hasSize(6);
+        assertThat(source.split(Pattern.quote(unload), -1)).hasSize(6);
         int start = 0;
         for (int index = 0; index < 5; index++) {
             int cancelAt = source.indexOf(tasks, start);
