@@ -66,24 +66,51 @@ Typed attributes cover names, lore, models, glint and tooltip display; other com
 `ItemStackBuilder` is removed, including its existing-stack and string factories. Recompile callers
 against 7.0 and replace them using this table; names and lore belong in language files, not `&` colour codes.
 
+In the replacements below, `builder` is an `ItemSpec.Builder`, `spec` is its built description, and
+`stack` is a rendered or existing `ItemStack`. `key`, `key2` and `key3` are catalogue `MessageKey`s.
+Apply native stack/meta edits after rendering. The examples are compiled in the test tree's
+`item/impl/ItemConstructionMigrationCompileCheck.java`.
+
 | 6.x call | 7.0 replacement |
 |---|---|
-| `ItemStackBuilder.of(Material.X).name("&aA").lore("&7b").build()` | `ItemSpec.builder(Material.X).name(key).addLore(key2).build()` then `itemRenderer.render(spec, player)`; catalogue values use MiniMessage |
-| `.amount(n)` | `.amount(n)`; accepted range is 1–99, rather than silently clamping |
-| `.glow()` | `.glint(true)`; no dummy enchantment is added |
-| `.enchant(e, lvl)` | `.data(DataComponentTypes.ENCHANTMENTS, ItemEnchantments.itemEnchantments().add(e, lvl).build())` |
-| `.hideAttributes()` / `.flags(...)` | `.hiddenInTooltip(Set.of(DataComponentTypes.ATTRIBUTE_MODIFIERS, ...))` with the component types to hide |
-| `.hideAll()` | `.tooltipHidden(true)` to hide the whole tooltip |
-| `.unbreakable()` | `.data(DataComponentTypes.UNBREAKABLE)`; this is a non-valued flag in Paper 26.3 |
-| `.customModelData(n)` | `.data(DataComponentTypes.CUSTOM_MODEL_DATA, CustomModelData.customModelData().addFloat(n).build())` |
-| `.leatherColor(c)` | `.data(DataComponentTypes.DYED_COLOR, DyedItemColor.dyedItemColor(c))` |
-| `.skullOwner(player)` | `.data(DataComponentTypes.PROFILE, ResolvableProfile.resolvableProfile(player.getPlayerProfile()))` |
-| `ItemStackBuilder.of(existingStack)...` | `stack.setData(...)` / `stack.unsetData(...)`; clone the stack first if an independent copy is needed |
-| `ItemStackBuilder.of(String)` | `Registry.ITEM.get(Key.key(name))`; unknown or block-only keys return `null` |
+| `ItemStackBuilder.of(Material.X).name("&aA").lore("&7b").build()` | `ItemSpec.builder(Material.DIAMOND).name(key).addLore(key2).build()` then `itemRenderer.render(spec, player)`; catalogue values use MiniMessage |
+| `.lore(String...)` / `.lore(List<String>)` | `builder.lore(List.of(Text.of(key2), Text.of(key3)))` replaces all lore |
+| `.addLore(String...)` | `builder.addLore(key2).addLore(key3)` appends lines; fixed components use `builder.addLore(Text.literal(component))` |
+| `.amount(n)` | `builder.amount(n)`; accepted range is 1–99, rather than silently clamping |
+| `.glow()` | `builder.glint(true)`; no dummy enchantment is added |
+| `.enchant(e, lvl)` | `builder.data(DataComponentTypes.ENCHANTMENTS, ItemEnchantments.itemEnchantments().add(e, lvl).build())` |
+| `.removeEnchant(e)` | `stack.removeEnchantment(e)` removes only that enchantment; `builder.remove(DataComponentTypes.ENCHANTMENTS)` removes the whole component |
+| `.hideAttributes()` | `builder.hiddenInTooltip(Set.of(DataComponentTypes.ATTRIBUTE_MODIFIERS))` |
+| `.flags(flags)` | `stack.editMeta(meta -> meta.addItemFlags(flags))` preserves the native flag mapping |
+| `.hideAll()` | `stack.editMeta(meta -> meta.addItemFlags(ItemFlag.values()))`; like 6.x, hides the flagged details, **not** the name or lore |
+| No equivalent: hide the entire tooltip | `builder.tooltipHidden(true)`; this also hides the name and lore, unlike old `hideAll()` |
+| `.unbreakable()` | `builder.data(DataComponentTypes.UNBREAKABLE)`; this is a non-valued flag in Paper 26.3 |
+| `.customModelData(n)` | `builder.data(DataComponentTypes.CUSTOM_MODEL_DATA, CustomModelData.customModelData().addFloat(n).build())` |
+| `.leatherColor(c)` | `builder.data(DataComponentTypes.DYED_COLOR, DyedItemColor.dyedItemColor(c))` |
+| `.leatherColor(r, g, b)` | `builder.data(DataComponentTypes.DYED_COLOR, DyedItemColor.dyedItemColor(Color.fromRGB(r, g, b)))` |
+| `.skullOwner(player)` | `builder.data(DataComponentTypes.PROFILE, ResolvableProfile.resolvableProfile(player.getPlayerProfile()))` |
+| `.skullOwner(name)` | `builder.data(DataComponentTypes.PROFILE, ResolvableProfile.resolvableProfile().name(name).build())` |
+| `.skullOwner(uuid)` | `builder.data(DataComponentTypes.PROFILE, ResolvableProfile.resolvableProfile().uuid(uuid).build())` |
+| `.meta(metaModifier)` | `stack.editMeta(metaModifier)` with a `Consumer<ItemMeta>` |
+| `.item(itemModifier)` | `itemModifier.accept(stack)` with a `Consumer<ItemStack>` |
+| `ItemStackBuilder.of(existingStack)` | `ItemStack stack = existingStack.clone();` then, for example, `stack.setData(DataComponentTypes.MAX_STACK_SIZE, 16)` or `stack.unsetData(DataComponentTypes.MAX_STACK_SIZE)` |
+| `.build()` / `.buildClone()` | `itemRenderer.render(spec, player)` already creates a new stack on every call; use `stack.clone()` to copy an existing stack |
+| `ItemStackBuilder.of(String)` | `Material matched = Material.matchMaterial(name);` then `matched != null && matched.isItem() && !matched.isAir() ? ItemSpec.builder(matched) : null` |
+
+`Material.matchMaterial` accepts current material names such as `"DIAMOND"`, `"diamond_sword"` and
+`"minecraft:stone"`; the replacement above rejects unknown, block-only and air materials.
+For an already valid, lowercase namespaced key, `Registry.ITEM.get(Key.key(name))` is another lookup option:
+unknown or block-only keys return `null`, but invalid key syntax such as `"DIAMOND"` throws
+`InvalidKeyException` in `Key.key`, rather than returning `null`.
+The native `ItemFlag` examples deliberately use the same `addItemFlags(ItemFlag.values())` operation as
+6.x `hideAll()` instead of maintaining a second flag-to-component mapping.
 
 中文补充：旧构建器及其字符串、已有物品入口全部移除，模块须按上表迁移并重新编译。
 名字和说明行放语言文件，以 MiniMessage 描述；`.glint(true)` 只覆盖光效，不添加伪附魔；
-`.tooltipHidden(true)` 隐藏整个提示框；数量范围改为 1–99，越界拒绝而非静默截断。
+旧 `.hideAll()` 只隐藏各类详情，名字和说明仍显示，渲染后用原生 `addItemFlags(ItemFlag.values())` 保持该行为。
+`.tooltipHidden(true)` 是隐藏整个提示框的新能力，不是 `.hideAll()` 的等价替换。
+字符串材质名用 `Material.matchMaterial`，并排除未知、纯方块和空气；不要把 `"DIAMOND"` 直接传给
+`Key.key`，它会抛异常而不是返回 `null`。数量范围改为 1–99，越界拒绝而非静默截断。
 
 For changes to an existing stack, use Paper's `setData` and `unsetData` directly.
 Pass-through values are applied unchanged, not localized. Patches are applied in insertion order,
@@ -97,11 +124,13 @@ Paper 的 `setData` / `unsetData`。透传值不翻译，按插入顺序应用�
 Names use `ITEM_NAME`, not the italic custom-name component. The renderer does not restyle names.
 Lore lines are rendered through `Messages` in the same locale as the name.
 Specify any desired colours in the text rather than relying on a framework colour default.
-Lore defaults to non-italic only when italic is unset; explicit italic styling is preserved and colours are unchanged.
+Lore defaults to non-italic only when italic is unset; explicit italic or non-italic styling, including
+styling on part of a line, is preserved and colours are unchanged. This deliberately differs from
+vanilla's default italic lore.
 
 中文补充：名字使用 `ITEM_NAME`，渲染器不追加名字样式；名字和说明行使用同一语言渲染。
 需要指定颜色时请在文本中明确设置，框架不替作者决定颜色；说明行未指定斜体时默认不斜体，
-显式斜体保持原样，颜色不变。
+这与原版默认斜体不同。作者明确指定的斜体或正体（包括一行中只有部分文字的样式）保持原样，颜色不变。
 
 ### Stored item arrays
 
@@ -114,17 +143,37 @@ Decoded bytes starting with `0xAC 0xED` are read as the legacy Bukkit object str
 support for every module-specific serialization scheme. New strings are not a format that 6.x readers understand.
 `serializeItem` and `deserializeItem` use the same array format for one item; `deserializeItem` returns the
 first slot, or `null` for an empty array or empty slot. `isValidSerialized` reports whether the array can be read.
-Conversion failures are logged at SEVERE and return `null`; these strings are for trusted saved item data,
-not untrusted Java object streams. Keep backups when upgrading: cross-Minecraft-version data upgrading,
-and historical 1.21.x item strings read on 26.3, have not been verified by this change.
+Conversion failures are logged at SEVERE and return `null`. A captured 6.x string written on Paper 1.21.11
+is covered by a legacy-reader regression test; MockBukkit does not prove Paper's cross-version data upgrading.
+Real-server UAT must verify historical named, enchanted, marked and container items on 26.3.
+
+#### Stored-item limitations and backups
+
+- `deserializeItem` returns `null` both for a successfully read empty item and for a read failure.
+  Do not use that result alone to decide whether a saved value was corrupt; check the conversion log or
+  use the array result from `deserializeItems` when the distinction matters.
+- Back up stored inventories and item strings **before upgrading**. A downgrade to an older game version
+  cannot read item data written by a newer version. If a caller then saves its current or empty inventory
+  normally, it can overwrite the unreadable original. Restore a matching backup when rolling back, and
+  do not automatically save over item data that failed to load.
+- `ItemStackUtils` is only for trusted data previously saved by your own server. Do not pass player uploads,
+  chat input or externally supplied Java object streams into it. Its readers are not an input-sanitization
+  or deserialization security boundary; corrupt or hostile input can exhaust memory, and the legacy reader
+  has no class allowlist.
 
 中文补充：`ItemStackUtils` 保留五个静态入口及失败返回 `null` 的约定。7.0 以 Paper 物品字节格式
 加 Base64 写入，读取接受换行；空物品恢复成 `null`，不改变数组长度和空槽位置。
 解码后以 `0xAC 0xED` 开头的内容走私有旧格式读取器，可读 6.x `ItemStackUtils` 保存的对象流，
 但不再生成旧格式，也不承诺支持模块各自的所有存档格式；6.x 读取器不识别新写出的格式。
 单物品方法复用数组格式，读取空数组或首槽为空时返回 `null`；`isValidSerialized` 判断数组能否读出。
-转换失败记 SEVERE 并返回 `null`，仅用于可信物品存档，不接收不可信的 Java 对象流。
-升级前保留备份；跨 Minecraft 版本的数据升级及 1.21.x 历史串在 26.3 的读取，本改动未验证。
+转换失败记 SEVERE 并返回 `null`；单物品读取返回 `null`，既可能是正常空槽，也可能是读取失败，
+不能只凭这个返回值判断存档损坏，需要查看日志，或在需要区分时检查 `deserializeItems` 的数组结果。
+真实 1.21.11 捕获串已有旧读取路径回归测试，但 MockBukkit 不证明 Paper 的跨版本数据升级；
+命名、附魔、自定义标记和容器物品须由 26.3 真机验收证明。
+**升级前备份物品与背包存档**：降级后的旧游戏版本读不了新版本写入的数据，模块若接着照常保存当前背包或空背包，
+可能覆盖原数据。回退时恢复匹配的备份，不要在读取失败后自动保存覆盖。
+此工具仅用于服务器自己保存的可信数据，不接收玩家上传、聊天输入或外部 Java 对象流；读取器不是安全过滤器，
+损坏或恶意输入可能耗尽内存，旧格式读取器没有类白名单。
 
 ## Removed data-store overloads (as of 6.5.0)
 

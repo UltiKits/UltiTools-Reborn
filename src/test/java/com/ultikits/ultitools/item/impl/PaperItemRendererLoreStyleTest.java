@@ -55,6 +55,24 @@ class PaperItemRendererLoreStyleTest {
     }
 
     @Test
+    void render_loreWithOnlyChildItalic_preservesPartialStyleAndColours() {
+        Component plain = Component.text("plain ", NamedTextColor.GREEN);
+        Component italic = Component.text("part", NamedTextColor.RED).decorate(TextDecoration.ITALIC);
+        Component line = renderLore(Text.literal(plain.append(italic)));
+        assertThat(line.decoration(TextDecoration.ITALIC)).isEqualTo(TextDecoration.State.FALSE);
+        assertThat(line.color()).isEqualTo(NamedTextColor.GREEN);
+        assertThat(line.children()).containsExactly(italic);
+        assertThat(line.children().getFirst().decoration(TextDecoration.ITALIC)).isEqualTo(TextDecoration.State.TRUE);
+        assertThat(line.children().getFirst().color()).isEqualTo(NamedTextColor.RED);
+    }
+
+    @Test
+    void render_loreExplicitlyNonItalic_staysNonItalicAndKeepsColour() {
+        Component original = Component.text("not italic", NamedTextColor.BLUE).decoration(TextDecoration.ITALIC, false);
+        assertThat(renderLore(Text.literal(original))).isEqualTo(original);
+    }
+
+    @Test
     void render_name_isNotRestyled() {
         ItemSpec spec = ItemSpec.builder(Material.DIAMOND).name(Text.plain("name")).build();
         Component name = renderer.render(spec, Locale.US).getData(DataComponentTypes.ITEM_NAME);

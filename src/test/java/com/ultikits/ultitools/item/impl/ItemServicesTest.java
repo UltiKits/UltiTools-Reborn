@@ -2,6 +2,7 @@ package com.ultikits.ultitools.item.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import com.ultikits.ultitools.annotations.Autowired;
@@ -37,9 +38,30 @@ class ItemServicesTest {
     @Test
     void register_withoutTextServices_failsAndRecoversAfterRegistration() {
         ItemServices.register(root);
-        // A missing by-type binding returns null; the renderer names the missing constructor argument.
-        assertThatNullPointerException().isThrownBy(() -> root.getBean(ItemRenderer.class)).withMessage("messages");
+        assertThatIllegalStateException().isThrownBy(() -> root.getBean(ItemRenderer.class))
+                .withMessage("ItemRenderer requires Messages and LocaleResolver bound by type in the root container");
         registerTextServices();
+        assertThat(root.getBean(ItemRenderer.class)).isInstanceOf(PaperItemRenderer.class);
+    }
+
+    @Test
+    void register_withoutMessages_namesRootBindingsAndRecovers() {
+        ItemServices.register(root);
+        root.registerType(LocaleResolver.class, new FixedLocaleResolver(Locale.US, Optional.empty()));
+        assertThatIllegalStateException().isThrownBy(() -> root.getBean(ItemRenderer.class))
+                .withMessage("ItemRenderer requires Messages and LocaleResolver bound by type in the root container");
+        registerTextServices();
+        assertThat(root.getBean(ItemRenderer.class)).isInstanceOf(PaperItemRenderer.class);
+    }
+
+    @Test
+    void register_withoutLocaleResolver_namesRootBindingsAndRecovers() {
+        ItemServices.register(root);
+        LocaleResolver resolver = new FixedLocaleResolver(Locale.US, Optional.empty());
+        root.registerType(Messages.class, new InMemoryMessages("sample", resolver));
+        assertThatIllegalStateException().isThrownBy(() -> root.getBean(ItemRenderer.class))
+                .withMessage("ItemRenderer requires Messages and LocaleResolver bound by type in the root container");
+        root.registerType(LocaleResolver.class, resolver);
         assertThat(root.getBean(ItemRenderer.class)).isInstanceOf(PaperItemRenderer.class);
     }
 
