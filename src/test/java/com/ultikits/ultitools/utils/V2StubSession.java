@@ -38,6 +38,10 @@ import com.ultikits.ultitools.manager.RemoteRequestHandlers;
 import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.stub.UltiCloudStub;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 
 /**
  * Test scope (plan 22-23): one protocol v2 session of the framework on the in-process {@link UltiCloudStub}, for the
@@ -81,6 +85,9 @@ public final class V2StubSession implements AutoCloseable {
     private UltiCloudStub.Handle stub;
     private CloudFeatures features;
     private UltiTools plugin;
+    private PaperSchedulerEngine schedulerEngine;
+    private Scheduler scheduler;
+    private Scheduler schedulerOwner;
 
     /**
      * @param temp   a temporary directory for the server root, the credentials and the access log
@@ -154,6 +161,14 @@ public final class V2StubSession implements AutoCloseable {
                 extraStubbing.accept(mocked);
             }
         });
+        schedulerEngine = new PaperSchedulerEngine(plugin, logger, PaperBackend.live(plugin));
+        schedulerOwner = schedulerEngine.newOwner("UltiTools");
+        scheduler = schedulerOwner;
+        if (server instanceof ShutdownPanelMessageTracerTest.ValidatingServer) {
+            scheduler = ((ShutdownPanelMessageTracerTest.ValidatingServer) server)
+                    .recordFrameworkCalls(plugin, scheduler);
+        }
+        FrameworkScheduling.install(scheduler);
         CloudTestAccess.useTemporaryCredentials(state);
         stub = UltiCloudStub.start(UltiCloudStub.Options.defaults().accessLog(temp.resolve("access.log"))
                 .acceptCredential(CREDENTIAL, SERVER_ID));
@@ -328,6 +343,10 @@ public final class V2StubSession implements AutoCloseable {
             stub.close();
         }
         CloudTestAccess.reset();
+        if (scheduler != null) {
+            schedulerEngine.retire(schedulerOwner);
+            FrameworkScheduling.uninstall(scheduler);
+        }
         Field instance = UltiTools.class.getDeclaredField("ultiTools");
         instance.setAccessible(true);
         instance.set(null, null);

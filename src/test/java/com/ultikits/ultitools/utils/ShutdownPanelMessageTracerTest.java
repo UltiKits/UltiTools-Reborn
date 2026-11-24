@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
@@ -8,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,6 +34,17 @@ import org.mockbukkit.mockbukkit.scheduler.BukkitSchedulerMock;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import java.time.Duration;
+import java.util.function.Consumer;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 
 /**
  * Tracer for UltiTools-Reborn#621 on the protocol v2 path (rewritten in plan 22-23; the v1 tracer drove the removed v1
@@ -292,11 +305,56 @@ class ShutdownPanelMessageTracerTest {
         }
 
         @Test
+        void retiredOwnerRefusalBetweenCheckAndSubmissionIsDropped() {
+            int before = at(Level.FINE).size();
+            TaskHandle scheduled = PluginInitiationUtils.scheduleUnlessDisabling("retired owner probe", () -> {
+                throw new RejectedExecutionException("Owner unloaded: UltiTools");
+            });
+
+            assertThat(scheduled).isNull();
+            List<LogRecord> fine = at(Level.FINE);
+            assertThat(fine).hasSize(before + 1);
+            assertThat(fine.get(fine.size() - 1).getMessage()).contains("retired owner probe");
+            assertThat(fine.get(fine.size() - 1).getThrown()).isNull();
+            assertQuiet("retired owner probe");
+        }
+
+        @Test
+        void uninstalledOwnerDuringDisableIsDropped() {
+            int before = at(Level.FINE).size();
+            TaskHandle scheduled = PluginInitiationUtils.scheduleUnlessDisabling("uninstalled owner probe", () -> {
+                FrameworkScheduling.uninstall(FrameworkScheduling.scheduler());
+                disabling();
+                return FrameworkScheduling.scheduler().global().run(() -> { /* No work after disable. */ });
+            });
+
+            assertThat(scheduled).isNull();
+            assertThat(at(Level.FINE)).hasSize(before + 1);
+            assertThat(at(Level.FINE).get(before).getMessage()).contains("uninstalled owner probe");
+            assertQuiet("uninstalled owner probe");
+        }
+
+        @Test
+        void uninstalledOwnerWhileAcceptingStillReportsTheSetupError() {
+            Scheduler installed = FrameworkScheduling.scheduler();
+            FrameworkScheduling.uninstall(installed);
+            try {
+                assertThatThrownBy(() -> PluginInitiationUtils.scheduleUnlessDisabling("missing owner probe",
+                        () -> FrameworkScheduling.scheduler().global().run(() -> { /* Never submitted. */ })))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage("Framework scheduler is not installed");
+            } finally {
+                FrameworkScheduling.install(installed);
+            }
+        }
+
+        @Test
         @DisplayName("control: while accepting, the scheduler call runs and its result is returned")
         void acceptedSchedulingReturnsTheResult() {
-            Object scheduled = PluginInitiationUtils.scheduleUnlessDisabling("accepted probe", () -> "task");
+            TaskHandle task = mock(TaskHandle.class);
+            Object scheduled = PluginInitiationUtils.scheduleUnlessDisabling("accepted probe", () -> task);
 
-            assertThat(scheduled).isEqualTo("task");
+            assertThat(scheduled).isEqualTo(task);
         }
     }
 
@@ -304,10 +362,32 @@ class ShutdownPanelMessageTracerTest {
     static final class ValidatingServer extends ServerMock {
         private ValidatingScheduler validating;
 
+        Scheduler recordFrameworkCalls(Plugin plugin, Scheduler live) {
+            Scheduler scheduler = mock(Scheduler.class, org.mockito.AdditionalAnswers.delegatesTo(live));
+            TaskContext global = spy(live.global());
+            doReturn(global).when(scheduler).global();
+            doAnswer(call -> {
+                getScheduler().check(plugin, "runTask");
+                return live.global().run(call.getArgument(0, Runnable.class));
+            }).when(global).run(any(Runnable.class));
+            doAnswer(call -> {
+                getScheduler().check(plugin, "runTaskLater");
+                return live.global().runLater(call.getArgument(0, Duration.class),
+                        call.getArgument(1, Runnable.class));
+            }).when(global).runLater(any(), any());
+            doAnswer(call -> {
+                getScheduler().check(plugin, "runTaskTimer");
+                Consumer<? super TaskHandle> body = call.getArgument(2);
+                return live.global().runRepeating(call.getArgument(0, Duration.class),
+                        call.getArgument(1, Duration.class), body);
+            }).when(global).runRepeating(any(), any(), any());
+            return scheduler;
+        }
+
         @Override
         public ValidatingScheduler getScheduler() {
             if (validating == null) {
-                validating = new ValidatingScheduler();
+                validating = new ValidatingScheduler(super.getScheduler());
             }
             return validating;
         }
@@ -317,6 +397,27 @@ class ShutdownPanelMessageTracerTest {
     static final class ValidatingScheduler extends BukkitSchedulerMock {
         final List<String> enabledCalls = new CopyOnWriteArrayList<>();
         final List<String> disabledCalls = new CopyOnWriteArrayList<>();
+        private final BukkitSchedulerMock delegate;
+
+        ValidatingScheduler(BukkitSchedulerMock delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void performOneTick() {
+            delegate.performOneTick();
+        }
+
+        @Override
+        public long getCurrentTick() {
+            return delegate.getCurrentTick();
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+            super.shutdown();
+        }
 
         private void check(Plugin plugin, String call) {
             if (!plugin.isEnabled()) {
@@ -329,37 +430,37 @@ class ShutdownPanelMessageTracerTest {
         @Override
         public BukkitTask runTask(Plugin plugin, Runnable task) {
             check(plugin, "runTask");
-            return super.runTask(plugin, task);
+            return delegate.runTask(plugin, task);
         }
 
         @Override
         public BukkitTask runTaskLater(Plugin plugin, Runnable task, long delay) {
             check(plugin, "runTaskLater");
-            return super.runTaskLater(plugin, task, delay);
+            return delegate.runTaskLater(plugin, task, delay);
         }
 
         @Override
         public BukkitTask runTaskTimer(Plugin plugin, Runnable task, long delay, long period) {
             check(plugin, "runTaskTimer");
-            return super.runTaskTimer(plugin, task, delay, period);
+            return delegate.runTaskTimer(plugin, task, delay, period);
         }
 
         @Override
         public BukkitTask runTaskAsynchronously(Plugin plugin, Runnable task) {
             check(plugin, "runTaskAsynchronously");
-            return super.runTaskAsynchronously(plugin, task);
+            return delegate.runTaskAsynchronously(plugin, task);
         }
 
         @Override
         public int scheduleSyncDelayedTask(Plugin plugin, Runnable task, long delay) {
             check(plugin, "scheduleSyncDelayedTask");
-            return super.scheduleSyncDelayedTask(plugin, task, delay);
+            return delegate.scheduleSyncDelayedTask(plugin, task, delay);
         }
 
         @Override
         public int scheduleSyncDelayedTask(Plugin plugin, Runnable task) {
             check(plugin, "scheduleSyncDelayedTask");
-            return super.scheduleSyncDelayedTask(plugin, task);
+            return delegate.scheduleSyncDelayedTask(plugin, task);
         }
     }
 }

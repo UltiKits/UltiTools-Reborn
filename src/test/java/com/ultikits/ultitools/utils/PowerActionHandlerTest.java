@@ -4,6 +4,10 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.contract.ContractFixtures;
 import com.ultikits.ultitools.contract.RecordingChannel;
 import com.ultikits.ultitools.manager.RemoteActionLog;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +53,8 @@ class PowerActionHandlerTest {
     private final List<LogRecord> logged = new ArrayList<>();
 
     private ServerMock server;
+    private PaperSchedulerEngine engine;
+    private Scheduler scheduler;
     private Handler capture;
     private Logger handlerLogger;
 
@@ -78,6 +84,8 @@ class PowerActionHandlerTest {
     void tearDown() {
         handlerLogger.removeHandler(capture);
         if (server != null) {
+            engine.retire(scheduler);
+            FrameworkScheduling.uninstall(scheduler);
             MockBukkit.unmock();
             server = null;
         }
@@ -184,7 +192,7 @@ class PowerActionHandlerTest {
 
     @Test
     void scheduleStopRunsOneTaskTwentyTicksLater() {
-        server = MockBukkit.mock();
+        startServerScheduler();
         AtomicInteger stops = new AtomicInteger();
         BukkitPowerExecutor executor = new BukkitPowerExecutor(mock(Plugin.class), workingDirectory,
                 () -> "./start.sh", stops::incrementAndGet, () -> { });
@@ -202,7 +210,7 @@ class PowerActionHandlerTest {
 
     @Test
     void scheduleRestartRunsOneTaskTwentyTicksLater() {
-        server = MockBukkit.mock();
+        startServerScheduler();
         AtomicInteger restarts = new AtomicInteger();
         AtomicInteger stops = new AtomicInteger();
         BukkitPowerExecutor executor = new BukkitPowerExecutor(mock(Plugin.class), workingDirectory,
@@ -255,6 +263,14 @@ class PowerActionHandlerTest {
         Files.delete(script.toPath());
         Files.createDirectory(script.toPath());
         assertThat(relative.restartSupported()).as("a directory is not a restart script").isFalse();
+    }
+
+    private void startServerScheduler() {
+        server = MockBukkit.mock();
+        Plugin host = MockBukkit.createMockPlugin();
+        engine = new PaperSchedulerEngine(host, host.getLogger(), PaperBackend.live(host));
+        scheduler = engine.newOwner("UltiTools");
+        FrameworkScheduling.install(scheduler);
     }
 
     private List<LogRecord> recordsAtLeast(Level level) {

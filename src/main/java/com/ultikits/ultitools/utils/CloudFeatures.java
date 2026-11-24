@@ -1,5 +1,9 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.Ticks;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.Collections;
@@ -700,14 +704,15 @@ public final class CloudFeatures {
             bindings.onlineMode = () -> Bukkit.getServer() != null && Bukkit.getOnlineMode();
             bindings.commands = plugin::getCommandExecutionManager;
             bindings.mainThread = runnable -> PluginInitiationUtils.scheduleUnlessDisabling("UltiCloud request",
-                    () -> Bukkit.getScheduler().runTask(plugin, runnable));
+                    () -> FrameworkScheduling.scheduler().global().run(runnable));
             bindings.disabling = () -> !PluginInitiationUtils.isAcceptingPanelMessages();
             bindings.shutdown = PluginInitiationUtils.PANEL_CHANGE_SIGNAL;
             bindings.monitor = plugin::getServerMonitorManager;
             bindings.errors = plugin::getErrorReportCollector;
             bindings.mainTimer = task -> {
-                final org.bukkit.scheduler.BukkitTask started = PluginInitiationUtils.scheduleUnlessDisabling(
-                        "UltiCloud telemetry", () -> Bukkit.getScheduler().runTaskTimer(plugin, task, 20L, 20L));
+                final TaskHandle started = PluginInitiationUtils.scheduleUnlessDisabling(
+                        "UltiCloud telemetry", () -> FrameworkScheduling.scheduler().global().runRepeating(
+                                Ticks.of(20), Ticks.of(20), handle -> task.run()));
                 return () -> {
                     if (started != null) {
                         started.cancel();

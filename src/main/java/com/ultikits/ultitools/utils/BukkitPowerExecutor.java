@@ -3,6 +3,8 @@ package com.ultikits.ultitools.utils;
 import java.io.File;
 import java.util.function.Supplier;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.scheduling.Ticks;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 
@@ -36,7 +38,6 @@ final class BukkitPowerExecutor implements PowerActionHandler.PowerExecutor {
     /** The value Spigot uses for {@code settings.restart-script} when the key is absent. */
     static final String DEFAULT_RESTART_SCRIPT = "./start.sh";
 
-    private final Plugin plugin;
     private final File workingDirectory;
     private final Supplier<String> restartScriptPath;
     private final Runnable stopAction;
@@ -56,7 +57,6 @@ final class BukkitPowerExecutor implements PowerActionHandler.PowerExecutor {
      */
     BukkitPowerExecutor(Plugin plugin, File workingDirectory, Supplier<String> restartScriptPath,
                         Runnable stopAction, Runnable restartAction) {
-        this.plugin = plugin;
         this.workingDirectory = workingDirectory;
         this.restartScriptPath = restartScriptPath;
         this.stopAction = stopAction;
@@ -118,6 +118,6 @@ final class BukkitPowerExecutor implements PowerActionHandler.PowerExecutor {
 
     private void schedule(String what, Runnable action) {
         PluginInitiationUtils.scheduleUnlessDisabling(what,
-                () -> Bukkit.getScheduler().runTaskLater(plugin, action, DELAY_TICKS));
+                () -> FrameworkScheduling.scheduler().global().runLater(Ticks.of(DELAY_TICKS), action));
     }
 }

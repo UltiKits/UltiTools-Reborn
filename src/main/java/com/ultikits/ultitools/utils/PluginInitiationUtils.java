@@ -1,11 +1,14 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import java.util.concurrent.RejectedExecutionException;
+
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 
-import org.bukkit.Bukkit;
 import org.bukkit.plugin.IllegalPluginAccessException;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -202,28 +205,35 @@ public class PluginInitiationUtils {
      * The one check every scheduler hand-off reachable from the WebSocket thread goes through
      * (UltiTools-Reborn#621, swept by class: the inbound event publish, the queued config callbacks,
      * the remote command dispatch, and the monitoring tasks a completing handshake starts). Runs
-     * {@code scheduling} -- exactly one call into the Bukkit scheduler -- only while
-     * {@link #isAcceptingPanelMessages()} holds; otherwise, and when the plugin is disabled between
-     * that check and the scheduler's own check (the scheduler then throws
-     * {@link IllegalPluginAccessException}, the only exception caught here), the work is dropped
+     * {@code scheduling} -- exactly one call into the framework scheduler -- only while
+     * {@link #isAcceptingPanelMessages()} holds; otherwise, and when the plugin is disabled or its
+     * scheduler owner retires between that check and submission (throwing
+     * {@link IllegalPluginAccessException} or {@link RejectedExecutionException}), the work is dropped
      * with one FINE line naming it. Nothing is lost that a stopping server could still use: the
-     * scheduler would refuse the task anyway.
+     * scheduler would refuse the task anyway. An already uninstalled bridge is also a dropped
+     * hand-off during disable; while still accepting, its {@link IllegalStateException} is not hidden.
      *
      * @param what       what is being scheduled, for the FINE line
      * @param scheduling the scheduler call
-     * @param <T>        what the scheduler call returns
      * @return what {@code scheduling} returned, or {@code null} when the work was dropped
      * @since 6.3.0
      */
     @ApiStatus.Internal
-    public static <T> T scheduleUnlessDisabling(String what, Supplier<T> scheduling) {
+    public static TaskHandle scheduleUnlessDisabling(String what, Supplier<TaskHandle> scheduling) {
         if (!isAcceptingPanelMessages()) {
             logDroppedWhileDisabling(what);
             return null;
         }
         try {
             return scheduling.get();
-        } catch (IllegalPluginAccessException disabledMeanwhile) {
+        } catch (IllegalPluginAccessException | RejectedExecutionException disabledMeanwhile) {
+            logDroppedWhileDisabling(what);
+            return null;
+        } catch (IllegalStateException schedulerUnavailable) {
+            if (isAcceptingPanelMessages()) {
+                throw schedulerUnavailable;
+            }
+            // Root-container teardown may already have uninstalled the bridge after the check.
             logDroppedWhileDisabling(what);
             return null;
         }
@@ -328,7 +338,7 @@ public class PluginInitiationUtils {
      * all — it only keeps the WebSocket I/O thread unblocked. A Minecraft module's handler
      * touches Bukkit API by definition, so the real choice here was main-thread versus
      * not-main-thread, not sync-dispatch versus async-dispatch; only
-     * {@code Bukkit.getScheduler().runTask(...)} puts a handler on the main thread. The whole
+     * the framework's global scheduler context puts a handler on the main thread. The whole
      * helper body is wrapped in a catch so a missing scheduler (no Bukkit server booted, as in a
      * plain unit test) or a missing {@link EventBus} can never break the inbound message path —
      * both are logged no-ops.
@@ -351,7 +361,7 @@ public class PluginInitiationUtils {
             // constructor copies data and the envelope now, so the event carries the request as
             // received whatever any other thread does to those objects before the task runs.
             PanelMessageEvent event = new PanelMessageEvent(type, data, message);
-            scheduleUnlessDisabling("PanelMessageEvent " + type, () -> Bukkit.getScheduler().runTask(instance, () -> {
+            scheduleUnlessDisabling("PanelMessageEvent " + type, () -> FrameworkScheduling.scheduler().global().run(() -> {
                 // Two long reads and a comparison on the fast path — no allocation, no logging,
                 // until the slow branch below is actually taken.
                 long startNanos = System.nanoTime();

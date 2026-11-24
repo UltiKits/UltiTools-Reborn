@@ -8,9 +8,9 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitRunnable;
+import com.ultikits.ultitools.scheduling.Ticks;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.EventListener;
 
 @EventListener
@@ -27,7 +27,7 @@ public class PlayerJoinListener implements Listener {
 
     /**
      * Execute a command to download a PlaceholderAPI expansion.
-     * This method is extracted from BukkitRunnable for testability.
+     * This method is extracted from the scheduled task for testability.
      *
      * @param placeholder the placeholder expansion name to download
      */
@@ -37,7 +37,7 @@ public class PlayerJoinListener implements Listener {
 
     /**
      * Execute a command to reload PlaceholderAPI.
-     * This method is extracted from BukkitRunnable for testability.
+     * This method is extracted from the scheduled task for testability.
      */
     static void executeReloadCommand() {
         Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "papi reload");
@@ -56,23 +56,14 @@ public class PlayerJoinListener implements Listener {
                 if (!PlaceholderApiBridge.isRegistered(placeholder)) {
                     reload = true;
                     final String ph = placeholder;
-                    new BukkitRunnable() {
-                        @Override
-                        public void run() {
-                            executeDownloadCommand(ph);
-                        }
-                    }.runTaskLater(UltiTools.getInstance(), time);
+                    FrameworkScheduling.scheduler().global().runLater(
+                            Ticks.of(time), () -> executeDownloadCommand(ph));
                     time += 30L;
                 }
             }
             if (reload) {
-                final long finalTime = time;
-                new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        executeReloadCommand();
-                    }
-                }.runTaskLater(UltiTools.getInstance(), finalTime + 30L);
+                FrameworkScheduling.scheduler().global().runLater(
+                        Ticks.of(time + 30L), PlayerJoinListener::executeReloadCommand);
             }
         } catch (LinkageError error) {
             Bukkit.getLogger().warning("PlaceholderAPI became unavailable while handling player join: " + error.getClass().getSimpleName());

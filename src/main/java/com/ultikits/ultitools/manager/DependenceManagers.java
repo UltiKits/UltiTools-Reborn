@@ -113,7 +113,7 @@ public class DependenceManagers {
         // one tick -- the scheduler-based pattern UltiTools#scheduleStartupMessages() already
         // uses for its own one-time start-up lines -- guarantees every plugin that will enable
         // during this start-up already has, before this runs.
-        Bukkit.getScheduler().runTask(plugin, EconomyUtils::logStartupState);
+        FrameworkScheduling.scheduler().global().run(EconomyUtils::logStartupState);
     }
 
     /**
