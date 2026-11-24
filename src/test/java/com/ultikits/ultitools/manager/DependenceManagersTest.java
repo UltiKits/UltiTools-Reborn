@@ -16,6 +16,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.logging.Logger;
 
@@ -34,7 +35,7 @@ import org.mockito.MockitoAnnotations;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.Autowired;
-import org.apache.commons.lang3.reflect.MethodUtils;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.scheduling.ManualScheduler;
 import com.ultikits.ultitools.scheduling.Scheduler;
@@ -514,7 +515,8 @@ class DependenceManagersTest {
                 UltiTools core = mock(UltiTools.class);
                 when(core.getLogger()).thenReturn(Logger.getAnonymousLogger());
                 when(core.getDataFolder()).thenReturn(temporary.toFile());
-                assertDoesNotThrow(() -> MethodUtils.invokeMethod(managers, true, "initCoreServices", core));
+                Method initCoreServices = DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                assertDoesNotThrow(() -> ReflectionUtil.invoke(managers, initCoreServices, core));
                 assertThatThrownBy(() -> context.getBean(NotificationService.class))
                         .isInstanceOf(NullPointerException.class).hasMessage("messages");
 
@@ -551,7 +553,8 @@ class DependenceManagersTest {
                 UltiTools core = mock(UltiTools.class);
                 when(core.getLogger()).thenReturn(Logger.getAnonymousLogger());
                 when(core.getDataFolder()).thenReturn(temporary.toFile());
-                MethodUtils.invokeMethod(managers, true, "initCoreServices", core);
+                Method initCoreServices = DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
+                ReflectionUtil.invoke(managers, initCoreServices, core);
                 OptionalNotificationClient client = new OptionalNotificationClient();
                 assertThatThrownBy(() -> context.getAutowireCapableBeanFactory().autowireBean(client))
                         .isInstanceOf(NullPointerException.class).hasMessage("messages");
