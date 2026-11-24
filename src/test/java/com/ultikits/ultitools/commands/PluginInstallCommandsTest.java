@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -30,6 +31,8 @@ import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 import org.mockito.MockedStatic;
 
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.ultikits.ultitools.command.engine.CommandTestSupport;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
@@ -827,18 +830,19 @@ class PluginInstallCommandsTest {
     }
 
     @Test
-    @DisplayName("Should handle command without OP permission")
+    @DisplayName("Should hide the command and reject dispatch without OP permission")
     void testNoOpPermission() {
-        if (executor == null) return;
-
+        assertThat(executor).isNotNull();
         player.setOp(false);
         player.addAttachment(UltiTools.getInstance(), "ultikits.tools.admin", false);
+        var dispatcher = CommandTestSupport.dispatcher(executor, "upm");
+        var source = CommandTestSupport.source(player);
 
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"help"});
+        assertThat(dispatcher.getRoot().getChild("upm").canUse(source)).isFalse();
+        assertThatThrownBy(() -> dispatcher.execute("upm help", source))
+                .isInstanceOf(CommandSyntaxException.class);
         server.getScheduler().performOneTick();
-
-        assertThat(result).isTrue();
-        // Command should still execute, just with limited functionality
+        assertThat(player.nextMessage()).as("a hidden root must not enter the help body").isNull();
     }
 
     @Test

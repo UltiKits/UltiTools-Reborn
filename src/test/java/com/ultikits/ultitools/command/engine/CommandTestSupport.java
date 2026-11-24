@@ -1,6 +1,16 @@
 package com.ultikits.ultitools.command.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import org.bukkit.plugin.Plugin;
+import com.ultikits.ultitools.UltiTools;
+import io.papermc.paper.command.brigadier.Commands;
+import io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager;
+import io.papermc.paper.plugin.lifecycle.event.handler.LifecycleEventHandler;
+import io.papermc.paper.plugin.lifecycle.event.registrar.ReloadableRegistrarEvent;
+import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import com.mojang.brigadier.CommandDispatcher;
@@ -47,7 +57,39 @@ public final class CommandTestSupport {
                 .map(suggestion -> suggestion.getText()).toList();
     }
 
-    private static CommandSourceStack source(CommandSender sender) {
+    /** Captures the public Paper callback; registration is delivered only by {@link Lifecycle#fire()}. */
+    public static Lifecycle lifecycle(UltiTools plugin) {
+        return new Lifecycle(plugin);
+    }
+
+    /** Test-only lifecycle driver with a fresh registrar for each commands event. */
+    public static final class Lifecycle {
+        private final AtomicReference<LifecycleEventHandler<ReloadableRegistrarEvent<Commands>>> handler =
+                new AtomicReference<>();
+
+        @SuppressWarnings("unchecked")
+        private Lifecycle(UltiTools plugin) {
+            LifecycleEventManager<Plugin> manager = mock(LifecycleEventManager.class);
+            when(plugin.getLifecycleManager()).thenReturn(manager);
+            doAnswer(call -> {
+                handler.set(call.getArgument(1));
+                return null;
+            }).when(manager).registerEventHandler(eq(LifecycleEvents.COMMANDS), any(LifecycleEventHandler.class));
+        }
+
+        @SuppressWarnings("unchecked")
+        public RecordingCommands fire() {
+            var commands = new RecordingCommands();
+            ReloadableRegistrarEvent<Commands> event = mock(ReloadableRegistrarEvent.class);
+            when(event.registrar()).thenReturn(commands);
+            assertThat(handler.get())
+                    .as("the real engine must install a commands callback").isNotNull();
+            handler.get().run(event);
+            return commands;
+        }
+    }
+
+    public static CommandSourceStack source(CommandSender sender) {
         var source = mock(CommandSourceStack.class);
         lenient().when(source.getSender()).thenReturn(sender);
         return source;

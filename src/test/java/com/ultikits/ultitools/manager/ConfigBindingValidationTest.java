@@ -1152,7 +1152,7 @@ class ConfigBindingValidationTest {
             when(sibling.getPluginName()).thenReturn("SiblingModule");
             SimpleContainer goodContainer = containerWith(new LiteralOnlyBean(), new LiteralCooldownExecutor());
             assertDoesNotThrow(() -> assemble.invoke(pluginManager, goodContainer, sibling, ModuleFixture.class, loader));
-            assertTrue(goodContainer.getBeanNamesForType(CommandExecutor.class).length > 0);
+            assertTrue(goodContainer.getBeanNamesForType(BaseCommandExecutor.class).length > 0);
         }
     }
 

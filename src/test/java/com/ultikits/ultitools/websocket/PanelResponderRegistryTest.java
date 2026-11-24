@@ -322,7 +322,6 @@ class PanelResponderRegistryTest {
             mockLogger = mock(Logger.class);
             eventBus = new EventBus();
             listenerManager = new ListenerManager();
-            commandManager = new CommandManager();
 
             // unregisterExternal's trailing log line calls the static Bukkit.getLogger(), which
             // needs Bukkit.getServer() to be non-null -- mirrors ExternalPluginIntegrationTest's
@@ -332,6 +331,7 @@ class PanelResponderRegistryTest {
             lenient().when(mockServer.getVersion()).thenReturn("MockBukkit (MC: 1.21.11)");
             lenient().when(mockServer.getBukkitVersion()).thenReturn("1.21.11-R0.1-SNAPSHOT");
             setStaticField(Bukkit.class, "server", mockServer);
+            commandManager = new CommandManager();
 
             TestHelper.mockUltiToolsInstance(ultiTools -> {
                 lenient().when(ultiTools.getLogger()).thenReturn(mockLogger);

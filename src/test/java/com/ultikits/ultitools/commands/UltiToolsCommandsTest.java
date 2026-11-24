@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
@@ -19,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.ultikits.ultitools.command.engine.CommandTestSupport;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -285,16 +288,18 @@ class UltiToolsCommandsTest {
     }
 
     @Test
-    @DisplayName("Should handle command without OP permission")
+    @DisplayName("Should hide the command and reject dispatch without OP permission")
     void testNoOpPermission() {
         player.setOp(false);
-        
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload"});
+        var dispatcher = CommandTestSupport.dispatcher(executor, "ul");
+        var source = CommandTestSupport.source(player);
+
+        assertThat(dispatcher.getRoot().getChild("ul").canUse(source)).isFalse();
+        assertThatThrownBy(() -> dispatcher.execute("ul reload", source))
+                .isInstanceOf(CommandSyntaxException.class);
         server.getScheduler().performOneTick();
-        
-        assertThat(result).isTrue();
-        String message = player.nextMessage();
-        assertThat(message).contains("权限");
+        verifyNoInteractions(mockPluginManager);
+        assertThat(player.nextMessage()).as("a hidden root must not enter the command body").isNull();
     }
 
     @Test
