@@ -17,6 +17,7 @@ import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class ConfiguredLocaleResolverTimeZoneTest {
     @ParameterizedTest
@@ -45,6 +46,15 @@ class ConfiguredLocaleResolverTimeZoneTest {
             assertThat(resolver.fallback()).isEqualTo(Locale.forLanguageTag(code));
         }
         assertThat(reads).hasValue(0);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"en,auto,Asia/Shanghai,en", "zh,auto,UTC,zh", "auto,auto,Asia/Shanghai,zh",
+            "auto,auto,UTC,en", "en,zh,Asia/Shanghai,zh", "zh-myserver,auto,UTC,zh",
+            "en,,Asia/Shanghai,en", "en,' ',Asia/Shanghai,en", ",auto,Asia/Shanghai,zh"})
+    void automaticFallback_prefersAForcedLanguageBeforeTheTimeZone(String language, String fallback,
+            String zone, String expected) {
+        assertThat(resolver(language, fallback, zone).fallback()).isEqualTo(Locale.forLanguageTag(expected));
     }
 
     @Test
@@ -81,7 +91,8 @@ class ConfiguredLocaleResolverTimeZoneTest {
         zone.set(ZoneId.of("UTC"));
         language.set("en");
         assertThat(resolver.forced()).contains(Locale.ENGLISH);
-        assertThat(resolver.fallback()).isEqualTo(Locale.CHINESE);
+        assertThat(resolver.fallback()).isEqualTo(Locale.ENGLISH);
+        language.set("auto");
         fallback.set("de");
         assertThat(resolver.fallback()).isEqualTo(Locale.GERMAN);
         fallback.set("auto");

@@ -41,10 +41,20 @@ public final class UltiToolsTranslator implements Translator {
         if (key == null) {
             return null;
         }
-        Object argument = component.arguments().isEmpty() ? null : component.arguments().getFirst().value();
-        Text text = argument instanceof VirtualComponent virtual && virtual.renderer() instanceof SharedTextCarrier carrier
-                ? carrier.text() : Text.of(key);
-        return renderer.render(text, locale).applyFallbackStyle(component.style()).append(component.children());
+        Text text = null;
+        for (var argument : component.arguments()) {
+            if (argument.value() instanceof VirtualComponent virtual
+                    && virtual.renderer() instanceof SharedTextCarrier carrier) {
+                text = carrier.text();
+                break;
+            }
+        }
+        if (text == null && !component.arguments().isEmpty()) {
+            // Serialization may replace the virtual carrier with its rendered fallback, losing the original Text.
+            return null;
+        }
+        return renderer.render(text == null ? Text.of(key) : text, locale)
+                .applyFallbackStyle(component.style()).append(component.children());
     }
 
     private @Nullable MessageKey knownKey(String value) {

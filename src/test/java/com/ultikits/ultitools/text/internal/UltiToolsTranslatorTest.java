@@ -68,6 +68,14 @@ class UltiToolsTranslatorTest {
     }
 
     @Test
+    void serializedArgumentsWithoutACarrier_areLeftToTheStoredFallback() {
+        TranslatableComponent serialized = Component.translatable("sample:number", Component.text("1,234.50"))
+                .fallback("1,234.50");
+        assertThat(translator.translate(serialized, Locale.GERMANY)).isNull();
+        assertThat(plain(GlobalTranslator.render(serialized, Locale.GERMANY))).isEqualTo("1,234.50");
+    }
+
+    @Test
     void unknownOrForeignKeys_areLeftForOtherSources() {
         for (String key : java.util.List.of("minecraft.block.stone", "foreign:hello", "sample:absent", "Bad:key")) {
             assertThat(translator.canTranslate(key, Locale.US)).isFalse();

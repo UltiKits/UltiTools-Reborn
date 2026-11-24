@@ -1,13 +1,21 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.testfixtures.textwiring.TextFixtureModule;
 import com.ultikits.ultitools.annotations.Autowired;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.DependenceManagers;
@@ -46,9 +54,13 @@ class UltiToolsPluginTextWiringTest {
     private SimpleContainer root;
     private YamlConfiguration settings;
     private final List<URLClassLoader> loaders = new ArrayList<>();
+    private final List<SimpleContainer> registeredContexts = new ArrayList<>();
 
     @AfterEach
     void tearDown() throws Exception {
+        for (SimpleContainer context : registeredContexts) {
+            context.close();
+        }
         if (engine != null) {
             engine.close();
             root.close();
@@ -86,6 +98,7 @@ class UltiToolsPluginTextWiringTest {
             doReturn(configs).when(core).getConfigManager();
             doReturn(commands).when(core).getCommandManager();
             doReturn(listeners).when(core).getListenerManager();
+            doReturn(mock(DataStore.class, CALLS_REAL_METHODS)).when(core).getDataStore();
         });
     }
 
@@ -131,9 +144,64 @@ class UltiToolsPluginTextWiringTest {
         }
     }
 
-    public static class FixtureModule extends UltiToolsPlugin {
-        public FixtureModule() { super(); }
-        @Override public boolean registerSelf() { return true; }
+    @Test
+    void failedContainerAssembly_withdrawsThePublishedCatalogue() throws Exception {
+        setUpModuleEnvironment();
+        UltiToolsPlugin incoming = spy(module("AssemblyFailure", "greeting: Failed\n"));
+        doThrow(new IllegalStateException("assembly failed")).when(incoming).setContext(any(SimpleContainer.class));
+        assertThat(register(new PluginManager(), incoming)).isFalse();
+        verify(incoming).setContext(any(SimpleContainer.class));
+        assertThat(shared("assemblyfailure:greeting")).isEqualTo("assemblyfailure:greeting");
+    }
+
+    @Test
+    void declinedRegistration_withdrawsThePublishedCatalogue() throws Exception {
+        setUpModuleEnvironment();
+        UltiToolsPlugin incoming = spy(module("Declined", "greeting: Failed\n"));
+        doReturn(false).when(incoming).registerSelf();
+        assertThat(register(new PluginManager(), incoming)).isFalse();
+        verify(incoming).registerSelf();
+        assertThat(shared("declined:greeting")).isEqualTo("declined:greeting");
+    }
+
+    @Test
+    void failedReplacement_restoresTheRunningCopyAndItsOwnership() throws Exception {
+        setUpModuleEnvironment();
+        PluginManager manager = new PluginManager();
+        UltiToolsPlugin older = module("Replacement", "greeting: Old\n", "1.0.0");
+        assertThat(register(manager, older)).isTrue();
+        assertThat(shared("replacement:greeting")).isEqualTo("Old");
+        UltiToolsPlugin newer = spy(module("Replacement", "greeting: New\n", "2.0.0"));
+        doReturn(false).when(newer).registerSelf();
+        assertThat(register(manager, newer)).isFalse();
+        verify(newer).registerSelf();
+        assertThat(manager.getPluginList()).containsExactly(older);
+        assertThat(shared("replacement:greeting")).isEqualTo("Old");
+        older.unregisterSelf();
+        assertThat(shared("replacement:greeting")).isEqualTo("replacement:greeting");
+    }
+
+    @Test
+    void throwingRegistration_alsoWithdrawsThePublishedCatalogue() throws Exception {
+        setUpModuleEnvironment();
+        UltiToolsPlugin incoming = spy(module("Thrown", "greeting: Failed\n"));
+        doThrow(new IllegalStateException("registration failed")).when(incoming).registerSelf();
+        assertThat(register(new PluginManager(), incoming)).isFalse();
+        verify(incoming).registerSelf();
+        assertThat(shared("thrown:greeting")).isEqualTo("thrown:greeting");
+    }
+
+    private boolean register(PluginManager manager, UltiToolsPlugin module) {
+        UltiTools core = UltiTools.getInstance();
+        try (var singleton = mockStatic(UltiTools.class, CALLS_REAL_METHODS)) {
+            singleton.when(UltiTools::getInstance).thenReturn(core);
+            singleton.when(UltiTools::getPluginVersion).thenReturn(700);
+            boolean registered = manager.register(module);
+            if (module.getContext() != null) {
+                registeredContexts.add(module.getContext());
+            }
+            return registered;
+        }
     }
 
     public static class MessageBean {
@@ -141,7 +209,11 @@ class UltiToolsPluginTextWiringTest {
     }
 
     private UltiToolsPlugin module(String name, String catalogue) throws Exception {
-        String className = FixtureModule.class.getName();
+        return module(name, catalogue, "1.0.0");
+    }
+
+    private UltiToolsPlugin module(String name, String catalogue, String version) throws Exception {
+        String className = TextFixtureModule.class.getName();
         String resource = className.replace('.', '/') + ".class";
         Path jar = temporary.resolve(name + "-" + loaders.size() + ".jar");
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar));
@@ -151,7 +223,7 @@ class UltiToolsPluginTextWiringTest {
             output.write(input.readAllBytes());
             output.closeEntry();
             output.putNextEntry(new JarEntry("plugin.yml"));
-            output.write(("name: '" + name + "'\nversion: 1.0.0\napi-version: 700\nmain: " + className + "\n")
+            output.write(("name: '" + name + "'\nversion: " + version + "\napi-version: 700\nmain: " + className + "\n")
                     .getBytes(StandardCharsets.UTF_8));
             output.closeEntry();
             output.putNextEntry(new JarEntry("messages/en.yml"));

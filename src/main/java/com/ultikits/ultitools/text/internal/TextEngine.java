@@ -115,30 +115,51 @@ public final class TextEngine implements AutoCloseable {
                 prepared.loaded().catalogue(), diagnostics, prepared.loaded().shippedFiles()));
     }
 
-    /** Publishes accepted module resources, then emits the diagnostics deferred during construction. */
+    /** Publishes accepted module resources, retaining the prior owner until activation succeeds or rolls back. */
     public synchronized void publish(Prepared prepared, Object owner) {
         String namespace = prepared.loaded().catalogue().namespace();
         checkNamespace(namespace, prepared.pluginName());
         Published current = published.get(namespace);
-        if (current != null && current.owner() == owner) { // NOPMD - Ownership is concrete module-instance identity.
+        if (current != null && ownedBy(current, owner)) {
             return;
         }
         published.put(namespace, new Published(Objects.requireNonNull(owner, "owner"), prepared.pluginName(),
-                prepared.loaded().catalogue(), prepared));
+                prepared.loaded().catalogue(), prepared, current));
         prepared.loaded().diagnostics().forEach(logger::warning);
         loader.writeReferences(prepared.loaded(), prepared.overrideDirectory()).forEach(logger::warning);
     }
 
     /** Atomically publishes a prebuilt immutable catalogue, used by framework-internal fixtures. */
     public synchronized void publish(Catalogue catalogue, Object owner) {
+        Published current = published.get(catalogue.namespace());
+        Published previous = current != null && ownedBy(current, owner) ? current.previous() : current;
         published.put(catalogue.namespace(), new Published(Objects.requireNonNull(owner, "owner"),
-                catalogue.namespace(), catalogue, null));
+                catalogue.namespace(), catalogue, null, previous));
     }
 
-    /** Withdraws a namespace when its module unloads. */
+    /** Withdraws an unloading owner, including any retained snapshot of a successfully superseded copy. */
     public synchronized void withdraw(String namespace, Object owner) {
-        published.computeIfPresent(namespace, (key, current) ->
-                current.owner() == owner ? null : current); // NOPMD - Only the publishing instance owns this registration.
+        published.computeIfPresent(namespace, (key, current) -> ownedBy(current, owner) ? null
+                : current.withPrevious(removePreviousOwner(current.previous(), owner)));
+    }
+
+    /** Restores the prior catalogue only while the failed instance still owns the current publication. */
+    public synchronized void rollback(String namespace, Object owner) {
+        published.computeIfPresent(namespace, (key, current) -> ownedBy(current, owner) ? current.previous() : current);
+    }
+
+    private static boolean ownedBy(Published current, Object owner) {
+        return current.owner() == owner; // NOPMD - Only the publishing instance owns this registration.
+    }
+
+    private static @Nullable Published removePreviousOwner(@Nullable Published current, Object owner) {
+        if (current == null) {
+            return null;
+        }
+        if (ownedBy(current, owner)) {
+            return removePreviousOwner(current.previous(), owner);
+        }
+        return current.withPrevious(removePreviousOwner(current.previous(), owner));
     }
 
     /** Reloads a prepared catalogue by replacing the entire immutable snapshot. */
@@ -150,7 +171,8 @@ public final class TextEngine implements AutoCloseable {
         Prepared prepared = current.prepared();
         CatalogueLoader.Loaded loaded = loader.withOverrides(
                 loader.load(namespace, current.catalogue().sourceLocale(), prepared.codeSource()), prepared.overrideDirectory());
-        published.put(namespace, new Published(current.owner(), current.pluginName(), loaded.catalogue(), prepared));
+        published.put(namespace, new Published(current.owner(), current.pluginName(), loaded.catalogue(), prepared,
+                current.previous()));
         loaded.diagnostics().forEach(logger::warning);
     }
 
@@ -178,5 +200,10 @@ public final class TextEngine implements AutoCloseable {
         published.clear();
     }
 
-    private record Published(Object owner, String pluginName, Catalogue catalogue, @Nullable Prepared prepared) { }
+    private record Published(Object owner, String pluginName, Catalogue catalogue, @Nullable Prepared prepared,
+            @Nullable Published previous) {
+        Published withPrevious(@Nullable Published snapshot) {
+            return new Published(owner, pluginName, catalogue, prepared, snapshot);
+        }
+    }
 }

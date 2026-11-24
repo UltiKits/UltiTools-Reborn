@@ -12,17 +12,19 @@ datasource:
 
 # auto follows each player's client language; a locale such as en or zh forces all players.
 # auto 按玩家客户端语言显示；en、zh 等具体语言代码对全服强制生效。
+# A concrete language also supplies the automatic fallback unless a different fallback locale is explicit.
+# 具体 language 也是自动后备语言的来源；下方另写具体后备语言时以它为准。
 language: "auto"
-# Console language and fallback when a player's language has no translation.
-# 控制台语言，以及玩家语言缺少翻译时的后备语言。
-# auto chooses zh for Chinese system time-zone IDs (including their historical aliases), otherwise en.
-# auto 按中国系统时区 ID（含其旧别名）选择 zh，其他时区选择 en；不按 UTC 偏移判断。
-# Resolved at startup and on full /ul reload. Explicit locale codes bypass time-zone detection.
-# 仅在启动和完整 /ul reload 时解析；明确的语言代码不探测时区。
-# Cloud hosts/containers often use UTC and therefore English. Set zh here to choose Chinese.
-# 云主机和容器常用 UTC，因此默认英文；想要中文请在这里写 zh。
-# Existing forced language configurations without this key keep that language; auto mode uses time zone.
-# 已有强制语言配置缺少此键时沿用原语言；自动模式缺少此键时按时区选择。已有文件绝不改写。
+# Console language and fallback when a player's language has no translation; an explicit locale always wins.
+# 控制台语言，以及玩家缺少翻译时的后备语言；这里写具体语言时始终以它为准。
+# auto, blank or missing first inherits a concrete language above (zh-myserver uses its official base zh).
+# auto、空白或缺失时，先沿用上面的具体 language（zh-myserver 取官方前缀 zh）。
+# Only automatic/blank/missing language uses time zone: Chinese IDs/aliases choose zh, all others en.
+# 只有 language 也为自动、空白或缺失时才按时区：中国 ID/旧别名选 zh，其余 en，不按 UTC 偏移。
+# Resolved at startup and on full /ul reload. Explicit locales bypass time-zone detection.
+# 仅在启动和完整 /ul reload 时解析；具体语言不探测时区。已有配置文件绝不改写。
+# Cloud hosts/containers often use UTC and therefore English in automatic mode. Set zh here for Chinese.
+# 云主机和容器常用 UTC，自动模式下默认英文；想要中文请在这里写 zh。
 fallback-language: "auto"
 
 mysql:

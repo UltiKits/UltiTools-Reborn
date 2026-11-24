@@ -89,8 +89,10 @@ one-shot task may finish. This guarantee applies to the module-owned scheduler, 
 
 New installations use `language: auto` and `fallback-language: auto`. Players follow their current
 Minecraft client language; a concrete `language`, such as `en` or `zh`, forces all players instead.
-Console output and messages without a translation use the fallback. Automatic fallback uses the
-system time-zone **ID**, not its UTC offset: `Asia/Shanghai`, `Asia/Urumqi`, `Asia/Hong_Kong`,
+Console output and messages without a translation use the fallback. An automatic, blank or missing
+fallback first uses the concrete `language` (including the official prefix of a 6.x custom name).
+Only when `language` is also automatic, blank or missing does fallback use the system time-zone
+**ID**, not its UTC offset: `Asia/Shanghai`, `Asia/Urumqi`, `Asia/Hong_Kong`,
 `Asia/Macau`, `PRC`, `Asia/Chongqing`, `Asia/Chungking`, `Asia/Harbin`, `Asia/Kashgar`, `Hongkong`
 and `Asia/Macao` select `zh`; every other ID selects `en`. The result is resolved at startup and
 on a full `/ul reload`, not on each message. Startup reports the selected language and time-zone ID.
@@ -103,7 +105,10 @@ a translation. Explicit fallback codes always win. Existing files are not rewrit
 automatic mode without a fallback uses the time-zone rule above.
 
 Modules ship UTF-8 `messages/<locale>.yml` catalogues with stable dotted keys and MiniMessage values,
-and may declare `source-language: en` in their `plugin.yml` (English if omitted). Inject `Messages`
+and may declare `source-language: en` in their `plugin.yml` (English if omitted). Scalar keys and
+values are literal strings, including unquoted `Yes`, `null` and numbers; lists are not messages.
+Only `.yml` is read; use language-only files such as `zh.yml` unless adding regional variants.
+Inject `Messages`
 to render or send text per recipient; use `shared()` for shared objects. Lookup tries the requested
 language, configured fallback, module source language, then the key. Put only operator changes in
 `plugins/UltiTools/pluginConfig/<module>/messages/<locale>.yml`; framework overrides belong in
@@ -115,14 +120,17 @@ in new catalogues; use MiniMessage tags. While the legacy path coexists, its cus
 work there; new `Messages` resolve a custom configured name to its official prefix language
 (`zh-myserver` → `zh`, unmatched safe names → `en`) without importing the old file or adding a warning.
 
-中文补充：7.0 新装默认两个语言设置均为 `auto`；玩家按客户端语言显示，后备语言仅按上列系统时区
-ID 选择中文，其余使用英文（不是按 UTC 偏移判断）。云主机、容器常为 UTC，因而默认英文，与 6.x
+中文补充：7.0 新装默认两个语言设置均为 `auto`；玩家按客户端语言显示。后备设置为 `auto`、空白
+或缺失时，先沿用具体 `language`（自定义名称取官方前缀语言）；`language` 也为自动、空白或缺失时，
+才按上列系统时区 ID 选择中文，其余使用英文（不是按 UTC 偏移判断）。云主机、容器常为 UTC，因而默认英文，与 6.x
 出厂中文不同。想要中文，在 `plugins/UltiTools/config.yml` 写 `fallback-language: zh` 并执行完整
 `/ul reload`；显式语言优先，已有 `language: zh/en` 且未写后备语言的配置不会被新默认覆盖，配置文件
 也不会自动改写。时区选择只在启动和配置重载时解析，玩家运行中改客户端语言仍立即生效。
 模块随包使用 `messages/<语言>.yml`，服主在上级覆盖文件里只写需要修改的条目；`reference/` 是每次
 启动重写的只读参考，不要修改。模块重载会重读模块覆盖，框架覆盖暂需重启。6.x 语言文件与自定义
-名称不自动迁移；新目录的 `§`、`&` 不解释为颜色码。并存期间旧路径仍读取自定义文件；新引擎只按旧
+名称不自动迁移；新目录的 `§`、`&` 不解释为颜色码。语言键和值的标量均按原样文字读取，
+`Yes`、`null`、数字不必为避免 YAML 类型推断而加引号，列表不能作为消息。仅读取 UTF-8 的 `.yml`；
+提供 `zh_CN.yml` 等地区变体时也应提供 `zh.yml`。并存期间旧路径仍读取自定义文件；新引擎只按旧
 官方前缀选基础语言（`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不导入旧文件或新增告警。
 
 ### Add the Dependency

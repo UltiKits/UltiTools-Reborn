@@ -10,8 +10,11 @@ changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-
 7.0 introduces namespace-bound `Messages` and `LocaleResolver`. Modules ship UTF-8
 `messages/<locale>.yml` files containing stable dotted keys and MiniMessage values, optionally
 with `source-language` in their own `plugin.yml` (default `en`). Nested mappings and dotted keys
-are equivalent. Values must be strings; quote YAML boolean-like key segments such as `"yes"`
-and `"no"`. `§` and `&` colour codes are not interpreted in these new catalogues.
+are equivalent. Scalar keys and values are read as literal strings, so unquoted `yes`, `no`,
+`Yes`, `true`, `123`, `null` and `~` are not converted to YAML booleans, numbers or nulls.
+Lists and non-scalar keys are rejected with warnings; nested mappings still group dotted paths.
+Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is accepted.
+`§` and `&` colour codes are not interpreted in these new catalogues.
 
 - **New installations:** `language: auto` follows each player's current client locale.
   `fallback-language: auto` chooses `zh` for the system time-zone IDs `Asia/Shanghai`,
@@ -20,20 +23,27 @@ and `"no"`. `§` and `&` colour codes are not interpreted in these new catalogue
   `en`. UTC offset is deliberately irrelevant: `Asia/Singapore` and `Etc/GMT-8` still choose `en`.
   Startup and a successful full `/ul reload` resolve this once and report the selected language
   and reason. Player locale is never cached.
-- **Explicit choices:** `fallback-language: en`, `zh` or another locale bypasses time-zone
-  detection. A concrete `language` still forces that locale for players; console uses the
-  fallback. To choose Chinese on UTC-based hosts or containers, set `fallback-language: zh`
+- **Explicit choices:** `fallback-language: en`, `zh` or another locale always wins, regardless
+  of `language`, and bypasses time-zone detection. An automatic, blank or missing fallback first
+  inherits a concrete `language`; only an automatic, blank or missing `language` uses the time-zone
+  rule. Thus `language: en` with `fallback-language: auto` uses English for both players and console,
+  even in China. A custom language such as `zh-myserver` supplies its official base (`zh`).
+  To choose Chinese on UTC-based hosts or containers, set `fallback-language: zh`
   in `plugins/UltiTools/config.yml` and execute `/ul reload`.
 - **Existing configurations:** operator files are not rewritten. An existing concrete
   `language: zh` or `en` with no fallback keeps that language as its fallback, rather than
   inheriting the newly shipped default through Bukkit defaults. In automatic player mode,
   a missing fallback uses automatic time-zone selection. This means a new UTC installation
   defaults to English, unlike 6.x's shipped Chinese default; Chinese clients still receive
-  Chinese whenever their catalogue supplies it.
+  Chinese whenever their catalogue supplies it. If an operator removed `language` from an existing
+  configuration, 7.0 treats it as `auto`, not the former 6.x Chinese default; it does not restore
+  that key on disk.
 - **Lookup:** requested locale → fallback locale → module source locale → namespaced key;
   regional locales also try their language-only catalogue. Parameters use the requested
   rendering locale, even if the message text came from a fallback catalogue. Missing keys
-  warn once per key and requested locale.
+  warn once per key and requested locale. Ship a base catalogue such as `zh.yml` when supplying
+  `zh_CN.yml` or other regional variants; a regional-only language warns on load but is not selected
+  for other regions or language-only requests.
 - **Operator translations:** put only overrides in
   `plugins/UltiTools/pluginConfig/<module>/messages/<locale>.yml`, or
   `plugins/UltiTools/messages/<locale>.yml` for framework messages. New locale files add
@@ -53,13 +63,19 @@ and `"no"`. `§` and `&` colour codes are not interpreted in these new catalogue
 中文补充：7.0 的新装 `language` 与 `fallback-language` 均默认 `auto`。玩家跟随客户端语言；后备
 语言只按上述 11 个系统时区 ID 选 `zh`，其他选 `en`，不按时差猜测。云主机和容器常用 UTC，因此
 新装默认英文，与 6.x 出厂中文不同；想要中文只需写 `fallback-language: zh` 并执行完整 `/ul reload`。
-显式后备语言不探测时区，具体 `language` 仍全服强制，已有 `language: zh/en` 且没有后备键的配置
-继续沿用原语言，绝不改写服主文件。时区在启动和配置重载时解析，玩家语言每次投递时读取。
+具体后备语言始终优先、不探测时区；后备为 `auto`、空白或缺失时，先取具体 `language`，只有
+`language` 也是自动、空白或缺失时才按时区选。`language: en` 加后备 `auto` 在中国也让控制台用英文；
+`zh-myserver` 等自定义名称的后备取官方前缀语言 `zh`。已有配置继续沿用原语言，绝不改写服主文件。
+若服主从已有文件删去了 `language`，7.0 按 `auto` 处理，不再取 6.x 的中文默认，也不把该键写回。
+时区在启动和配置重载时解析，玩家语言每次投递时读取。
 翻译顺序为请求语言、后备语言、模块源语言、键本身；参数仍按请求语言格式化。服主只改上级覆盖
 文件，`reference/` 是框架每次启动重写的只读参考；模块覆盖可重载，框架覆盖暂需重启。6.x 的语言
 文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。
 并存期间旧路径照旧读取自定义文件；新 `Messages` 将自定义配置名按旧官方前缀归到基础语言
 （`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不读取该旧文件，也不新增非法 locale 警告。
+语言标量键和值一律按文字读取（`yes`、`No`、`123`、`null`、`~` 不做 YAML 类型转换），列表与非标量键
+拒绝并告警，嵌套映射仍用于点分键分组。仅读取 `.yml`，`.yaml` 会告警；文件必须为 UTF-8，允许 BOM。
+只带 `zh_CN.yml` 等地区文件却没有 `zh.yml` 时会提示补基础语言文件，不把地区变体回退规则改成模糊匹配。
 
 ## Declarative screens use the UI service (as of 7.0.0)
 

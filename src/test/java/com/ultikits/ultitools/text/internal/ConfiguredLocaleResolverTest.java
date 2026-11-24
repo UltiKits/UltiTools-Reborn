@@ -59,7 +59,7 @@ class ConfiguredLocaleResolverTest {
         language.set("zh");
         assertThat(resolver.fallback()).isEqualTo(Locale.CHINESE);
         fallback.set("auto");
-        assertThat(resolver.fallback()).isEqualTo(Locale.ENGLISH);
+        assertThat(resolver.fallback()).isEqualTo(Locale.CHINESE);
         assertThat(records).hasSize(3);
     }
 }

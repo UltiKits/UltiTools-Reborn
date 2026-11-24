@@ -126,8 +126,8 @@ public final class ConfiguredLocaleResolver implements LocaleResolver {
             warn("fallback-language", raw);
             return new Fallback(forced.orElse(Locale.ENGLISH), Optional.empty());
         }
-        // A 6.x forced configuration with no fallback must not inherit a new bundled default.
-        if ((raw == null || raw.isBlank()) && forced.isPresent()) {
+        // Automatic fallback follows a concrete language first, including retained 6.x custom-name prefixes.
+        if (forced.isPresent()) {
             return new Fallback(forced.orElseThrow(), Optional.empty());
         }
         if (automaticTimeZone == null) {

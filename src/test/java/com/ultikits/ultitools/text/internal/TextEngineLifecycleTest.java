@@ -41,7 +41,7 @@ class TextEngineLifecycleTest {
 
     @Test
     void prepare_isReadOnlyAndDefersDiagnosticsUntilPublish() throws Exception {
-        Path source = source("first", "greeting: Hello\nbad: 123\n");
+        Path source = source("first", "greeting: Hello\nbad: [invalid]\n");
         Path overrides = temporary.resolve("operator/messages");
         var prepared = engine.prepare("sample", "Sample", source.toUri().toURL(), overrides, Locale.ENGLISH);
         assertThat(engine.catalogue("sample")).isNull();
@@ -63,6 +63,37 @@ class TextEngineLifecycleTest {
         engine.withdraw("sample", older);
         assertThat(text()).isEqualTo("New");
         engine.withdraw("sample", newer);
+        assertThat(engine.catalogue("sample")).isNull();
+    }
+
+    @Test
+    void rollback_restoresThePriorSnapshotAfterReloadAndIgnoresOtherOwners() throws Exception {
+        Object older = new Object();
+        Object newer = new Object();
+        engine.publish(prepare("rollback-old", "greeting: Old\n"), older);
+        Catalogue original = engine.catalogue("sample");
+        engine.publish(prepare("rollback-new", "greeting: New\n"), newer);
+        engine.reloadOverrides("sample");
+        engine.rollback("sample", older);
+        assertThat(text()).isEqualTo("New");
+        engine.rollback("sample", newer);
+        assertThat(engine.catalogue("sample")).isSameAs(original);
+        assertThat(text()).isEqualTo("Old");
+        engine.withdraw("sample", older);
+        assertThat(engine.catalogue("sample")).isNull();
+    }
+
+    @Test
+    void successfulReplacement_releasesTheUnloadedOwnersRollbackSnapshot() throws Exception {
+        Object older = new Object();
+        Object newer = new Object();
+        engine.publish(prepare("success-old", "greeting: Old\n"), older);
+        engine.publish(prepare("success-new", "greeting: New\n"), newer);
+        engine.withdraw("sample", older);
+        assertThat(text()).isEqualTo("New");
+        engine.rollback("sample", newer);
+        assertThat(engine.catalogue("sample")).isNull();
+        engine.rollback("sample", newer);
         assertThat(engine.catalogue("sample")).isNull();
     }
 

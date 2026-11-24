@@ -4,24 +4,36 @@ import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.utils.CodeSourceLocations;
 import java.io.IOException;
 import java.net.URL;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.regex.Pattern;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
+import org.yaml.snakeyaml.nodes.Node;
+import org.yaml.snakeyaml.nodes.ScalarNode;
 
 /** Reads module-owned YAML resources without logging, publishing or writing files. */
 @ApiStatus.Internal
 public final class CatalogueLoader {
+    private static final Pattern LANGUAGE_FILE = Pattern.compile("[A-Za-z0-9_-]+\\.yml");
+
     /** Parsed entries, deferred diagnostics and unmodified shipped UTF-8 contents. */
     @ApiStatus.Internal
     public record Loaded(Catalogue catalogue, List<String> diagnostics, Map<String, String> shippedFiles) {
@@ -48,7 +60,9 @@ public final class CatalogueLoader {
                 diagnostics.add(source + ": " + failure.getMessage());
             }
         }
-        return new Loaded(parseFiles(namespace, sourceLocale, files, diagnostics), diagnostics, files);
+        Catalogue catalogue = parseFiles(namespace, sourceLocale, files, diagnostics);
+        warnMissingBaseLanguages(catalogue, files, diagnostics);
+        return new Loaded(catalogue, diagnostics, files);
     }
 
     /** Reads operator-owned overrides without creating or rewriting any operator file. */
@@ -74,7 +88,7 @@ public final class CatalogueLoader {
      */
     public List<String> writeReferences(Loaded shipped, Path overrideDirectory) {
         List<String> diagnostics = new ArrayList<>();
-        Path reference = overrideDirectory.resolve("reference");
+        Path reference = overrideDirectory.resolve("reference").toAbsolutePath().normalize();
         String header;
         try {
             header = readReferenceHeader();
@@ -85,12 +99,19 @@ public final class CatalogueLoader {
             return diagnostics;
         }
         shipped.shippedFiles().forEach((name, text) -> {
-            if (LocaleNames.parse(name.substring(0, name.length() - 4)).isPresent()) {
-                try {
-                    Files.writeString(reference.resolve(name), header + text, StandardCharsets.UTF_8);
-                } catch (IOException failure) {
-                    diagnostics.add(reference.resolve(name) + ": " + failure.getMessage());
-                }
+            if (!catalogueFile(name, reference + "/" + name, diagnostics)
+                    || LocaleNames.parse(name.substring(0, name.length() - 4)).isEmpty()) {
+                return;
+            }
+            Path target = reference.resolve(name).normalize();
+            if (!target.startsWith(reference)) {
+                diagnostics.add(target + ": Reference path escapes the reference directory");
+                return;
+            }
+            try {
+                Files.writeString(target, header + text, StandardCharsets.UTF_8);
+            } catch (IOException failure) {
+                diagnostics.add(target + ": " + failure.getMessage());
             }
         });
         return diagnostics;
@@ -109,11 +130,26 @@ public final class CatalogueLoader {
         try (var paths = Files.list(reference)) {
             for (Path path : paths.filter(Files::isRegularFile).toList()) {
                 String name = path.getFileName().toString();
-                if (name.endsWith(".yml") && !shipped.containsKey(name)) {
+                if (LANGUAGE_FILE.matcher(name).matches() && !shipped.containsKey(name)) {
                     Files.delete(path);
                 }
             }
         }
+    }
+
+    private static boolean catalogueFile(String name, String display, List<String> diagnostics) {
+        if (name.endsWith(".yaml")) {
+            diagnostics.add(display + ": Unsupported catalogue extension; only .yml files are read");
+            return false;
+        }
+        if (!name.endsWith(".yml")) {
+            return false;
+        }
+        if (!LANGUAGE_FILE.matcher(name).matches()) {
+            diagnostics.add(display + ": Invalid catalogue filename; expected letters, digits, '_' or '-' followed by .yml");
+            return false;
+        }
+        return true;
     }
 
     private static void readDirectory(Path directory, Map<String, String> files, List<String> diagnostics)
@@ -123,9 +159,12 @@ public final class CatalogueLoader {
         }
         try (var paths = Files.list(directory)) {
             for (Path path : paths.filter(Files::isRegularFile).sorted().toList()) {
-                if (path.getFileName().toString().endsWith(".yml")) {
+                String name = path.getFileName().toString();
+                if (catalogueFile(name, path.toString(), diagnostics)) {
                     try {
-                        files.put(path.getFileName().toString(), Files.readString(path, StandardCharsets.UTF_8));
+                        files.put(name, Files.readString(path, StandardCharsets.UTF_8));
+                    } catch (CharacterCodingException invalidEncoding) {
+                        diagnostics.add(path + ": Catalogue files must be UTF-8");
                     } catch (IOException failure) {
                         diagnostics.add(path + ": " + failure.getMessage());
                     }
@@ -136,18 +175,44 @@ public final class CatalogueLoader {
 
     private static void readJar(Path path, Map<String, String> files, List<String> diagnostics) throws IOException {
         try (JarFile jar = new JarFile(path.toFile())) {
-            for (var entry : jar.stream().filter(entry -> !entry.isDirectory()).sorted(
-                    java.util.Comparator.comparing(java.util.jar.JarEntry::getName)).toList()) {
+            for (var entry : jar.stream().filter(entry -> !entry.isDirectory())
+                    .sorted(Comparator.comparing(JarEntry::getName)).toList()) {
                 String name = entry.getName();
-                if (name.startsWith("messages/") && name.endsWith(".yml")
-                        && name.indexOf('/', "messages/".length()) < 0) {
-                    try (var input = jar.getInputStream(entry)) {
-                        files.put(name.substring("messages/".length()), new String(input.readAllBytes(), StandardCharsets.UTF_8));
-                    } catch (IOException failure) {
-                        diagnostics.add(path + "!/" + name + ": " + failure.getMessage());
-                    }
+                if (!name.startsWith("messages/")) {
+                    continue;
+                }
+                String file = name.substring("messages/".length());
+                // Normal subdirectories are not catalogues; traversal-shaped names must still be diagnosed.
+                if (file.contains("/") && !file.contains("..")) {
+                    continue;
+                }
+                String display = path + "!/" + name;
+                if (!catalogueFile(file, display, diagnostics)) {
+                    continue;
+                }
+                try (var input = jar.getInputStream(entry)) {
+                    files.put(file, StandardCharsets.UTF_8.newDecoder()
+                            .decode(ByteBuffer.wrap(input.readAllBytes())).toString());
+                } catch (CharacterCodingException invalidEncoding) {
+                    diagnostics.add(display + ": Catalogue files must be UTF-8");
+                } catch (IOException failure) {
+                    diagnostics.add(display + ": " + failure.getMessage());
                 }
             }
+        }
+    }
+
+    private static void warnMissingBaseLanguages(Catalogue catalogue, Map<String, String> files,
+            List<String> diagnostics) {
+        List<String> missing = files.keySet().stream()
+                .map(file -> LocaleNames.parse(file.substring(0, file.length() - 4)))
+                .flatMap(Optional::stream).filter(locale -> !locale.getCountry().isEmpty())
+                .map(locale -> Locale.of(locale.getLanguage())).distinct()
+                .filter(locale -> !catalogue.hasLocale(locale)).map(locale -> "messages/" + locale.getLanguage() + ".yml")
+                .sorted().toList();
+        if (!missing.isEmpty()) {
+            diagnostics.add(catalogue.namespace() + ": Regional catalogues lack a base language; provide "
+                    + String.join(", ", missing) + " for language-only and other-region requests");
         }
     }
 
@@ -159,7 +224,7 @@ public final class CatalogueLoader {
     private static Catalogue parseFiles(String namespace, Locale sourceLocale, Map<String, String> files,
             List<String> diagnostics, @Nullable Catalogue shipped) {
         Catalogue.Builder builder = new Catalogue.Builder(namespace, sourceLocale);
-        java.util.Set<Locale> loaded = new java.util.HashSet<>();
+        Set<Locale> loaded = new HashSet<>();
         files.forEach((file, text) -> {
             var locale = LocaleNames.parse(file.substring(0, file.length() - 4));
             if (locale.isEmpty()) {
@@ -179,12 +244,19 @@ public final class CatalogueLoader {
         return builder.build();
     }
 
-    private static java.util.Optional<Map<String, String>> parseFile(String namespace, String file, String text,
+    private static Optional<Map<String, String>> parseFile(String namespace, String file, String text,
             List<String> diagnostics) {
         try {
             LoaderOptions options = new LoaderOptions();
             options.setAllowDuplicateKeys(false);
-            Object root = new Yaml(new SafeConstructor(options)).load(text);
+            SafeConstructor strings = new SafeConstructor(options) {
+                @Override
+                protected Object constructObject(Node node) {
+                    // Message scalars are text, including explicit YAML scalar tags; collection nodes retain their shape.
+                    return node instanceof ScalarNode scalar ? constructScalar(scalar) : super.constructObject(node);
+                }
+            };
+            Object root = new Yaml(strings).load(text);
             Map<String, String> values = new LinkedHashMap<>();
             if (root != null) {
                 if (!(root instanceof Map<?, ?> mapping)) {
@@ -192,10 +264,10 @@ public final class CatalogueLoader {
                 }
                 flatten(namespace, file, "", mapping, values, diagnostics);
             }
-            return java.util.Optional.of(values);
+            return Optional.of(values);
         } catch (RuntimeException malformed) {
             diagnostics.add(file + ": " + malformed.getMessage());
-            return java.util.Optional.empty();
+            return Optional.empty();
         }
     }
 

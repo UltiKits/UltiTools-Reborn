@@ -83,10 +83,10 @@ public final class MessageRenderer {
     private TagResolver argumentResolver(Arg arg, Locale locale, MessageKey key) {
         return TagResolver.resolver(arg.name(), (arguments, context) -> {
             try {
-                return Tag.inserting(formatArgument(arg, locale, arguments, context));
+                return Tag.selfClosingInserting(formatArgument(arg, locale, arguments, context));
             } catch (RuntimeException malformed) {
                 reportFormat(key, locale, arg.name(), malformed);
-                return Tag.inserting(safeDefault(arg, locale));
+                return Tag.selfClosingInserting(safeDefault(arg, locale));
             }
         });
     }

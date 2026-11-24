@@ -383,6 +383,14 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         }
     }
 
+    /** Restores the prior message catalogue when an accepted candidate subsequently fails to load. */
+    @ApiStatus.Internal
+    public final void rollbackMessagePublication() {
+        if (textEngine != null && preparedMessages != null) {
+            textEngine.rollback(preparedMessages.loaded().catalogue().namespace(), this);
+        }
+    }
+
     /**
      * Diagnoses obsolete language declarations once after the load gates accept this instance.
      * Uses the module's own code source, not disk files or an overridable {@code supported()}.
@@ -2415,9 +2423,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * with it: an official code such as {@code zh}, or the name of an operator's custom language
      * file such as {@code zh-myserver}. Messages come from {@code lang/<name>.*} in this module's
      * folder when that file exists, and from the official language {@link #getLanguageCode()}
-     * returns for every key the file lacks.
+     * returns for every key the file lacks. When the setting is {@code auto}, blank or missing,
+     * this legacy-language seam returns the resolved fallback's base language code instead.
+     * A concrete configured name, including an operator's custom name, is returned unchanged.
      *
-     * @return the configured language name, or {@code null} if none is configured
+     * @return the configured language name, or the resolved fallback's base language code in automatic mode
      * @since 6.3.0
      */
     public final String getConfiguredLanguage() {
