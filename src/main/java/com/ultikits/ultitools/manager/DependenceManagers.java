@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.item.impl.ItemServices;
 import com.ultikits.ultitools.scheduling.Scheduler;
@@ -148,6 +149,7 @@ public class DependenceManagers {
      */
     public void closeContext() {
         if (context != null) {
+            CommandRuntime.awaitAsyncCommands(context.getSingletonValues());
             context.close();
         }
     }

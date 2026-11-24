@@ -52,7 +52,7 @@ class CommandPaperSchedulerTest {
     @BeforeEach
     void setUp() {
         server = MockBukkit.mock();
-        player = server.addPlayer();
+        player = spy(server.addPlayer());
         framework = new FrameworkSchedulerTestSession();
         var scheduler = spy(new RecordingScheduler(framework.scheduler()));
         TaskContext async = spy(scheduler.async());
@@ -111,6 +111,23 @@ class CommandPaperSchedulerTest {
         assertThat(executor.interrupted).isFalse();
         assertThat(executor.onTickThread).isFalse();
         assertThat(executor.finished.getCount()).isZero();
+    }
+
+    @Test
+    void realEngineRetiresTheDisconnectedPlayersWatcherWithoutInterruptingTheBody() throws Exception {
+        assertThat(CommandTestSupport.dispatch(executor, player, null, "probe", new String[] {"slow"})).isTrue();
+        server.getScheduler().performOneTick();
+        assertThat(executor.started.await(5, TimeUnit.SECONDS)).isTrue();
+        player.disconnect();
+        // MockBukkit disconnect does not retire entities. Its backend checks isValid at delivery;
+        // explicitly supply that retirement signal without replacing the real engine or queue.
+        doReturn(false).when(player).isValid();
+        server.getScheduler().performTicks(20);
+        verify(messages, never()).send(player, Text.of(CommandKeys.TIMEOUT));
+        assertThat(watchdog.get().state()).isEqualTo(TaskState.RETIRED);
+        executor.release.countDown();
+        body.get().completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertThat(executor.interrupted).isFalse();
     }
 
     @Test

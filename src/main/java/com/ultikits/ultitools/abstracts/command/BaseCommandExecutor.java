@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -84,6 +86,13 @@ public abstract class BaseCommandExecutor {
     
     private final BiMap<String, Method> mappings = HashBiMap.create();
     private final Set<String> invalidProcessingKeys = ConcurrentHashMap.newKeySet();
+    private final Object asyncCommandsMonitor = new Object();
+    private int asyncCommands;
+    private boolean asyncUnloading;
+    private boolean asyncUnloadWaitFinished;
+    private long asyncUnloadDeadline;
+    /** Per-executor test seam; production always starts with the ten-second budget. */
+    Duration asyncUnloadWait = Duration.ofSeconds(10);
     
     @Getter
     private final ValidatorChain validatorChain;
@@ -247,6 +256,8 @@ public abstract class BaseCommandExecutor {
     @PreDestroy
     @SuppressWarnings("PMD.UnusedPrivateMethod")
     private void unregisterValidatorsFromPlayerCache() {
+        // Reflection does not promise an order between this hook and the separate wait hook.
+        awaitAsyncCommands();
         List<BaseCommandExecutor> otherActive = leaveDispatchedExecutors(this);
         // Identity, not equals: a module's own validator subclass may define equals, and two
         // distinct instances must each be released.
@@ -268,6 +279,82 @@ public abstract class BaseCommandExecutor {
                 UsageLockValidator lock = (UsageLockValidator) candidate;
                 lock.releasePlayerCacheRegistration();
                 lock.clearAllLocks();
+            }
+        }
+    }
+
+    /**
+     * Waits once, for at most ten seconds, for accepted asynchronous invocations and their
+     * completion hooks. Never cancels or interrupts a command body. Managers call this before
+     * releasing module resources or the framework scheduler; the container hook also covers
+     * executors owned by a directly constructed container.
+     *
+     * @since 7.0.0
+     */
+    @PreDestroy
+    @ApiStatus.Internal
+    public final void awaitAsyncCommands() {
+        synchronized (asyncCommandsMonitor) {
+            if (asyncUnloadWaitFinished) {
+                return;
+            }
+            if (!asyncUnloading) {
+                asyncUnloading = true;
+                asyncUnloadDeadline = System.nanoTime() + asyncUnloadWait.toNanos();
+            }
+            waitForAsyncCommands();
+            if (!asyncUnloadWaitFinished && asyncCommands > 0) {
+                Logger.getLogger(BaseCommandExecutor.class.getName()).log(Level.WARNING,
+                        "Async command unload wait expired for {0}: {1} invocation(s); work continues in the background",
+                        new Object[] {getClass().getName(), asyncCommands});
+            }
+            asyncUnloadWaitFinished = true;
+        }
+    }
+
+    private void waitForAsyncCommands() {
+        while (asyncCommands > 0) {
+            long remaining = asyncUnloadDeadline - System.nanoTime();
+            if (remaining <= 0) {
+                return;
+            }
+            try {
+                TimeUnit.NANOSECONDS.timedWait(asyncCommandsMonitor, remaining);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private void submitAsyncCommand(Runnable body) {
+        synchronized (asyncCommandsMonitor) {
+            if (asyncUnloading) {
+                throw new RejectedExecutionException("Command executor is unloading: " + getClass().getName());
+            }
+            // Reserve before submission: a worker may finish before TaskContext.run returns.
+            asyncCommands++;
+        }
+        AtomicBoolean finished = new AtomicBoolean();
+        try {
+            CommandRuntime.scheduler().async().run(() -> {
+                try {
+                    body.run();
+                } finally {
+                    finishAsyncCommand(finished);
+                }
+            });
+        } catch (RuntimeException | Error refused) {
+            finishAsyncCommand(finished);
+            throw refused;
+        }
+    }
+
+    private void finishAsyncCommand(AtomicBoolean finished) {
+        if (finished.compareAndSet(false, true)) {
+            synchronized (asyncCommandsMonitor) {
+                asyncCommands--;
+                asyncCommandsMonitor.notifyAll();
             }
         }
     }
@@ -752,7 +839,7 @@ public abstract class BaseCommandExecutor {
             // this runnable in another one -- that "wrap and re-dispatch" shape is what
             // produced the double async dispatch this replaces, on the DEFAULT path of every
             // @AsyncCommand (timeout()'s default is 30).
-            CommandRuntime.scheduler().async().run(runnable);
+            submitAsyncCommand(runnable);
         });
 
         if (asyncCommand != null && asyncCommand.timeout() > 0) {

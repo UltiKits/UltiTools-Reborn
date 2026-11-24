@@ -48,6 +48,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.abstracts.command.ConfigBoundCooldownState;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.abstracts.command.validation.validators.CooldownValidator;
@@ -869,6 +870,11 @@ public class PluginManager {
         // catching a BukkitTask.cancel() Error) must not skip any other registry's own
         // cleanup. A step's own failure is logged via runUnregisterStep, not rethrown, so it
         // cannot mask a later step's failure either.
+        runUnregisterStep(plugin, "wait for async commands", () -> {
+            if (plugin.getContext() != null) {
+                CommandRuntime.awaitAsyncCommands(plugin.getContext().getSingletonValues());
+            }
+        });
         runUnregisterStep(plugin, "cancel @Scheduled tasks", () -> {
             if (taskManager != null) {
                 taskManager.cancelAll(plugin);

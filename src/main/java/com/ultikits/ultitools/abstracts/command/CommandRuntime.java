@@ -4,7 +4,10 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import com.ultikits.ultitools.text.Messages;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Objects;
+import java.util.Set;
 import org.jetbrains.annotations.ApiStatus;
 
 /** Framework services for executors constructed outside the root container. */
@@ -40,6 +43,20 @@ public final class CommandRuntime {
     public static Scheduler scheduler() {
         Services override = testServices;
         return override == null ? FrameworkScheduling.scheduler() : override.scheduler();
+    }
+
+    /**
+     * Drains instantiated command executors before their container's other resources are released.
+     * Aliases of the same bean are visited only once; no lazy beans are constructed.
+     * @param beans the container's existing singleton values
+     */
+    public static void awaitAsyncCommands(Iterable<?> beans) {
+        Set<BaseCommandExecutor> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Object bean : beans) {
+            if (bean instanceof BaseCommandExecutor executor && seen.add(executor)) {
+                executor.awaitAsyncCommands();
+            }
+        }
     }
 
     /**
