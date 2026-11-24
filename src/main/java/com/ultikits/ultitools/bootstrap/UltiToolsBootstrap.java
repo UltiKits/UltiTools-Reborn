@@ -25,7 +25,6 @@ import io.papermc.paper.plugin.bootstrap.PluginProviderContext;
  */
 @ApiStatus.Internal
 public final class UltiToolsBootstrap implements PluginBootstrap {
-    private static final Logger LOGGER = Logger.getLogger("UltiTools");
     private @Nullable BootstrapResult result;
     private @Nullable Throwable bootstrapFailure;
 
@@ -33,22 +32,26 @@ public final class UltiToolsBootstrap implements PluginBootstrap {
     public void bootstrap(BootstrapContext context) {
         result = null;
         bootstrapFailure = null;
+        Logger logger = null;
         try {
-            result = prepare(context.getDataDirectory().toFile());
+            logger = BootstrapLogger.paper(context.getLogger());
+            result = prepare(context.getDataDirectory().toFile(), logger);
         } catch (VirtualMachineError failure) {
             throw failure;
         } catch (Throwable failure) { // NOPMD - a module failure must never abort the framework bootstrap
             bootstrapFailure = failure;
             // Do not construct transactions again here: their server-root resolution may have failed.
-            ModuleBootstraps.logFailure(LOGGER,
-                    "[UltiTools] Failed to prepare module bootstrap; the framework will be disabled during enable.", failure);
+            if (logger != null) {
+                ModuleBootstraps.logFailure(logger,
+                        "[UltiTools] Failed to prepare module bootstrap; the framework will be disabled during enable.", failure);
+            }
         }
     }
 
-    private BootstrapResult prepare(File dataFolder) {
+    private BootstrapResult prepare(File dataFolder, Logger logger) {
         ModuleFileTransactions transactions = new ModuleFileTransactions(dataFolder);
         ModuleJarAdmission admission = new ModuleJarAdmission();
-        URL serverJar = ModuleClassPath.serverJarOf(LOGGER);
+        URL serverJar = ModuleClassPath.serverJarOf(logger);
         IOException classPathFailure = null;
         URL[] urls;
         try {
@@ -59,10 +62,10 @@ public final class UltiToolsBootstrap implements PluginBootstrap {
             urls = serverJar == null ? new URL[0] : new URL[] {serverJar};
         }
         ModuleClassLoader loader = ModuleClassLoader.create(urls, getClass().getClassLoader());
-        ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission, loader, LOGGER);
+        ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission, loader, logger);
         // Early output is English only: neither the language dictionary nor panel capture exists yet.
         int moduleJars = urls.length - (serverJar == null ? 0 : 1);
-        LOGGER.info(String.format("[UltiTools] Bootstrap: processed pending module changes; %d module JAR(s) "
+        logger.info(String.format("[UltiTools] Bootstrap: processed pending module changes; %d module JAR(s) "
                 + "on the module class path; %d module bootstrap(s) ran, %d failed.", moduleJars, run.attempted, run.failures.size()));
         return new BootstrapResult(transactions, admission, loader, classPathFailure, run.failures, run.attempted);
     }

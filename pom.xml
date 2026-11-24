@@ -831,8 +831,13 @@
             <version>7.1.0</version>
             <scope>provided</scope>
         </dependency>
-        <!-- Paper supplies slf4j at runtime; the framework needs no direct compile declaration.
-             Paper 在运行时提供 slf4j；框架无需直接编译依赖声明。 -->
+        <!-- The bootstrap JUL bridge calls Paper's ComponentLogger directly. -->
+        <dependency>
+            <groupId>net.kyori</groupId>
+            <artifactId>adventure-text-logger-slf4j</artifactId>
+            <version>5.2.0</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>com.networknt</groupId>
             <artifactId>json-schema-validator</artifactId>

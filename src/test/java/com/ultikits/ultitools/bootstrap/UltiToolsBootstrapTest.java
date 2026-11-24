@@ -7,6 +7,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
@@ -29,6 +30,7 @@ import com.ultikits.ultitools.utils.ModuleFileTransactions;
 
 import io.papermc.paper.plugin.bootstrap.BootstrapContext;
 import io.papermc.paper.plugin.bootstrap.PluginProviderContext;
+import net.kyori.adventure.text.logger.slf4j.ComponentLogger;
 
 class UltiToolsBootstrapTest {
     @TempDir Path server;
@@ -40,6 +42,7 @@ class UltiToolsBootstrapTest {
     private BootstrapContext context(Path data) {
         BootstrapContext context = mock(BootstrapContext.class);
         when(context.getDataDirectory()).thenReturn(data);
+        when(context.getLogger()).thenReturn(mock(ComponentLogger.class));
         return context;
     }
 
@@ -73,38 +76,27 @@ class UltiToolsBootstrapTest {
                 Collections.singletonMap("fixture.Good", BootstrapFixtures.hook("fixture.Good", null)));
         BootstrapFixtures.jar(modules.resolve("legacy.jar"), BootstrapFixtures.descriptor("Legacy", null).replace("700", "630"),
                 Collections.emptyMap());
-        List<LogRecord> logs = new ArrayList<>();
-        Handler capture = new Handler() {
-            @Override public void publish(LogRecord record) { logs.add(record); }
-            @Override public void flush() { /* No buffered output. */ }
-            @Override public void close() { /* No owned resource. */ }
-        };
-        Logger logger = Logger.getLogger("UltiTools");
-        logger.addHandler(capture);
-        try {
-            UltiToolsBootstrap bootstrap = new UltiToolsBootstrap();
-            bootstrap.bootstrap(context(data));
-            BootstrapResult result = bootstrap.result();
-            assertThat(result).isNotNull();
-            try (ModuleClassLoader loader = result.classLoader()) {
-                assertThat(result.bootstrapsRun()).isEqualTo(2);
-                assertThat(result.bootstrapFailures()).containsOnlyKeys(failed);
-                assertThat(result.admission().inspect(failed.toFile()).getBootstrapFailure())
-                        .isSameAs(result.bootstrapFailures().get(failed));
-                assertThat(loader.getURLs()).contains(failed.toUri().toURL());
-                assertThat(logs).anySatisfy(record -> assertThat(record.getMessage()).isEqualTo(
-                        "[UltiTools] Bootstrap: processed pending module changes; 2 module JAR(s) on the module class path; "
-                                + "2 module bootstrap(s) ran, 1 failed."));
-                assertThat(logs.stream().filter(record -> record.getMessage().startsWith("[UltiTools] Module 'bad.jar'")))
-                        .singleElement().satisfies(record -> {
-                            assertThat(record.getMessage()).isEqualTo("[UltiTools] Module 'bad.jar' failed in its bootstrap phase "
-                                    + "(fixture.Bad): java.lang.NoClassDefFoundError: fixture failure -- the module is not loaded "
-                                    + "at this start. Update rollback is checked during enable; check the enable log before changing any module JARs.");
-                            assertThat(record.getThrown()).isInstanceOf(NoClassDefFoundError.class);
-                        });
-            }
-        } finally {
-            logger.removeHandler(capture);
+        ComponentLogger logger =
+                mock(ComponentLogger.class);
+        BootstrapContext context = context(data);
+        when(context.getLogger()).thenReturn(logger);
+        UltiToolsBootstrap bootstrap = new UltiToolsBootstrap();
+        bootstrap.bootstrap(context);
+        BootstrapResult result = bootstrap.result();
+        assertThat(result).isNotNull();
+        try (ModuleClassLoader loader = result.classLoader()) {
+            assertThat(result.bootstrapsRun()).isEqualTo(2);
+            assertThat(result.bootstrapFailures()).containsOnlyKeys(failed);
+            assertThat(result.admission().inspect(failed.toFile()).getBootstrapFailure())
+                    .isSameAs(result.bootstrapFailures().get(failed));
+            assertThat(loader.getURLs()).contains(failed.toUri().toURL());
+            verify(logger).info(
+                    "[UltiTools] Bootstrap: processed pending module changes; 2 module JAR(s) on the module class path; "
+                            + "2 module bootstrap(s) ran, 1 failed.", (Throwable) null);
+            verify(logger).error("[UltiTools] Module 'bad.jar' failed in its bootstrap phase "
+                    + "(fixture.Bad): java.lang.NoClassDefFoundError: fixture failure -- the module is not loaded "
+                    + "at this start. Update rollback is checked during enable; check the enable log before changing any module JARs.",
+                    result.bootstrapFailures().get(failed));
         }
     }
 
@@ -168,7 +160,7 @@ class UltiToolsBootstrapTest {
     @Test
     void invalidServerRoot_neverEscapesBootstrapOrRebuildsTheBrokenTransactions() {
         UltiToolsBootstrap bootstrap = new UltiToolsBootstrap();
-        assertThatCode(() -> bootstrap.bootstrap(context(java.nio.file.Paths.get("/UltiTools"))))
+        assertThatCode(() -> bootstrap.bootstrap(context(Path.of("/UltiTools"))))
                 .doesNotThrowAnyException();
         assertThat(bootstrap.result()).isNotNull();
         assertThat(bootstrap.result().classPathFailure()).hasCauseInstanceOf(IllegalStateException.class);

@@ -4,9 +4,9 @@ import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Path;
 import java.security.CodeSource;
 import java.util.HashSet;
-import java.util.Set;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -42,7 +42,7 @@ final class ModuleBootstraps {
             }
             attempted++;
             try {
-                runOne(module.getKey(), metadata, bootstrapper, loader);
+                runOne(module.getKey(), metadata, bootstrapper, loader, logger);
             } catch (VirtualMachineError failure) {
                 throw failure;
             } catch (Throwable cause) { // NOPMD - a module failure must never abort the framework bootstrap
@@ -59,7 +59,7 @@ final class ModuleBootstraps {
     }
 
     private static void runOne(Path jar, PluginYmlReader.PluginYmlInfo metadata, String className,
-                               ClassLoader loader) throws Throwable {
+                               ClassLoader loader, Logger logger) throws Throwable {
         Thread thread = Thread.currentThread();
         ClassLoader previous = thread.getContextClassLoader();
         try {
@@ -73,13 +73,13 @@ final class ModuleBootstraps {
             ModuleBootstrap hook = construct(type);
             String declaredName = metadata.getName();
             String name = declaredName == null ? jar.getFileName().toString() : declaredName;
-            hook.bootstrap(new Context(name, jar));
+            hook.bootstrap(new Context(name, jar, logger));
         } finally {
             thread.setContextClassLoader(previous);
         }
     }
 
-    private static ModuleBootstrap construct(Class<?> type) throws Throwable { // NOPMD - preserve the module constructor's original failure
+    private static ModuleBootstrap construct(Class<?> type) throws Throwable {
         try {
             return type.asSubclass(ModuleBootstrap.class).getConstructor().newInstance();
         } catch (InvocationTargetException failure) {
@@ -145,10 +145,10 @@ final class ModuleBootstraps {
         private final Path jar;
         private final Logger logger;
 
-        Context(String name, Path jar) {
+        Context(String name, Path jar, Logger parent) {
             this.name = name;
             this.jar = jar;
-            this.logger = Logger.getLogger("UltiTools/" + name);
+            this.logger = BootstrapLogger.module(parent, name);
         }
 
         @Override public String moduleName() { return name; }

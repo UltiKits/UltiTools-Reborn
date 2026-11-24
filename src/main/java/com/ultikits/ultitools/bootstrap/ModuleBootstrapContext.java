@@ -14,6 +14,6 @@ public interface ModuleBootstrapContext {
     /** @return the absolute, normalized path of this module's JAR */
     Path moduleJar();
 
-    /** @return this module's early-start logger */
+    /** @return this module's early-start JUL logger, forwarded to Paper's bootstrap logger */
     Logger logger();
 }
