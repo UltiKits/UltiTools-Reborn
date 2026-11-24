@@ -84,6 +84,24 @@ class FrameworkKeyLiteralScanTest {
     }
 
     @Test
+    void constantNamespaces_areResolvedBeforeValidatingTheirKeys() throws Exception {
+        assertThat(scan("Namespace.java", """
+                class Namespace {
+                    static final String NS = "ulti" + "tools";
+                    Object message = MessageKey.of(NS, "ui.ok");
+                }
+                """))
+                .containsExactly(FrameworkKeys.UI_OK);
+        assertThatThrownBy(() -> scan("Dynamic.java", """
+                class Dynamic {
+                    static final String NS = "ultitools";
+                    Object message(String path) { return MessageKey.of(NS, path); }
+                }
+                """))
+                .isInstanceOf(AssertionError.class).hasMessageContaining("Dynamic.java:3", "non-constant framework key");
+    }
+
+    @Test
     void parameterShadowingAConstant_isStillARuntimeKey() {
         assertThatThrownBy(() -> scan("Shadow.java", """
                 class Shadow {
@@ -115,8 +133,9 @@ class FrameworkKeyLiteralScanTest {
             JavacTask task = (JavacTask) compiler.getTask(null, manager, new DiagnosticCollector<>(),
                     List.of("-proc:none"), null, List.of(file));
             CompilationUnitTree unit = task.parse().iterator().next();
-            List<MethodInvocationTree> calls = frameworkCalls(unit);
-            if (calls.stream().anyMatch(call -> !(call.getArguments().get(1) instanceof LiteralTree))) {
+            List<MethodInvocationTree> calls = keyCalls(unit);
+            if (calls.stream().anyMatch(call -> needsSymbols(call.getArguments().getFirst())
+                    || needsSymbols(call.getArguments().get(1)))) {
                 // Maven already compiles real sources. Here javac supplies exact constant-value and scope semantics;
                 // fixtures deliberately leave unrelated symbols unresolved and annotation processing stays disabled.
                 task.analyze();
@@ -124,6 +143,10 @@ class FrameworkKeyLiteralScanTest {
             Set<MessageKey> keys = new HashSet<>();
             Trees trees = Trees.instance(task);
             for (MethodInvocationTree call : calls) {
+                String namespace = namespace(call.getArguments().getFirst(), unit, trees);
+                if (!MessageKey.FRAMEWORK_NAMESPACE.equals(namespace)) {
+                    continue;
+                }
                 String path = constant(call.getArguments().get(1), unit, trees);
                 long position = trees.getSourcePositions().getStartPosition(unit, call);
                 assertThat(path).as("%s:%s: non-constant framework key: %s",
@@ -134,11 +157,11 @@ class FrameworkKeyLiteralScanTest {
         }
     }
 
-    private static List<MethodInvocationTree> frameworkCalls(CompilationUnitTree unit) {
+    private static List<MethodInvocationTree> keyCalls(CompilationUnitTree unit) {
         List<MethodInvocationTree> calls = new ArrayList<>();
         new TreeScanner<Void, Void>() {
             @Override public Void visitMethodInvocation(MethodInvocationTree call, Void ignored) {
-                if (isFrameworkCall(call)) {
+                if (isKeyFactoryCall(call)) {
                     calls.add(call);
                 }
                 return super.visitMethodInvocation(call, ignored);
@@ -147,18 +170,23 @@ class FrameworkKeyLiteralScanTest {
         return calls;
     }
 
-    private static boolean isFrameworkCall(MethodInvocationTree call) {
+    private static boolean isKeyFactoryCall(MethodInvocationTree call) {
         String method = call.getMethodSelect().toString();
-        if (!(method.equals("MessageKey.of") || method.endsWith(".MessageKey.of"))
-                || call.getArguments().size() != 2) {
-            return false;
-        }
-        ExpressionTree namespace = call.getArguments().getFirst();
-        if (namespace instanceof LiteralTree literal) {
-            return MessageKey.FRAMEWORK_NAMESPACE.equals(literal.getValue());
-        }
-        String name = namespace.toString();
+        return (method.equals("MessageKey.of") || method.endsWith(".MessageKey.of"))
+                && call.getArguments().size() == 2;
+    }
+
+    private static boolean needsSymbols(ExpressionTree tree) {
+        return !(tree instanceof LiteralTree) && !isFrameworkNamespace(tree);
+    }
+
+    private static boolean isFrameworkNamespace(ExpressionTree tree) {
+        String name = tree.toString();
         return name.equals("MessageKey.FRAMEWORK_NAMESPACE") || name.endsWith(".MessageKey.FRAMEWORK_NAMESPACE");
+    }
+
+    private static String namespace(ExpressionTree tree, CompilationUnitTree unit, Trees trees) {
+        return isFrameworkNamespace(tree) ? MessageKey.FRAMEWORK_NAMESPACE : constant(tree, unit, trees);
     }
 
     private static String constant(ExpressionTree tree, CompilationUnitTree unit, Trees trees) {
