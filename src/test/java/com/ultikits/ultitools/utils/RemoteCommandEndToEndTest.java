@@ -391,7 +391,7 @@ class RemoteCommandEndToEndTest {
         server.getCommandMap().register("ultitools", new Command("ulticloud") {
             @Override public boolean execute(CommandSender sender, String label, String[] args) {
                 assertThat(Bukkit.isPrimaryThread()).isTrue();
-                return cloud.onCommand(sender, this, label, args);
+                return com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(cloud, sender, this, label, args);
             }
         });
     }

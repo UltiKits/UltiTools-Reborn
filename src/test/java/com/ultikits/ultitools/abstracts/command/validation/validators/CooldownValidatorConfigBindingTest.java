@@ -92,7 +92,7 @@ class CooldownValidatorConfigBindingTest {
     private CommandContext contextFor(Method method) {
         return CommandContext.builder()
                 .sender(player)
-                .command(command)
+                .commandName(command.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -214,7 +214,7 @@ class CooldownValidatorConfigBindingTest {
         UnresolvedBoundExecutor executor = new UnresolvedBoundExecutor();
         when(command.getName()).thenReturn("fw531unresolved");
 
-        boolean handled = assertDoesNotThrow(() -> executor.onCommand(player, command, "fw531unresolved",
+        boolean handled = assertDoesNotThrow(() -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "fw531unresolved",
                 new String[]{"go"}));
 
         assertTrue(handled);
@@ -241,12 +241,12 @@ class CooldownValidatorConfigBindingTest {
                 .filter(v -> v instanceof CooldownValidator).findFirst()
                 .orElseThrow(() -> new AssertionError("the default chain carries a CooldownValidator"));
         chainValidator.onComplete(CommandContext.builder()
-                .sender(player).command(command).alias("fw531unresolved").rawArgs(new String[]{"go"})
+                .sender(player).commandName(command.getName()).alias("fw531unresolved").rawArgs(new String[]{"go"})
                 .matchedMethod(mapping).executorClass(UnresolvedBoundExecutor.class).executor(executor)
                 .build(), true);
         when(command.getName()).thenReturn("fw531unresolved");
 
-        boolean handled = executor.onCommand(player, command, "fw531unresolved", new String[]{"go"});
+        boolean handled = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "fw531unresolved", new String[]{"go"});
 
         assertTrue(handled);
         assertEquals(0, executor.runs, "the running cooldown refuses the command");

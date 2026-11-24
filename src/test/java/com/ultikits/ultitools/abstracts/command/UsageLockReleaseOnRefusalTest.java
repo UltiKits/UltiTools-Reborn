@@ -121,8 +121,8 @@ class UsageLockReleaseOnRefusalTest {
     void cooldownRefusalReleasesTheLock() {
         LockedExecutor executor = new LockedExecutor();
 
-        executor.onCommand(player, command, "locked", new String[]{"cooled"});
-        executor.onCommand(player, command, "locked", new String[]{"cooled"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "locked", new String[]{"cooled"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "locked", new String[]{"cooled"});
 
         assertEquals(1, executor.cooled.get(), "the second call is refused by the cooldown");
         assertFalse(executor.getLockValidator().isLocked(player.getUniqueId(), key("cooled", CommandSender.class)),
@@ -134,8 +134,8 @@ class UsageLockReleaseOnRefusalTest {
     void parseFailureReleasesTheLock() {
         LockedExecutor executor = new LockedExecutor();
 
-        executor.onCommand(player, command, "locked", new String[]{"num", "not-a-number"});
-        executor.onCommand(player, command, "locked", new String[]{"num", "3"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "locked", new String[]{"num", "not-a-number"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "locked", new String[]{"num", "3"});
 
         assertEquals(1, executor.numbered.get(), "a mistyped argument must not lock the mapping for everyone");
     }
@@ -145,8 +145,8 @@ class UsageLockReleaseOnRefusalTest {
     void argumentCountRefusalReleasesTheLock() {
         LockedExecutor executor = new LockedExecutor();
 
-        executor.onCommand(player, command, "locked", new String[]{"pair", "x"});
-        executor.onCommand(player, command, "locked", new String[]{"pair", "x", "y"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "locked", new String[]{"pair", "x"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "locked", new String[]{"pair", "x", "y"});
 
         assertEquals(1, executor.paired.get());
     }
@@ -161,7 +161,7 @@ class UsageLockReleaseOnRefusalTest {
         LockedExecutor executor = new LockedExecutor(
                 ValidatorChain.builder().add(passing).add(refusing).add(unreached).build());
 
-        executor.onCommand(player, command, "locked", new String[]{"cooled"});
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "locked", new String[]{"cooled"});
 
         assertEquals(0, executor.cooled.get());
         assertEquals(java.util.Arrays.asList("validate passing", "validate refusing", "refused passing"), events,

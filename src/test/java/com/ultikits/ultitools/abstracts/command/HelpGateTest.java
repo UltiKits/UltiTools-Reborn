@@ -1,6 +1,10 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import com.ultikits.ultitools.command.engine.CommandTestSupport;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -89,7 +93,9 @@ class HelpGateTest {
         void consoleIsRefusedPlayerOnlyHelp() {
             PlayerOnlyExecutor executor = new PlayerOnlyExecutor();
 
-            executor.onCommand(console, command, "fixture", new String[]{"help"});
+            assertThatThrownBy(() -> CommandTestSupport.dispatcher(executor, "fixture")
+                    .execute("fixture help", CommandTestSupport.source(console)))
+                    .isInstanceOf(CommandSyntaxException.class);
 
             assertThat(executor.helpShown)
                     .as("before #381 this printed the full help to a console, including an admin "
@@ -102,7 +108,7 @@ class HelpGateTest {
         void playerStillGetsHelp() {
             PlayerOnlyExecutor executor = new PlayerOnlyExecutor();
 
-            executor.onCommand(player, command, "fixture", new String[]{"help"});
+            CommandTestSupport.dispatch(executor, player, command, "fixture", new String[]{"help"});
 
             // The control. Without it, a gate that refused everyone would pass the test above.
             assertThat(executor.helpShown).isTrue();
@@ -115,7 +121,9 @@ class HelpGateTest {
 
             // matchMethod finds nothing, and that path also falls back to help -- it must not
             // become a way around the gate.
-            executor.onCommand(console, command, "fixture", new String[]{"no-such-subcommand"});
+            assertThatThrownBy(() -> CommandTestSupport.dispatcher(executor, "fixture")
+                    .execute("fixture no-such-subcommand", CommandTestSupport.source(console)))
+                    .isInstanceOf(CommandSyntaxException.class);
 
             assertThat(executor.helpShown).isFalse();
         }
@@ -130,8 +138,8 @@ class HelpGateTest {
         void cooldownDoesNotBlockHelp() {
             CooldownExecutor executor = new CooldownExecutor();
 
-            executor.onCommand(player, command, "fixture", new String[]{"help"});
-            executor.onCommand(player, command, "fixture", new String[]{"help"});
+            CommandTestSupport.dispatch(executor, player, command, "fixture", new String[]{"help"});
+            CommandTestSupport.dispatch(executor, player, command, "fixture", new String[]{"help"});
 
             // Help is not the guarded action. Refusing to explain a command because the command is
             // on cooldown would be perverse, and UsageLockValidator acquires a lock only the
@@ -192,7 +200,7 @@ class HelpGateTest {
             ValidatorChain chain = ValidatorChain.builder().add(neverApplicable).build();
             CustomChainExecutor executor = new CustomChainExecutor(chain);
 
-            executor.onCommand(player, command, "fixture", new String[]{"help"});
+            CommandTestSupport.dispatch(executor, player, command, "fixture", new String[]{"help"});
 
             assertThat(executor.helpShown)
                     .as("the inapplicable validator must be skipped, not invoked and happen to pass")
@@ -209,7 +217,7 @@ class HelpGateTest {
             ValidatorChain chain = ValidatorChain.builder().add(denies).build();
             CustomChainExecutor executor = new CustomChainExecutor(chain);
 
-            executor.onCommand(player, command, "fixture", new String[]{"help"});
+            CommandTestSupport.dispatch(executor, player, command, "fixture", new String[]{"help"});
 
             assertThat(executor.helpShown)
                     .as("consulting applicability must not weaken enforcement -- an applicable, "
@@ -223,7 +231,7 @@ class HelpGateTest {
             ValidatorChain emptyChain = ValidatorChain.builder().build();
             CustomChainExecutor executor = new CustomChainExecutor(emptyChain);
 
-            executor.onCommand(player, command, "fixture", new String[]{"help"});
+            CommandTestSupport.dispatch(executor, player, command, "fixture", new String[]{"help"});
 
             assertThat(executor.helpShown).isTrue();
         }

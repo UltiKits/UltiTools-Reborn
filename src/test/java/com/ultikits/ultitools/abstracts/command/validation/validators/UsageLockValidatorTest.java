@@ -9,7 +9,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -188,7 +187,7 @@ class UsageLockValidatorTest {
     private CommandContext createPlayerContext(Method method, Player player) {
         return CommandContext.builder()
                 .sender(player)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -203,7 +202,7 @@ class UsageLockValidatorTest {
     private CommandContext createPlayerContext(Method method, Player player, Class<?> executorClass) {
         return CommandContext.builder()
                 .sender(player)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -214,7 +213,7 @@ class UsageLockValidatorTest {
     private CommandContext createConsoleContext(Method method) {
         return CommandContext.builder()
                 .sender(mockConsole)
-                .command(mockCommand)
+                .commandName(mockCommand.getName())
                 .alias("test")
                 .rawArgs(new String[]{})
                 .matchedMethod(method)
@@ -240,7 +239,7 @@ class UsageLockValidatorTest {
         void shouldPassWhenMethodIsNull() {
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
@@ -410,7 +409,7 @@ class UsageLockValidatorTest {
         void shouldReturnTrueWhenMethodIsNull() {
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
@@ -488,7 +487,7 @@ class UsageLockValidatorTest {
         void releaseLockWithNullMethodShouldNotThrow() {
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)
@@ -895,7 +894,7 @@ class UsageLockValidatorTest {
         void nullMatchedMethodAcquiresNothing() {
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(null)

@@ -3,7 +3,6 @@ package com.ultikits.ultitools.manager;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -13,16 +12,22 @@ import java.io.File;
 import java.io.FileWriter;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import io.papermc.paper.command.brigadier.Commands;
+import io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager;
+import io.papermc.paper.plugin.lifecycle.event.handler.LifecycleEventHandler;
+import io.papermc.paper.plugin.lifecycle.event.registrar.ReloadableRegistrarEvent;
+import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
+import com.ultikits.ultitools.command.engine.RecordingCommands;
+import org.bukkit.plugin.Plugin;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 
-import org.bukkit.Bukkit;
-import org.bukkit.command.SimpleCommandMap;
 import org.bukkit.event.Listener;
-import org.bukkit.plugin.PluginDescriptionFile;
-import org.bukkit.plugin.SimplePluginManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,8 +38,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
-import org.mockito.Answers;
-import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.ComponentScan;
@@ -347,8 +350,10 @@ class PluginManagerAutoRegisterAliasTest {
                 writer.write("enableFalseCommand: false\nenableTrueCommand: true\n");
             }
 
-            SimpleCommandMap realCommandMap = new SimpleCommandMap(server, new HashMap<>());
-            SimplePluginManager realBukkitPluginManager = new SimplePluginManager(server, realCommandMap);
+            AtomicReference<LifecycleEventHandler<ReloadableRegistrarEvent<Commands>>> handler = new AtomicReference<>();
+            LifecycleEventManager<Plugin> lifecycle = mock(LifecycleEventManager.class);
+            doAnswer(call -> { handler.set(call.getArgument(1)); return null; }).when(lifecycle)
+                    .registerEventHandler(eq(LifecycleEvents.COMMANDS), any(LifecycleEventHandler.class));
 
             UltiToolsPlugin plugin = mock(ConditionalCommandModuleFixture.class);
             when(plugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
@@ -362,14 +367,11 @@ class PluginManagerAutoRegisterAliasTest {
 
             CommandManager realCommandManager = new CommandManager();
 
-            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class, Answers.CALLS_REAL_METHODS)) {
-                bukkitMock.when(Bukkit::getPluginManager).thenReturn(realBukkitPluginManager);
-
+            try {
                 TestHelper.mockUltiToolsInstance(ultiTools -> {
                     when(ultiTools.getCommandManager()).thenReturn(realCommandManager);
                     when(ultiTools.getListenerManager()).thenReturn(mockListenerManager);
-                    when(ultiTools.getDescription()).thenReturn(
-                            new PluginDescriptionFile("UltiTools", "1.0.0", "com.ultikits.ultitools.UltiTools"));
+                    when(ultiTools.getLifecycleManager()).thenReturn(lifecycle);
                 });
 
                 Assertions.assertDoesNotThrow(() -> invokeRegisterBukkit(plugin),
@@ -377,11 +379,15 @@ class PluginManagerAutoRegisterAliasTest {
                                 + "AbstractCommandExecutor cast on the connector path (difference "
                                 + "#9; AbstractCommandExecutor itself was removed in 6.3.0)");
 
-                assertThat(realCommandMap.getCommand("conditionalfalsecmd"))
-                        .as("a false @ConditionalOnConfig command must never reach Bukkit's "
-                                + "command map, on the connector path either")
+                var commands = new RecordingCommands();
+                ReloadableRegistrarEvent<Commands> event = mock(ReloadableRegistrarEvent.class);
+                when(event.registrar()).thenReturn(commands);
+                assertThat(handler.get()).isNotNull();
+                handler.get().run(event);
+                assertThat(commands.getDispatcher().getRoot().getChild("conditionalfalsecmd"))
+                        .as("a false @ConditionalOnConfig command must never reach the lifecycle registrar")
                         .isNull();
-                assertThat(realCommandMap.getCommand("conditionaltruecmd"))
+                assertThat(commands.getDispatcher().getRoot().getChild("conditionaltruecmd"))
                         .as("inert-case guard: the true-condition control must still register, or "
                                 + "the false-condition absence above would not distinguish the "
                                 + "gate working from the whole scan/registration path being broken")

@@ -1,8 +1,13 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import com.ultikits.ultitools.command.engine.CommandTestSupport;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.Map;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -175,7 +180,7 @@ class ProxiedInheritedMappingMetadataTest {
         Method mapping = executor.getMappings().get("work");
         return CommandContext.builder()
                 .sender(sender)
-                .command(command)
+                .commandName(command.getName())
                 .alias("inherited")
                 .rawArgs(new String[]{"work"})
                 .executorClass(executor.getClass())
@@ -187,8 +192,8 @@ class ProxiedInheritedMappingMetadataTest {
     private void assertCooldownRefusesTheSecondDispatch(CooldownBase executor) {
         Player player = player();
 
-        executor.onCommand(player, command, "inherited", new String[]{"go"});
-        executor.onCommand(player, command, "inherited", new String[]{"go"});
+        CommandTestSupport.dispatch(executor, player, command, "inherited", new String[]{"go"});
+        CommandTestSupport.dispatch(executor, player, command, "inherited", new String[]{"go"});
 
         assertEquals(1, executor.bodies.get(),
                 "the base class's class-level @CmdCD(60) must refuse the same player's second dispatch");
@@ -264,12 +269,17 @@ class ProxiedInheritedMappingMetadataTest {
 
         for (PlayerMappingInheritor executor : Arrays.asList(new PlayerMappingInheritor(), proxied)) {
             CommandSender console = mock(CommandSender.class);
-            executor.onCommand(console, command, "inherited", new String[]{"p"});
-            // SenderTypeValidator's player-only message; i18n returns its key in this test.
+            assertThrows(CommandSyntaxException.class, () ->
+                    CommandTestSupport.dispatcher(executor, "inherited")
+                            .execute("inherited p", CommandTestSupport.source(console)));
+            // The requirement rejects the dispatcher path; the retained typed guard still resolves inherited metadata.
+            executor.invokeTyped(CommandContext.builder().sender(console).commandName("inherited").alias("inherited")
+                    .rawArgs(new String[]{"p"}).executorClass(executor.getClass()).executor(executor).build()
+                    .withMatchedMethod(executor.getMappings().get("p"), "p").withParsedParams(Map.of()));
             verify(console).sendMessage("只有游戏内可以执行这个指令！");
             assertEquals(0, executor.bodies.get(), "a console must not run the inherited PLAYER mapping");
 
-            executor.onCommand(player(), command, "inherited", new String[]{"p"});
+            CommandTestSupport.dispatch(executor, player(), command, "inherited", new String[]{"p"});
             assertEquals(1, executor.bodies.get(), "a player runs the inherited PLAYER mapping");
         }
     }

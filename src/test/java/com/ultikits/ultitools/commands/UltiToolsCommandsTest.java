@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
@@ -19,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.ultikits.ultitools.command.engine.CommandTestSupport;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -68,7 +71,7 @@ class UltiToolsCommandsTest {
     @Test
     @DisplayName("Should show help message")
     void testHelp() {
-        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"help"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"help"});
         server.getScheduler().performOneTick();
         
         assertThat(result).isTrue();
@@ -91,7 +94,7 @@ class UltiToolsCommandsTest {
         List<UltiToolsPlugin> plugins = Arrays.asList(plugin1, plugin2);
         when(mockPluginManager.getPluginList()).thenReturn(plugins);
         
-        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"list"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"list"});
         server.getScheduler().performOneTick();
         
         assertThat(result).isTrue();
@@ -107,7 +110,7 @@ class UltiToolsCommandsTest {
     void testListEmptyPlugins() {
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList());
         
-        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"list"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"list"});
         server.getScheduler().performOneTick();
         
         assertThat(result).isTrue();
@@ -120,7 +123,7 @@ class UltiToolsCommandsTest {
         // Mock the reload method to not throw exception
         UltiTools mockInstance = UltiTools.getInstance();
         
-        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"reload"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload"});
         server.getScheduler().performOneTick();
         
         assertThat(result).isTrue();
@@ -162,7 +165,7 @@ class UltiToolsCommandsTest {
         doThrow(new IllegalStateException("hook boom")).when(broken).reloadWithReport();
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(broken));
 
-        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "BrokenModule"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload", "BrokenModule"});
         server.getScheduler().performOneTick();
 
         assertThat(result).isTrue();
@@ -183,7 +186,7 @@ class UltiToolsCommandsTest {
         when(partial.reloadWithReport()).thenReturn(report);
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(partial));
 
-        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "PartialModule"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload", "PartialModule"});
         server.getScheduler().performOneTick();
 
         assertThat(result).isTrue();
@@ -201,7 +204,7 @@ class UltiToolsCommandsTest {
         when(good.reloadWithReport()).thenReturn(new ReloadReport());
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(good));
 
-        executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "GoodModule"});
+        CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload", "GoodModule"});
         server.getScheduler().performOneTick();
 
         assertThat(player.nextMessage()).isEqualTo("模块 GoodModule 已重载");
@@ -229,9 +232,9 @@ class UltiToolsCommandsTest {
         });
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList(recursive, sneaky));
 
-        executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "RecursiveModule"});
+        CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload", "RecursiveModule"});
         server.getScheduler().performOneTick();
-        executor.onCommand(player, mockCommand, "ul", new String[]{"reload", "SneakyModule"});
+        CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload", "SneakyModule"});
         server.getScheduler().performOneTick();
 
         assertThat(player.nextMessage()).contains("RecursiveModule").contains("failed to reload")
@@ -253,7 +256,7 @@ class UltiToolsCommandsTest {
         });
         UltiToolsCommands freshExecutor = new UltiToolsCommands();
 
-        boolean result = freshExecutor.onCommand(player, mockCommand, "ul", new String[]{"reload"});
+        boolean result = CommandTestSupport.dispatch(freshExecutor, player, mockCommand, "ul", new String[]{"reload"});
         server.getScheduler().performOneTick();
 
         assertThat(result).isTrue();
@@ -267,7 +270,7 @@ class UltiToolsCommandsTest {
         
         when(mockPluginManager.getPluginList()).thenReturn(Arrays.asList());
         
-        boolean result = executor.onCommand(console, mockCommand, "ul", new String[]{"list"});
+        boolean result = CommandTestSupport.dispatch(executor, console, mockCommand, "ul", new String[]{"list"});
         server.getScheduler().performOneTick();
         
         assertThat(result).isTrue();
@@ -276,7 +279,7 @@ class UltiToolsCommandsTest {
     @Test
     @DisplayName("Should handle unknown command")
     void testUnknownCommand() {
-        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"unknown"});
+        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"unknown"});
         server.getScheduler().performOneTick();
         
         assertThat(result).isTrue();
@@ -285,16 +288,18 @@ class UltiToolsCommandsTest {
     }
 
     @Test
-    @DisplayName("Should handle command without OP permission")
+    @DisplayName("Should hide the command and reject dispatch without OP permission")
     void testNoOpPermission() {
         player.setOp(false);
-        
-        boolean result = executor.onCommand(player, mockCommand, "ul", new String[]{"reload"});
+        var dispatcher = CommandTestSupport.dispatcher(executor, "ul");
+        var source = CommandTestSupport.source(player);
+
+        assertThat(dispatcher.getRoot().getChild("ul").canUse(source)).isFalse();
+        assertThatThrownBy(() -> dispatcher.execute("ul reload", source))
+                .isInstanceOf(CommandSyntaxException.class);
         server.getScheduler().performOneTick();
-        
-        assertThat(result).isTrue();
-        String message = player.nextMessage();
-        assertThat(message).contains("权限");
+        verifyNoInteractions(mockPluginManager);
+        assertThat(player.nextMessage()).as("a hidden root must not enter the command body").isNull();
     }
 
     @Test
@@ -302,7 +307,7 @@ class UltiToolsCommandsTest {
     void testTabCompletion() {
         player.setOp(true);
         
-        List<String> completions = executor.onTabComplete(player, mockCommand, "ul", new String[]{""});
+        List<String> completions = CommandTestSupport.suggest(executor, player, mockCommand, "ul", new String[]{""});
         
         assertThat(completions).contains("reload", "help", "list");
     }

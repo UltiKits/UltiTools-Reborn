@@ -116,7 +116,7 @@ class CloudReconnectCommandTest {
                 MockedStatic<CloudAuthManager> auth = mockStatic(CloudAuthManager.class)) {
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             auth.when(CloudAuthManager::reconnect).thenReturn(stubbed);
-            new CloudLoginCommand().onCommand(rcon, command, "ulticloud", new String[]{"reconnect"});
+            com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new CloudLoginCommand(),rcon, command, "ulticloud", new String[]{"reconnect"});
             assertThat(lines).containsExactly(expected("en", Kind.STARTED));
             auth.verify(CloudAuthManager::reconnect);
         }

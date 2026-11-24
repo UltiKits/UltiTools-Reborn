@@ -117,7 +117,7 @@ class RemoteCommandModuleReplyTest {
         server.getCommandMap().register("moduleprobe", new Command("moduleprobe") {
             @Override
             public boolean execute(CommandSender sender, String label, String[] args) {
-                return executor.onCommand(sender, this, label, args);
+                return com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, this, label, args);
             }
         });
     }

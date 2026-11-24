@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.command.engine.CommandEngine;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.interfaces.DataStore;
@@ -28,7 +29,6 @@ import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.manager.TaskManager;
 
 /**
  * Integration tests for the External Plugin API.
@@ -223,13 +223,8 @@ public class ExternalPluginIntegrationTest {
                     .doesNotThrowAnyException();
         }
 
-        // GATE-06 (issue #345): both tests below called register then unregister with no
-        // assertion, so a bug that registered a command/listener for an adapter with no beans
-        // at all -- e.g. a loop-guard regression that iterates once even over an empty container
-        // -- would pass silently. The name promises "registers nothing"; the fix reads the
-        // manager's own tracking map by reflection (no public getter exists) and asserts that
-        // promise directly, then confirms unregister on an empty registration is a genuine no-op
-        // rather than merely "didn't throw".
+        // Empty-container registration must be observed, not merely allowed to return normally.
+        // Commands use the engine boundary; listeners retain their per-owner tracking map.
         @Test
         void commandManager_registerAllExternal_withEmptyContainer_registersNothing() throws Exception {
             ExternalPluginAdapter adapter = new ExternalPluginAdapter(mockExternalPlugin);
@@ -237,18 +232,17 @@ public class ExternalPluginIntegrationTest {
             emptyContext.refresh();
             adapter.setContext(emptyContext);
 
-            commandManager.registerAllExternal(adapter);
+            var engine = mock(CommandEngine.class);
+            var emptyManager = new CommandManager(engine);
+            emptyManager.registerAllExternal(adapter);
 
-            Field externalCommandMapField = CommandManager.class.getDeclaredField("externalCommandMap");
-            externalCommandMapField.setAccessible(true); // NOPMD
-            Map<String, ?> externalCommandMap = (Map<String, ?>) externalCommandMapField.get(commandManager);
-            assertThat(externalCommandMap)
-                    .as("an empty container must not add a tracking entry for the plugin")
-                    .doesNotContainKey(adapter.getPluginName());
-
-            assertThatCode(() -> commandManager.unregisterAllExternal(adapter.getPluginName()))
+            verifyNoInteractions(engine);
+            assertThatCode(() -> emptyManager.unregisterAllExternal(adapter.getPluginName()))
                     .as("unregistering a plugin that never registered anything must not throw")
                     .doesNotThrowAnyException();
+            verify(engine).unregister(adapter.getPluginName());
+            verifyNoMoreInteractions(engine);
+            emptyContext.close();
         }
 
         @Test

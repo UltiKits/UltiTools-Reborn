@@ -211,7 +211,7 @@ class ConfigBindingReloadReportTest {
     private void runReloadCommand(CommandSender sender, boolean all) {
         Command command = mock(Command.class);
         when(command.getName()).thenReturn("ul");
-        new UltiToolsCommands().onCommand(sender, command, "ul",
+        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(new UltiToolsCommands(),sender, command, "ul",
                 all ? new String[]{"reload"} : new String[]{"reload", "TimingModule"});
         server.getScheduler().performOneTick();
     }

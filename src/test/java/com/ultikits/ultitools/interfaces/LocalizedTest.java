@@ -594,7 +594,7 @@ class LocalizedTest {
             Method method = getClass().getDeclaredMethod("methodWithCooldown");
             CommandContext context = CommandContext.builder()
                     .sender(mockPlayer)
-                    .command(mockCommand)
+                    .commandName(mockCommand.getName())
                     .alias("test")
                     .rawArgs(new String[]{})
                     .matchedMethod(method)
