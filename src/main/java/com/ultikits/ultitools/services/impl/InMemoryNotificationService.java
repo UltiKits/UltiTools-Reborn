@@ -1,70 +1,41 @@
 package com.ultikits.ultitools.services.impl;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.time.Duration;
+import java.util.Objects;
 import java.util.UUID;
-
-import org.bukkit.Bukkit;
-import org.bukkit.Sound;
-import org.bukkit.boss.BarColor;
-import org.bukkit.boss.BarStyle;
-import org.bukkit.boss.BossBar;
-import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitRunnable;
-
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.annotations.PlayerCache;
-import com.ultikits.ultitools.annotations.Service;
-import com.ultikits.ultitools.manager.PlayerCacheManager;
-import com.ultikits.ultitools.services.NotificationService;
-
-import net.kyori.adventure.text.Component;
-
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.bukkit.entity.Player;
+import org.jetbrains.annotations.Nullable;
+
+import com.ultikits.ultitools.annotations.Service;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.services.NotificationService;
+import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.text.Text;
+
+import net.kyori.adventure.bossbar.BossBar;
+import net.kyori.adventure.sound.Sound;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.title.Title;
+
+/** Per-player notifications rendered by the text engine and owned by the framework scheduler. */
 @Service
 public class InMemoryNotificationService implements NotificationService {
-    @PlayerCache
-    private static final Map<UUID, BossBar> atedPlayer = new ConcurrentHashMap<>();
+    private static final Duration STEP = Duration.ofMillis(250);
+    private final Messages messages;
+    private final Scheduler scheduler;
+    private final ConcurrentHashMap<UUID, ActiveBar> bars = new ConcurrentHashMap<>();
 
     /**
-     * True once ANY instance of this class has registered {@link #atedPlayer} -- a static field
-     * shared by every instance -- with the live {@link PlayerCacheManager} for quit-based
-     * sweeping (GEN-08, D-03). Deliberately a STATIC flag, not per-instance: registering the
-     * same static field once per constructed instance would track it once per instance too,
-     * sweeping it redundantly on every quit (harmless, since {@link PlayerCacheManager
-     * #registerBean} removes the same map reference each time -- but silently relying on that
-     * idempotency rather than registering exactly once is worse than being explicit, per this
-     * migration's own plan). Set lazily from {@link #sendBossBarNotification(Player, String,
-     * int, BossBar, Sound)} -- the write path -- rather than the constructor, mirroring {@code
-     * CooldownValidator}'s identical lazy-first-use rationale.
+     * Creates a notification service using the framework's root services.
+     * @param messages renderer capable of rendering every module namespace
+     * @param scheduler framework-owned scheduler
      */
-    private static volatile boolean playerCacheRegistered = false;
-
-    /**
-     * Attempts lazy first-use registration of THIS instance -- as the reference-identity handle
-     * for the shared static {@link #atedPlayer} field -- with the live {@link
-     * PlayerCacheManager} singleton. Guarded by the STATIC {@link #playerCacheRegistered} flag
-     * so only the first instance to reach {@link #sendBossBarNotification(Player, String, int,
-     * BossBar, Sound)} registers; every later instance's call is a cheap no-op. Safe to call
-     * unconditionally on every invocation: also a cheap, safely-no-op-on-failure retry when the
-     * core plugin is not yet live (see {@link #playerCacheRegistered}'s javadoc).
-     */
-    private void ensurePlayerCacheRegistered() {
-        if (playerCacheRegistered) {
-            return;
-        }
-        UltiTools instance = UltiTools.getInstance();
-        // Checking getPluginManager() too, not just getInstance(), matters especially here:
-        // playerCacheRegistered is a STATIC flag shared by every instance, so an earlier test
-        // (or an earlier caller) reaching this method while getInstance() is stubbed but
-        // getPluginManager() is not would otherwise latch it true forever, permanently skipping
-        // the retry a later, genuinely-live chain would have needed.
-        if (instance == null || instance.getPluginManager() == null) {
-            return;
-        }
-        PlayerCacheManager.tryRegister(this);
-        playerCacheRegistered = true;
+    public InMemoryNotificationService(Messages messages, Scheduler scheduler) {
+        this.messages = Objects.requireNonNull(messages, "messages");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
     }
 
     @Override
@@ -82,163 +53,92 @@ public class InMemoryNotificationService implements NotificationService {
         return 1;
     }
 
-    public boolean sendBossBarNotification(Player player, String message) {
-        return sendBossBarNotification(player, message, 25, null, null);
+    @Override
+    public void sendMessageNotification(Player player, Text message, @Nullable Sound sound) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(message, "message");
+        player.sendMessage(messages.render(message, player));
+        playSound(player, sound);
     }
 
     @Override
-    public boolean sendBossBarNotification(Player player, String message, int seconds) {
-        return sendBossBarNotification(player, message, seconds, null, null);
+    public void sendTitleNotification(Player player, Text title, Text subtitle, @Nullable Sound sound, Title.Times times) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(title, "title");
+        Objects.requireNonNull(subtitle, "subtitle");
+        Objects.requireNonNull(times, "times");
+        Component renderedTitle = messages.render(title, player);
+        Component renderedSubtitle = messages.render(subtitle, player);
+        player.showTitle(Title.title(renderedTitle, renderedSubtitle, times));
+        playSound(player, sound);
     }
 
     @Override
-    public boolean sendBossBarNotification(Player player, String message, int seconds, Sound sound) {
-        return sendBossBarNotification(player, message, seconds, null, sound);
+    public void sendActionBarNotification(Player player, Text message) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(message, "message");
+        player.sendActionBar(messages.render(message, player));
     }
 
     @Override
-    public boolean sendBossBarNotification(Player player, String message, int seconds, BossBar bossBar) {
-        return sendBossBarNotification(player, message, seconds, bossBar, null);
-    }
-
-    @Override
-    public boolean sendBossBarNotification(Player player, String message, int seconds, BossBar bossBar, Sound sound) {
-        ensurePlayerCacheRegistered();
-        try {
-            BossBar activeBossBar;
-            if (atedPlayer.containsKey(player.getUniqueId())) {
-                activeBossBar = atedPlayer.get(player.getUniqueId());
-                activeBossBar.setProgress(1.0);
-            } else {
-                if (bossBar == null) {
-                    activeBossBar = Bukkit.createBossBar(message, BarColor.GREEN, BarStyle.SOLID);
-                } else {
-                    activeBossBar = bossBar;
-                }
-                atedPlayer.put(player.getUniqueId(), activeBossBar);
-            }
-            activeBossBar.addPlayer(player);
-            if (sound != null) {
-                player.playSound(player.getLocation(), sound, 10, 1);
-            }
-
-            BossBar finalBossBar = activeBossBar;
-            new BukkitRunnable() {
-                @Override
-                public void run() {
-                    BossBarTickResult result = processBossBarTick(finalBossBar, player, seconds);
-                    if (result.shouldCancel) {
-                        this.cancel();
-                    }
-                }
-            }.runTaskTimerAsynchronously(UltiTools.getInstance(), 0L, 5L);
-            return true;
-        } catch (Exception ignored) {
-            return false;
+    public void sendBossBarNotification(Player player, Text message, Duration duration,
+            BossBar.Color color, BossBar.Overlay overlay, @Nullable Sound sound) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(message, "message");
+        Objects.requireNonNull(duration, "duration");
+        Objects.requireNonNull(color, "color");
+        Objects.requireNonNull(overlay, "overlay");
+        if (duration.isZero() || duration.isNegative()) {
+            throw new IllegalArgumentException("duration must be positive");
         }
+        Component name = messages.render(message, player);
+        float decrement = STEP.toNanos() / (float) duration.toNanos();
+        // Unlike Executor.execute, run returns a retired handle for an already removed player.
+        scheduler.entity(player).run(() -> showBossBar(player, name, color, overlay, sound, decrement));
     }
 
-    /**
-     * Result object for BossBar tick processing.
-     */
-    static class BossBarTickResult {
-        final boolean shouldCancel;
-        final double newProgress;
+    private void showBossBar(Player player, Component name, BossBar.Color color,
+            BossBar.Overlay overlay, @Nullable Sound sound, float decrement) {
+        UUID uuid = player.getUniqueId();
+        BossBar bar = replaceBar(player, bars.get(uuid), name, color, overlay);
+        playSound(player, sound);
+        TaskHandle countdown = scheduler.entity(player).runRepeating(STEP, STEP,
+                handle -> tick(player, bar, handle, decrement));
+        ActiveBar current = new ActiveBar(bar, countdown);
+        bars.put(uuid, current);
+        countdown.completion().whenComplete((ignored, failure) -> bars.remove(uuid, current));
+    }
 
-        BossBarTickResult(boolean shouldCancel, double newProgress) {
-            this.shouldCancel = shouldCancel;
-            this.newProgress = newProgress;
+    private BossBar replaceBar(Player player, @Nullable ActiveBar previous, Component name,
+            BossBar.Color color, BossBar.Overlay overlay) {
+        if (previous != null) {
+            previous.countdown().cancel();
+            return previous.bar().name(name).color(color).overlay(overlay).progress(1f);
         }
+        BossBar bar = BossBar.bossBar(name, 1f, color, overlay);
+        player.showBossBar(bar);
+        return bar;
     }
 
-    /**
-     * Process a single tick of the BossBar progress animation.
-     * This method is extracted from BukkitRunnable for testability.
-     *
-     * @param bossBar the BossBar to update
-     * @param player  the player viewing the BossBar
-     * @param seconds the total duration in seconds
-     * @return the result containing whether to cancel and the new progress
-     */
-    static BossBarTickResult processBossBarTick(BossBar bossBar, Player player, int seconds) {
-        double progress = bossBar.getProgress();
-        double decrement = 1.0 / (seconds * 4);
-        progress -= decrement;
+    private void tick(Player player, BossBar bar, TaskHandle handle, float decrement) {
+        float progress = bar.progress() - decrement;
         if (progress <= 0) {
-            bossBar.removePlayer(player);
-            return new BossBarTickResult(true, 0);
+            player.hideBossBar(bar);
+            handle.cancel();
         } else {
-            bossBar.setProgress(progress);
-            return new BossBarTickResult(false, progress);
+            bar.progress(progress);
         }
     }
 
-    /**
-     * Get the cached BossBar for a player. Used for testing.
-     */
-    static BossBar getCachedBossBar(UUID playerUUID) {
-        return atedPlayer.get(playerUUID);
-    }
-
-    /**
-     * Put a BossBar into cache. Used for testing.
-     */
-    static void cacheBossBar(UUID playerUUID, BossBar bossBar) {
-        atedPlayer.put(playerUUID, bossBar);
-    }
-
-    /**
-     * Clear all cached BossBars. Used for testing.
-     */
-    static void clearBossBarCache() {
-        atedPlayer.clear();
-    }
-
-    public boolean sendMessageNotification(Player player, String message) {
-        return sendMessageNotification(player, message, null);
-    }
-
-    @Override
-    public boolean sendMessageNotification(Player player, String message, Sound sound) {
-        player.sendMessage(message);
+    private void playSound(Player player, @Nullable Sound sound) {
         if (sound != null) {
-            player.playSound(player.getLocation(), sound, 10, 1);
+            player.playSound(sound, Sound.Emitter.self());
         }
-        return false;
     }
 
-    @Override
-    public boolean sendSubTitleNotification(Player player, String subtitle) {
-        return sendTitleNotification(player, "", subtitle, null);
+    int activeBarCount() {
+        return bars.size();
     }
 
-    @Override
-    public boolean sendSubTitleNotification(Player player, String subtitle, Sound sound) {
-        return sendTitleNotification(player, "", subtitle, sound);
-    }
-
-    @Override
-    public boolean sendTitleNotification(Player player, String title, String subtitle) {
-        return sendTitleNotification(player, title, subtitle, null);
-    }
-
-    @Override
-    public boolean sendTitleNotification(Player player, String title, String subtitle, Sound sound) {
-        return sendTitleNotification(player, title, subtitle, sound, 10, 50, 20);
-    }
-
-    @Override
-    public boolean sendTitleNotification(Player player, String title, String subtitle, Sound sound, int fadeIn, int stay, int fadeOut) {
-        if (sound != null) {
-            player.playSound(player.getLocation(), sound, 10, 1);
-        }
-        player.sendTitle(title, subtitle, fadeIn, stay, fadeOut);
-        return true;
-    }
-
-    @Override
-    public boolean sendActionBarNotification(Player player, String message) {
-        player.sendActionBar(Component.text(message));
-        return true;
-    }
+    private record ActiveBar(BossBar bar, TaskHandle countdown) { }
 }
