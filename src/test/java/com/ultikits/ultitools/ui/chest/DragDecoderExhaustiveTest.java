@@ -27,7 +27,6 @@ class DragDecoderExhaustiveTest {
                 if (!expected(type, targets).equals(DragDecoder.decode(type, targets))) { mismatches++; }
             }
         }
-        System.out.printf("DRAG combinations=%d mismatches=%d%n", combinations, mismatches);
         assertThat(DragType.values()).hasSize(2);
         assertThat(combinations).isEqualTo(2 * (6 + 36 + 216));
         assertThat(mismatches).isZero();

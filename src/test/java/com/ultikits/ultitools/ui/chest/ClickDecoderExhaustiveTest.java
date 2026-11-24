@@ -59,7 +59,6 @@ class ClickDecoderExhaustiveTest {
                 }
             }
         }
-        System.out.printf("CLICK combinations=%d mismatches=%d%n", combinations, mismatchCount);
         assertThat(combinations).isEqualTo(25 * 14 * 6 * 3 * 2);
         assertThat(mismatchCount).withFailMessage("%s", mismatches).isZero();
     }
