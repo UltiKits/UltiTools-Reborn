@@ -85,6 +85,15 @@ class GuiRendererGridSnapshotTest {
             assertThat(frames.get(0).items()).containsOnlyKeys(GridSlot.ofIndex(2));
             assertThat(warnings).hasSize(4).allSatisfy(record ->
                     assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING));
+            renderer.scheduleBuild(); clock.advanceTicks(1);
+            renderer.scheduleBuild(); clock.advanceTicks(1);
+            assertThat(frames).hasSize(3);
+            assertThat(warnings).hasSize(4);
+            renderer.dispose();
+            renderer.initialize(() -> Container.builder().children(
+                    ItemDisplay.builder(icon).slot(-1).build(),
+                    ItemDisplay.builder(icon).slot(9).build()).build(), BuildContext.root(viewer, "validation", 1));
+            assertThat(warnings).hasSize(4);
             renderer.dispose();
         } finally { logger.removeHandler(handler); }
     }
@@ -108,6 +117,40 @@ class GuiRendererGridSnapshotTest {
             assertThat(frames.get(0).binding(GridSlot.ofIndex(1)).orElseThrow().mode()).isEqualTo(BindingMode.EDITABLE);
             assertThat(frames.get(0).items()).containsOnlyKeys(GridSlot.ofIndex(0));
             renderer.dispose();
+        }
+    }
+
+    @Test
+    void iconBindingCollisionsWarnOncePerSlotAndRendererInstance() {
+        Player viewer = mock(Player.class);
+        SlotContainer container = mock(SlotContainer.class);
+        when(container.size()).thenReturn(9);
+        ItemSpec icon = ItemSpec.builder(Key.key("minecraft:stone")).build();
+        List<Grid> frames = new ArrayList<>();
+        try (ManualScheduler.Engine clock = new ManualScheduler.Engine();
+             GuiLogCapture log = new GuiLogCapture(GuiRenderer.class)) {
+            java.util.function.Supplier<Widget> tree = () -> Container.builder().children(
+                    ItemDisplay.builder(icon).slot(0).build(),
+                    ItemSlotArea.builder(container).count(1).startSlot(0).build(),
+                    ItemSlotArea.builder(container).firstIndex(1).count(1).startSlot(1).build(),
+                    ItemDisplay.builder(icon).slot(1).build()).build();
+            GuiRenderer renderer = new GuiRenderer(Text.plain("Collision"), 1,
+                    new GuiScheduler(clock.scheduler("UltiTools"), viewer), frames::add);
+            BuildContext context = BuildContext.root(viewer, "collision", 1);
+            renderer.initialize(tree, context);
+            renderer.scheduleBuild(); clock.advanceTicks(1);
+            assertThat(log.records()).hasSize(2).allSatisfy(record -> {
+                assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
+                assertThat(record.getMessage()).contains("slot");
+            });
+            assertThat(frames.get(1).bindings()).containsOnlyKeys(GridSlot.ofIndex(0));
+            assertThat(frames.get(1).items()).containsOnlyKeys(GridSlot.ofIndex(1));
+            renderer.dispose();
+            GuiRenderer another = new GuiRenderer(Text.plain("Another"), 1,
+                    new GuiScheduler(clock.scheduler("UltiTools"), viewer), frames::add);
+            another.initialize(tree, context);
+            assertThat(log.records()).hasSize(4);
+            another.dispose();
         }
     }
 

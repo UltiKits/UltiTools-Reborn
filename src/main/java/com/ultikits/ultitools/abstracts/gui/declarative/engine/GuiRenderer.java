@@ -12,7 +12,10 @@ import com.ultikits.ultitools.ui.GridSlot;
 import com.ultikits.ultitools.ui.SlotBinding;
 import com.ultikits.ultitools.ui.SlotContainer;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +39,8 @@ public class GuiRenderer {
     private final GuiScheduler scheduler;
     private final Consumer<Grid> sink;
     private final Runnable frameTask = this::performBuild;
+    // Retained across frames and reopenings without retaining nodes or containers.
+    private final Map<WarningKind, Set<Integer>> warnedSlots = new EnumMap<>(WarningKind.class);
     private @Nullable Element rootElement;
     private @Nullable Supplier<Widget> widgetSupplier;
     private @Nullable BuildContext rootContext;
@@ -170,10 +175,19 @@ public class GuiRenderer {
     /** @return the viewer's frame scheduler */
     public @NotNull GuiScheduler getScheduler() { return scheduler; }
 
+    private enum WarningKind { OUTSIDE_GRID, DUPLICATE_INDEX, SLOT_COLLISION }
+
+    private void warnOnce(WarningKind kind, int slot, String message) {
+        if (warnedSlots.computeIfAbsent(kind, ignored -> new HashSet<>()).add(slot)) {
+            LOGGER.warning(message + " at grid slot " + slot);
+        }
+    }
+
     /** Collects valid slots without letting one invalid node reject a complete frame. */
-    private static final class SnapshotBuilder {
+    private final class SnapshotBuilder {
         private final Grid.Builder grid;
         private final int size;
+        private final Set<Integer> occupiedSlots = new HashSet<>();
         private final Map<Integer, SlotBinding> bindings = new HashMap<>();
         private final Map<SlotContainer, Map<Integer, Integer>> indexes = new IdentityHashMap<>();
 
@@ -188,13 +202,16 @@ public class GuiRenderer {
             }
             int slot = node.getSlotIndex();
             if (slot < 0 || slot >= size) {
-                LOGGER.warning("Skipping declarative node outside the grid: " + node);
+                warnOnce(WarningKind.OUTSIDE_GRID, slot, "Skipping declarative node outside the grid");
                 return;
             }
             SlotBinding binding = node.getBinding();
             if (binding != null && invalidBinding(binding, slot)) {
-                LOGGER.warning("Skipping declarative node with an invalid or duplicate container index: " + node);
+                warnOnce(WarningKind.DUPLICATE_INDEX, slot, "Skipping declarative node with a duplicate container index");
                 return;
+            }
+            if (!occupiedSlots.add(slot)) {
+                warnOnce(WarningKind.SLOT_COLLISION, slot, "Replacing a declarative node already claiming this slot");
             }
             removePreviousBinding(slot);
             if (binding == null) {
@@ -207,9 +224,6 @@ public class GuiRenderer {
         }
 
         private boolean invalidBinding(SlotBinding binding, int slot) {
-            if (binding.index() < 0 || binding.index() >= binding.container().size()) {
-                return true;
-            }
             Map<Integer, Integer> used = indexes.get(binding.container());
             Integer previous = used == null ? null : used.get(binding.index());
             return previous != null && previous.intValue() != slot;
