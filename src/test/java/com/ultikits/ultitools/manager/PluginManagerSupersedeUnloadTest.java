@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -35,6 +36,7 @@ import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.events.EventPriority;
 import com.ultikits.ultitools.events.ModuleEvent;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 
 /**
@@ -98,6 +100,8 @@ class PluginManagerSupersedeUnloadTest {
 
         pluginManager = new PluginManager();
         taskManager = mock(TaskManager.class);
+        lenient().when(taskManager.schedulerFor(any(UltiToolsPlugin.class)))
+                .thenAnswer(call -> mock(Scheduler.class));
         Field field = PluginManager.class.getDeclaredField("taskManager");
         field.setAccessible(true);
         field.set(pluginManager, taskManager);

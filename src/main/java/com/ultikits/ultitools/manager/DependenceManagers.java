@@ -2,6 +2,11 @@ package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.internal.FrameworkSchedulerBean;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import com.ultikits.ultitools.scheduling.internal.PaperBackend;
+import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
 import com.ultikits.ultitools.services.EconomyProvider;
 import com.ultikits.ultitools.services.EmailService;
 import com.ultikits.ultitools.services.NotificationService;
@@ -38,8 +43,19 @@ public class DependenceManagers {
         this.context.setClassLoader(classLoader);
         // Register the main plugin so modules can resolve Plugin/JavaPlugin dependencies
         context.registerSingleton("ultiTools", plugin);
+        initScheduling(plugin);
         initInventoryAPI(plugin);
         initCoreServices(plugin);
+    }
+
+    /** Installs the framework owner before any core service can schedule work. */
+    private void initScheduling(UltiTools plugin) {
+        PaperSchedulerEngine engine = new PaperSchedulerEngine(plugin, plugin.getLogger(), PaperBackend.live(plugin));
+        Scheduler scheduler = engine.newOwner("UltiTools");
+        context.registerSingleton("frameworkScheduler", new FrameworkSchedulerBean(engine, scheduler));
+        context.registerSingleton(Scheduler.class.getName(), scheduler);
+        context.registerType(Scheduler.class, scheduler);
+        FrameworkScheduling.install(scheduler);
     }
 
     /**
