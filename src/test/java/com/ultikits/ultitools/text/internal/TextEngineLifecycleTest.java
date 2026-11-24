@@ -1,0 +1,167 @@
+package com.ultikits.ultitools.text.internal;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.ultikits.ultitools.exceptions.PluginModuleException;
+import com.ultikits.ultitools.text.MessageKey;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+class TextEngineLifecycleTest {
+    @TempDir Path temporary;
+    private TextEngine engine;
+    private final List<LogRecord> diagnostics = new ArrayList<>();
+
+    @BeforeEach
+    void setUp() {
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setUseParentHandlers(false);
+        logger.addHandler(new Handler() {
+            @Override public void publish(LogRecord record) { diagnostics.add(record); }
+            @Override public void flush() { /* In-memory records only. */ }
+            @Override public void close() { /* No resources owned. */ }
+        });
+        engine = new TextEngine(new ConfiguredLocaleResolver(() -> "auto", () -> "zh", logger), logger);
+    }
+
+    @AfterEach
+    void tearDown() { engine.close(); }
+
+    @Test
+    void prepare_isReadOnlyAndDefersDiagnosticsUntilPublish() throws Exception {
+        Path source = source("first", "greeting: Hello\nbad: [invalid]\n");
+        Path overrides = temporary.resolve("operator/messages");
+        var prepared = engine.prepare("sample", "Sample", source.toUri().toURL(), overrides, Locale.ENGLISH);
+        assertThat(engine.catalogue("sample")).isNull();
+        assertThat(overrides).doesNotExist();
+        assertThat(diagnostics).isEmpty();
+        engine.publish(prepared, this);
+        assertThat(text()).isEqualTo("Hello");
+        assertThat(diagnostics).hasSize(1);
+        engine.publish(prepared, this);
+        assertThat(diagnostics).hasSize(1);
+    }
+
+    @Test
+    void replacement_oldOwnerCannotWithdrawNewCatalogue() throws Exception {
+        Object older = new Object();
+        Object newer = new Object();
+        engine.publish(prepare("old", "greeting: Old\n"), older);
+        engine.publish(prepare("new", "greeting: New\n"), newer);
+        engine.withdraw("sample", older);
+        assertThat(text()).isEqualTo("New");
+        engine.withdraw("sample", newer);
+        assertThat(engine.catalogue("sample")).isNull();
+    }
+
+    @Test
+    void rollback_restoresThePriorSnapshotAfterReloadAndIgnoresOtherOwners() throws Exception {
+        Object older = new Object();
+        Object newer = new Object();
+        engine.publish(prepare("rollback-old", "greeting: Old\n"), older);
+        Catalogue original = engine.catalogue("sample");
+        engine.publish(prepare("rollback-new", "greeting: New\n"), newer);
+        engine.reloadOverrides("sample");
+        engine.rollback("sample", older);
+        assertThat(text()).isEqualTo("New");
+        engine.rollback("sample", newer);
+        assertThat(engine.catalogue("sample")).isSameAs(original);
+        assertThat(text()).isEqualTo("Old");
+        engine.withdraw("sample", older);
+        assertThat(engine.catalogue("sample")).isNull();
+    }
+
+    @Test
+    void successfulReplacement_releasesTheUnloadedOwnersRollbackSnapshot() throws Exception {
+        Object older = new Object();
+        Object newer = new Object();
+        engine.publish(prepare("success-old", "greeting: Old\n"), older);
+        engine.publish(prepare("success-new", "greeting: New\n"), newer);
+        engine.withdraw("sample", older);
+        assertThat(text()).isEqualTo("New");
+        engine.rollback("sample", newer);
+        assertThat(engine.catalogue("sample")).isNull();
+        engine.rollback("sample", newer);
+        assertThat(engine.catalogue("sample")).isNull();
+    }
+
+    @Test
+    void differentModuleNamesCannotShareANamespaceAndFrameworkNameIsReserved() throws Exception {
+        var accepted = engine.prepare("sample_", "Sample!", source("one", "greeting: Hello\n").toUri().toURL(),
+                temporary.resolve("override-one"), Locale.ENGLISH);
+        engine.publish(accepted, this);
+        assertThatThrownBy(() -> engine.prepare("sample_", "Sample?", null,
+                temporary.resolve("override-two"), Locale.ENGLISH))
+                .isInstanceOf(PluginModuleException.class).hasMessageContaining("Sample!", "Sample?", "sample_");
+        assertThatThrownBy(() -> engine.prepare("ultitools", "UltiTools", null,
+                temporary.resolve("override-core"), Locale.ENGLISH))
+                .isInstanceOf(PluginModuleException.class).hasMessageContaining("UltiTools framework", "ultitools");
+    }
+
+    @Test
+    void sourceLanguage_normalizesAndDefaultsWithoutConstructionLogs() throws Exception {
+        Path source = source("source-language", "greeting: Hello\n");
+        Files.writeString(source.resolve("messages/zh.yml"), "greeting: Chinese\n");
+        Path overrides = temporary.resolve("source-overrides");
+        var chinese = engine.prepare("sample", "Sample", source.toUri().toURL(), overrides, "zh-CN");
+        assertThat(chinese.loaded().catalogue().sourceLocale()).isEqualTo(Locale.CHINA);
+        assertThat(chinese.loaded().diagnostics()).anyMatch(message -> message.contains("no shipped"));
+        assertThat(diagnostics).isEmpty();
+        var defaults = engine.prepare("sample", "Sample", source.toUri().toURL(), overrides, (String) null);
+        assertThat(defaults.loaded().catalogue().sourceLocale()).isEqualTo(Locale.ENGLISH);
+        var invalid = engine.prepare("sample", "Sample", source.toUri().toURL(), overrides, "???");
+        engine.publish(invalid, this);
+        assertThat(engine.catalogue("sample").sourceLocale()).isEqualTo(Locale.ENGLISH);
+        assertThat(diagnostics).hasSize(1);
+        assertThat(diagnostics.getFirst().getMessage()).contains("invalid source-language", "using en");
+        engine.publish(invalid, this);
+        assertThat(diagnostics).hasSize(1);
+    }
+
+    @Test
+    void reloadOverrides_replacesSnapshotAndRemovingOverrideRevealsShippedValue() throws Exception {
+        var prepared = prepare("reload", "greeting: Shipped\n");
+        engine.publish(prepared, this);
+        Catalogue before = engine.catalogue("sample");
+        Path directory = Files.createDirectories(prepared.overrideDirectory());
+        Files.writeString(directory.resolve("en.yml"), "greeting: Edited\n");
+        engine.reloadOverrides("sample");
+        assertThat(text()).isEqualTo("Edited");
+        assertThat(before.lookup("greeting", List.of(Locale.ENGLISH))).contains("Shipped");
+        Files.delete(directory.resolve("en.yml"));
+        engine.reloadOverrides("sample");
+        assertThat(text()).isEqualTo("Shipped");
+        engine.withdraw("sample", this);
+        engine.reloadOverrides("sample");
+        assertThat(engine.catalogue("sample")).isNull();
+    }
+
+    private TextEngine.Prepared prepare(String folder, String contents) throws Exception {
+        return engine.prepare("sample", "Sample", source(folder, contents).toUri().toURL(),
+                temporary.resolve("operator/messages"), Locale.ENGLISH);
+    }
+
+    private Path source(String name, String contents) throws Exception {
+        Path root = temporary.resolve(name);
+        Files.createDirectories(root.resolve("messages"));
+        Files.writeString(root.resolve("messages/en.yml"), contents);
+        return root;
+    }
+
+    private String text() {
+        return PlainTextComponentSerializer.plainText().serialize(
+                engine.messagesFor("sample").render(MessageKey.of("sample", "greeting"), Locale.US));
+    }
+}

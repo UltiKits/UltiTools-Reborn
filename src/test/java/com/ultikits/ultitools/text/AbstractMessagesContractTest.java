@@ -28,6 +28,9 @@ import java.util.logging.SimpleFormatter;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TranslatableComponent;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -152,6 +155,22 @@ public abstract class AbstractMessagesContractTest {
         Component rendered = messages.render(key, Locale.US, Arg.string("p", "<red>x"));
         assertThat(plain(rendered)).isEqualTo("<red>x");
         assertThat(rendered.compact()).isEqualTo(Component.text("<red>x"));
+    }
+
+    @Test
+    void render_componentArgument_doesNotLeakStyleOrEventsIntoFollowingText() {
+        MessageKey key = MessageKey.of("sample", "component_isolation");
+        Component player = Component.text("Steve", NamedTextColor.RED)
+                .clickEvent(ClickEvent.runCommand("/help"))
+                .hoverEvent(HoverEvent.showText(Component.text("Player details")));
+        Component expected = Component.empty().append(player).append(Component.text(" has joined. "))
+                .append(Component.text("ok", NamedTextColor.GREEN)).compact();
+        for (String tag : List.of("<player>", "<player:'invalid-format'>")) {
+            fixture.put(key, Locale.ENGLISH, tag + " has joined. <green>ok");
+            Component rendered = messages.render(key, Locale.US, Arg.component("player", player));
+            assertThat(rendered.compact()).as("The component tree isolates both normal and safe-default insertion")
+                    .isEqualTo(expected);
+        }
     }
 
     @Test
