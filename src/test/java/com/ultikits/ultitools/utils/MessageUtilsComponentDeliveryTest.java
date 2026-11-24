@@ -4,11 +4,11 @@ import static com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState;
 import static com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
@@ -21,10 +21,11 @@ import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 import org.mockito.MockedStatic;
 
-import com.ultikits.ultitools.manager.ChatCallbackManager;
 import com.ultikits.ultitools.widgets.impl.ChatConfirm;
 
+import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -98,25 +99,30 @@ class MessageUtilsComponentDeliveryTest {
     @Test
     @DisplayName("ChatConfirm.show delivers both button click events to the player")
     void chatConfirm_buttonsKeepClickEvents() {
-        UUID confirmId = UUID.fromString("00000000-0000-0000-0000-00000000000a");
-        UUID cancelId = UUID.fromString("00000000-0000-0000-0000-00000000000b");
-        Runnable onConfirm = () -> { };
-        Runnable onCancel = () -> { };
-        try (MockedStatic<ChatCallbackManager> callbacks = mockStatic(ChatCallbackManager.class)) {
-            callbacks.when(() -> ChatCallbackManager.registerCallback(any()))
-                    .thenAnswer(inv -> inv.getArgument(0) == onConfirm ? confirmId : cancelId);
+        ClickEvent<?> confirmClick = ClickEvent.custom(Key.key("test", "confirm"));
+        ClickEvent<?> cancelClick = ClickEvent.custom(Key.key("test", "cancel"));
+        // MockBukkit has no callback provider. Only the factory is stubbed; message delivery is real.
+        try (MockedStatic<ClickEvent> callbacks = mockStatic(ClickEvent.class, CALLS_REAL_METHODS)) {
+            callbacks.when(() -> ClickEvent.callback(any(), any(ClickCallback.Options.class)))
+                    .thenReturn(confirmClick, cancelClick);
 
-            new ChatConfirm(player, "Title", "Description", onConfirm, onCancel).show();
+            new ChatConfirm(player, "Title", "Description", "Yes", "No",
+                    () -> { /* Delivery test does not execute the confirm action. */ },
+                    () -> { /* Delivery test does not execute the cancel action. */ }).show();
         }
 
-        List<String> commands = new ArrayList<>();
-        Component received;
-        while ((received = player.nextComponentMessage()) != null) {
-            commands.addAll(clickCommands(received));
-        }
-        assertThat(commands)
-                .as("the confirm and cancel buttons must each carry their callback command")
-                .containsExactly("/ultitools_callback " + confirmId, "/ultitools_callback " + cancelId);
+        Component title = player.nextComponentMessage();
+        Component description = player.nextComponentMessage();
+        Component buttons = player.nextComponentMessage();
+        assertThat(title).isNotNull();
+        assertThat(description).isNotNull();
+        assertThat(buttons).isNotNull();
+        assertThat(buttons.children()).hasSize(3);
+        assertThat(buttons.children().get(0).clickEvent())
+                .as("the confirm callback event must survive delivery").isEqualTo(confirmClick);
+        assertThat(buttons.children().get(2).clickEvent())
+                .as("the cancel callback event must survive delivery").isEqualTo(cancelClick);
+        assertThat(player.nextComponentMessage()).isNull();
     }
 
     /**

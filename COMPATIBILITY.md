@@ -68,6 +68,48 @@ only `firstIndex(0)`. Negative counts and areas outside a six-row grid are also 
 末页不足时只绑定存在的下标，其余留空，不移动或复制容器内容。负起始下标、非空容器中大于等于大小的
 起始下标仍拒绝；空容器仅接受起始下标零，负数量和超出六行网格的区域也拒绝。
 
+## 7.0
+
+- Inject `com.ultikits.ultitools.scheduling.Scheduler` with `@Autowired` in module beans. Each module
+  instance owns its scheduler; unloading it cancels pending and repeating work without affecting a
+  same-name replacement. An already running one-shot task may finish.
+- Do not submit tasks from `onUnregister()` or `@PreDestroy`: the module scheduler has already retired
+  and rejects submissions with `RejectedExecutionException`. Perform unload cleanup directly.
+- Literal `@Scheduled(async = true)` periods use wall-clock time (50 ms per configured tick). A lagging
+  server no longer stretches those periods. Config-bound async tasks still use a global tick trigger.
+- A negative literal `@Scheduled(delay = ...)` now refuses the module load; 6.x treated it as zero.
+  Use `delay = 0` for no initial wait rather than a negative sentinel.
+
+A failed module load also retires that instance's injected scheduler and cancels pending and repeating
+work submitted during bean construction, `@PostConstruct`, or `registerSelf()`. An already running
+one-shot task may finish. This guarantee applies to the module-owned scheduler, not direct Bukkit tasks.
+
+## Adventure chat confirmation callbacks (as of 7.0.0)
+
+`ChatCallbackManager` and its hidden `/ultitools_callback` command are removed. Module authors
+who used that manager directly must migrate to Adventure's `ClickEvent.callback` with
+`ClickCallback.Options.builder().uses(1).build()` for a one-use callback.
+`ChatConfirm` uses this API for both buttons and runs a button's action only when the clicking
+audience is a player whose UUID matches the target player's UUID. Each button has its own
+one-use callback; the text, colours and message delivery are unchanged.
+
+- **Lifetime:** prompts expire on the server after Paper's default callback lifetime (about 12 hours).
+  Clicking an expired button does nothing. In 6.x, pending callbacks did not expire.
+- **Command pipeline:** clicks no longer fire `PlayerCommandPreprocessEvent`, produce the console's
+  `issued server command: /ultitools_callback ...` log line, or pass through other plugins' command blockers.
+- **Action exceptions:** Paper logs exceptions thrown by a button's action without disconnecting the player;
+  the 6.x callback command silently swallowed exceptions.
+- **Independent buttons:** clicking confirm and then cancel, or cancel and then confirm, runs each action once
+  while both callbacks remain valid. This was also possible in 6.x. Modules that need mutually exclusive
+  actions must enforce that condition in their own actions.
+- **Module unload:** unloading a module does not revoke its pending callbacks. Until the callback expires
+  (by default about 12 hours after registration), clicking an unused old button can still run action code
+  from the unloaded module. In 6.x, these callbacks were retained without an expiry.
+
+中文补充：7.0 删除 `ChatCallbackManager` 与隐藏命令 `/ultitools_callback`，直接使用过它的模块
+须改用 `ClickEvent.callback`。聊天确认按钮仅接受目标玩家（比较 UUID）点击，确认、取消各自一次；
+文字、颜色与发送方式不变。
+
 ## Native item and sound APIs (as of 7.0.0)
 
 UltiTools-API 7.0 no longer supplies XSeries or `XVersionUtils`, including the builder overloads
