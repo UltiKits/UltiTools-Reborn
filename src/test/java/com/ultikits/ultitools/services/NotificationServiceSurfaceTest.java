@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.Arrays;
 
 import org.junit.jupiter.api.Test;
 
@@ -44,7 +45,10 @@ class NotificationServiceSurfaceTest {
 
     @Test
     void notificationParametersContainNoStringAndSendingMethodsReturnVoid() {
-        Method[] methods = NotificationService.class.getDeclaredMethods();
+        // Coverage agents add private helpers that are not part of the sending API.
+        Method[] methods = Arrays.stream(NotificationService.class.getDeclaredMethods())
+                .filter(method -> Modifier.isPublic(method.getModifiers()))
+                .toArray(Method[]::new);
         assertThat(methods).hasSize(12).allSatisfy(method -> {
             assertThat(method.getParameterTypes()).doesNotContain(String.class);
             assertThat(method.getReturnType()).isEqualTo(void.class);
