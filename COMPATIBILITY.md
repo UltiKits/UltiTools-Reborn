@@ -5,6 +5,32 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Adventure chat confirmation callbacks (as of 7.0.0)
+
+`ChatCallbackManager` and its hidden `/ultitools_callback` command are removed. Module authors
+who used that manager directly must migrate to Adventure's `ClickEvent.callback` with
+`ClickCallback.Options.builder().uses(1).build()` for a one-use callback.
+`ChatConfirm` uses this API for both buttons and runs a button's action only when the clicking
+audience is a player whose UUID matches the target player's UUID. Each button has its own
+one-use callback; the text, colours and message delivery are unchanged.
+
+- **Lifetime:** prompts expire on the server after Paper's default callback lifetime (about 12 hours).
+  Clicking an expired button does nothing. In 6.x, pending callbacks did not expire.
+- **Command pipeline:** clicks no longer fire `PlayerCommandPreprocessEvent`, produce the console's
+  `issued server command: /ultitools_callback ...` log line, or pass through other plugins' command blockers.
+- **Action exceptions:** Paper logs exceptions thrown by a button's action without disconnecting the player;
+  the 6.x callback command silently swallowed exceptions.
+- **Independent buttons:** clicking confirm and then cancel, or cancel and then confirm, runs each action once
+  while both callbacks remain valid. This was also possible in 6.x. Modules that need mutually exclusive
+  actions must enforce that condition in their own actions.
+- **Module unload:** unloading a module does not revoke its pending callbacks. Until the callback expires
+  (by default about 12 hours after registration), clicking an unused old button can still run action code
+  from the unloaded module. In 6.x, these callbacks were retained without an expiry.
+
+中文补充：7.0 删除 `ChatCallbackManager` 与隐藏命令 `/ultitools_callback`，直接使用过它的模块
+须改用 `ClickEvent.callback`。聊天确认按钮仅接受目标玩家（比较 UUID）点击，确认、取消各自一次；
+文字、颜色与发送方式不变。
+
 ## Native item and sound APIs (as of 7.0.0)
 
 UltiTools-API 7.0 no longer supplies XSeries or `XVersionUtils`, including the builder overloads
