@@ -3,6 +3,8 @@ package com.ultikits.ultitools.bootstrap;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Path;
 import java.security.CodeSource;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.logging.Level;
@@ -20,12 +22,22 @@ final class ModuleBootstraps {
 
     static Run runAll(ModuleJarAdmission admission, ClassLoader loader, Logger logger) {
         Map<Path, Throwable> failures = new LinkedHashMap<>();
+        Set<String> mains = new HashSet<>();
         int attempted = 0;
         // Filename order makes diagnostics repeatable; it is not an ordering contract for modules.
         for (Map.Entry<Path, ModuleJarAdmission.Entry> module : admission.entries().entrySet()) {
             PluginYmlReader.PluginYmlInfo metadata = module.getValue().getMetadata();
+            if (!module.getValue().isApiAllowed()) {
+                continue;
+            }
+            String main = metadata.getMain();
+            // The shared loader supplies the first copy, even if that copy has no early hook.
+            // Discovery retains responsibility for the ordinary duplicate-copy warning.
+            if (main != null && !main.isBlank() && !mains.add(main)) {
+                continue;
+            }
             String bootstrapper = metadata.getBootstrapper();
-            if (!module.getValue().isApiAllowed() || bootstrapper == null || bootstrapper.trim().isEmpty()) {
+            if (bootstrapper == null || bootstrapper.isBlank()) {
                 continue;
             }
             attempted++;

@@ -92,6 +92,33 @@ class ModuleBootstrapsTest {
     }
 
     @Test
+    void duplicateMainWithBootstrapper_leavesDuplicateDiagnosticsToDiscovery() throws Exception {
+        Path first = jar(temporary.resolve("a-first.jar"), descriptor("Same", "fixture.Early"),
+                Collections.singletonMap("fixture.Early", hook("fixture.Early", null)));
+        Path duplicate = jar(temporary.resolve("z-duplicate.jar"), descriptor("Same", "fixture.Early"),
+                Collections.singletonMap("fixture.Early", hook("fixture.Early", null)));
+        ModuleJarAdmission admission = admission(first, duplicate);
+        try (ModuleClassLoader loader = loader(first, duplicate)) {
+            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission, loader, logger);
+            assertThat(run.attempted).isEqualTo(1);
+            assertThat(run.failures).isEmpty();
+            assertThat(admission.inspect(duplicate.toFile()).getBootstrapFailure()).isNull();
+        }
+    }
+
+    @Test
+    void duplicateWithHook_doesNotRunWhenTheFirstCopyHasNoHook() throws Exception {
+        Path first = jar(temporary.resolve("a-first.jar"), descriptor("Same", null), Collections.emptyMap());
+        Path duplicate = jar(temporary.resolve("z-duplicate.jar"), descriptor("Same", "fixture.Early"),
+                Collections.singletonMap("fixture.Early", hook("fixture.Early", null)));
+        try (ModuleClassLoader loader = loader(first, duplicate)) {
+            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission(first, duplicate), loader, logger);
+            assertThat(run.attempted).isZero();
+            assertThat(run.failures).isEmpty();
+        }
+    }
+
+    @Test
     void noHookOrRefusedApi_isNotAttempted() throws Exception {
         Path ordinary = jar(temporary.resolve("ordinary.jar"), descriptor("Ordinary", null), Collections.emptyMap());
         Path refused = jar(temporary.resolve("refused.jar"), descriptor("Refused", "fixture.Refused").replace("700", "630"),
