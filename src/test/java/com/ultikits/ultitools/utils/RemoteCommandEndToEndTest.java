@@ -62,6 +62,7 @@ import static org.mockito.Mockito.when;
 @Timeout(30)
 class RemoteCommandEndToEndTest {
     private ServerMock server;
+    private FrameworkSchedulerTestSession frameworkScheduler;
     @TempDir
     Path credentials;
     private boolean isolatedCloudState;
@@ -70,6 +71,7 @@ class RemoteCommandEndToEndTest {
     void setUp() {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock(spy(new ServerMock()));
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         YamlConfiguration config = new YamlConfiguration();
         config.set(Capability.COMMANDS.getConfigPath(), true);
         TestHelper.mockUltiToolsInstance(plugin -> {
@@ -99,6 +101,7 @@ class RemoteCommandEndToEndTest {
             server.getScheduler().waitAsyncTasksFinished();
             CloudTestAccess.reset();
         }
+        frameworkScheduler.close();
         MockBukkitHelper.safeUnmock();
     }
 

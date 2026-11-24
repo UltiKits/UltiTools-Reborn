@@ -54,6 +54,7 @@ class CloudOutboxListenerTest {
     Path tempDir;
 
     private ServerMock server;
+    private FrameworkSchedulerTestSession frameworkScheduler;
     private Logger mockLogger;
     private YamlConfiguration config;
     private CloudOutboxListener listener;
@@ -64,6 +65,7 @@ class CloudOutboxListenerTest {
     void setUp() {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         Plugin plugin = MockBukkit.createMockPlugin();
         mockLogger = mock(Logger.class);
         config = new YamlConfiguration();
@@ -81,6 +83,7 @@ class CloudOutboxListenerTest {
     void tearDown() {
         CloudTestAccess.reset();
         clearUltiToolsInstance();
+        frameworkScheduler.close();
         MockBukkitHelper.safeUnmock();
     }
 

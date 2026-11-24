@@ -50,6 +50,7 @@ class CloudLogoutRevokeTest {
     @TempDir Path tempDir;
     Path credentialFile;
     ServerMock server;
+    private FrameworkSchedulerTestSession frameworkScheduler;
     HttpServer http;
     Gateway gateway;
     final List<String> lines = new CopyOnWriteArrayList<>();
@@ -72,6 +73,7 @@ class CloudLogoutRevokeTest {
     void setUp() throws Exception {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         CloudSession.resetForTesting();
         ApiRateLimiter.resetAll();
         credentialFile = tempDir.resolve("credentials.json");
@@ -106,6 +108,7 @@ class CloudLogoutRevokeTest {
         HttpRequestUtils.resetBaseUrl();
         CredentialStore.clearTargetPathForTesting();
         CredentialStore.clearOldLocationForTesting();
+        frameworkScheduler.close();
         MockBukkitHelper.safeUnmock();
         Field instance = UltiTools.class.getDeclaredField("ultiTools");
         instance.setAccessible(true);

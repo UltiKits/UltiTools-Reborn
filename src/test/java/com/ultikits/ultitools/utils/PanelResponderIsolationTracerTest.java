@@ -60,6 +60,7 @@ class PanelResponderIsolationTracerTest {
     private static final long BOUND_SECONDS = 10L;
 
     private ServerMock server;
+    private FrameworkSchedulerTestSession frameworkScheduler;
     private Thread primaryThread;
     private EventBus eventBus;
     private PanelResponderRegistry registry;
@@ -76,6 +77,7 @@ class PanelResponderIsolationTracerTest {
         PluginInitiationUtils.startAcceptingPanelMessages();
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         primaryThread = Thread.currentThread();
 
         aStarted = new CountDownLatch(1);
@@ -125,6 +127,7 @@ class PanelResponderIsolationTracerTest {
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
         instanceField.set(null, null);
+        frameworkScheduler.close();
         MockBukkitHelper.safeUnmock();
     }
 

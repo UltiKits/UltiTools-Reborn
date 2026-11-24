@@ -251,12 +251,14 @@ class ModuleRequestEndToEndTest {
         private final List<PanelMessageEvent> received = new CopyOnWriteArrayList<>();
         private final AtomicBoolean observedPrimaryThread = new AtomicBoolean();
         private ServerMock server;
+        private FrameworkSchedulerTestSession frameworkScheduler;
         private EventBus eventBus;
 
         @BeforeEach
         void setUp() {
             MockBukkitHelper.ensureCleanState();
             server = MockBukkit.mock();
+            frameworkScheduler = new FrameworkSchedulerTestSession();
             MockBukkit.createMockPlugin();
             eventBus = new EventBus();
             eventBus.subscribe(PanelMessageEvent.class, event -> {
@@ -275,6 +277,7 @@ class ModuleRequestEndToEndTest {
             Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
             instanceField.setAccessible(true);
             instanceField.set(null, null);
+            frameworkScheduler.close();
             MockBukkitHelper.safeUnmock();
         }
 

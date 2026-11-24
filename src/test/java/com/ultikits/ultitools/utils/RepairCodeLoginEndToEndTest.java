@@ -69,6 +69,7 @@ class RepairCodeLoginEndToEndTest {
     Path temp;
 
     private ServerMock server;
+    private FrameworkSchedulerTestSession frameworkScheduler;
     private UltiCloudStub.Handle stub;
     private CloudFeatures features;
     private final YamlConfiguration config = new YamlConfiguration();
@@ -79,6 +80,7 @@ class RepairCodeLoginEndToEndTest {
     void setUp() throws Exception {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         Path state = temp.resolve("server").resolve(".ultikits");
         Files.createDirectories(state);
         Logger logger = Logger.getLogger("RepairCodeLoginEndToEndTest." + System.nanoTime());
@@ -116,6 +118,7 @@ class RepairCodeLoginEndToEndTest {
         }
         stub.close();
         CloudTestAccess.reset();
+        frameworkScheduler.close();
         MockBukkitHelper.safeUnmock();
         Field instance = UltiTools.class.getDeclaredField("ultiTools");
         instance.setAccessible(true);

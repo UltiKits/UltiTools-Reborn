@@ -4,9 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -14,20 +12,20 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Field;
 import java.util.logging.Logger;
 
-import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
-import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import com.ultikits.ultitools.services.EmailService;
 import com.ultikits.ultitools.services.NotificationService;
 import com.ultikits.ultitools.services.TeleportService;
@@ -430,14 +428,13 @@ class DependenceManagersTest {
             SimpleContainer context = new SimpleContainer();
             setField(managers, "context", context);
 
-            // initCoreServices(UltiTools) now schedules the deferred economy start-up report via
-            // Bukkit.getScheduler().runTask(...) (Codex P2, PR #463) -- this test only cares about
-            // the three aliased core-service registrations above it, so the scheduler is mocked to
-            // accept and discard the task rather than actually running it (no live Bukkit server
-            // exists in this test class at all).
-            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
-                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
-                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+            // Supply the framework's global context without running its deferred economy report;
+            // this test checks service aliases and does not have a live Bukkit server.
+            Scheduler scheduler = mock(Scheduler.class);
+            TaskContext global = mock(TaskContext.class);
+            when(scheduler.global()).thenReturn(global);
+            FrameworkScheduling.install(scheduler);
+            try {
 
                 // Act: invoke the real private initCoreServices(UltiTools) method -- the exact
                 // code path DependenceManagers' own constructor runs, not a hand-copied
@@ -465,6 +462,8 @@ class DependenceManagersTest {
                         "EmailService is aliased under two names (:80-81) -- must not be seen as two "
                                 + "ambiguous candidates");
                 assertThat(emailService).isNotNull();
+            } finally {
+                FrameworkScheduling.uninstall(scheduler);
             }
         }
 
@@ -479,13 +478,13 @@ class DependenceManagersTest {
          * server start-up.
          * <p>
          * Asserts the OBSERVABLE fix directly: the report must be handed to
-         * {@link Bukkit#getScheduler()} as a deferred task, and must NOT have already logged
+         * the framework's global context as a deferred task, and must NOT have already logged
          * anything by the time {@code initCoreServices(UltiTools)} returns (the mock scheduler
          * never actually runs the captured task, so any log call caught here can only have
          * happened synchronously, during {@code initCoreServices(UltiTools)} itself).
          */
         @Test
-        @DisplayName("logStartupState() is deferred via the Bukkit scheduler, not called synchronously (Codex P2, PR #463)")
+        @DisplayName("logStartupState() is deferred via the framework scheduler, not called synchronously (Codex P2, PR #463)")
         void logStartupStateIsDeferredViaScheduler_notCalledSynchronously() throws Exception {
             DependenceManagers managers = createManagersWithMockedFields();
             SimpleContainer context = new SimpleContainer();
@@ -495,9 +494,11 @@ class DependenceManagersTest {
             UltiTools mockUltiTools = TestHelper.mockUltiToolsInstance(
                     ultiTools -> when(ultiTools.getLogger()).thenReturn(mockUltiToolsLogger));
 
-            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
-                BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
-                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+            Scheduler scheduler = mock(Scheduler.class);
+            TaskContext global = mock(TaskContext.class);
+            when(scheduler.global()).thenReturn(global);
+            FrameworkScheduling.install(scheduler);
+            try {
 
                 java.lang.reflect.Method initCoreServices =
                         DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
@@ -506,12 +507,14 @@ class DependenceManagersTest {
 
                 // The economy start-up report must be handed to the scheduler as a deferred task,
                 // not run inline.
-                verify(mockScheduler).runTask(eq(mockUltiTools), any(Runnable.class));
+                verify(global).run(any(Runnable.class));
                 // logStartupState() must not have already logged anything synchronously -- the
                 // mock scheduler never runs the captured task, so any call caught here proves it
                 // ran too early.
                 verify(mockUltiToolsLogger, never()).info(anyString());
                 verify(mockUltiToolsLogger, never()).warning(anyString());
+            } finally {
+                FrameworkScheduling.uninstall(scheduler);
             }
         }
     }

@@ -98,6 +98,8 @@ class AgentRestConformanceTest {
         }
     }
 
+    private FrameworkSchedulerTestSession frameworkScheduler;
+
     @BeforeEach
     void setUp() throws IOException {
         MockBukkitHelper.ensureCleanState();
@@ -138,6 +140,9 @@ class AgentRestConformanceTest {
     void tearDown() throws Exception {
         cloud.stop(0);
         CloudTestAccess.reset();
+        if (frameworkScheduler != null) {
+            frameworkScheduler.close();
+        }
         MockBukkitHelper.safeUnmock();
         Field instanceField = UltiTools.class.getDeclaredField("ultiTools");
         instanceField.setAccessible(true);
@@ -353,6 +358,7 @@ class AgentRestConformanceTest {
     @DisplayName("every valid revoke answer counts as revoked; the revoke request has no body")
     void revokeAnswerOutcome(Fixture fixture) throws InterruptedException {
         org.mockbukkit.mockbukkit.ServerMock server = MockBukkit.mock();
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         reply.set(new Reply(statusOf(fixture), fixture.body().toString(), null));
         CloudTestAccess.storeLinkedCredential("Survival", HandshakeEndToEndTest.SERVER_ID);
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();

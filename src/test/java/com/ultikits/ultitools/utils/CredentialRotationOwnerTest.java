@@ -55,6 +55,7 @@ class CredentialRotationOwnerTest {
     Path temp;
 
     private ServerMock server;
+    private FrameworkSchedulerTestSession frameworkScheduler;
     private UltiCloudStub.Handle stub;
     private CloudFeatures features;
     private Path credentialFile;
@@ -64,6 +65,7 @@ class CredentialRotationOwnerTest {
     void setUp() throws Exception {
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
+        frameworkScheduler = new FrameworkSchedulerTestSession();
         Path state = temp.resolve("server").resolve(".ultikits");
         Files.createDirectories(state);
         credentialFile = state.resolve("credentials.json");
@@ -99,6 +101,7 @@ class CredentialRotationOwnerTest {
         }
         stub.close();
         CloudTestAccess.reset();
+        frameworkScheduler.close();
         MockBukkitHelper.safeUnmock();
         Field instance = UltiTools.class.getDeclaredField("ultiTools");
         instance.setAccessible(true);
