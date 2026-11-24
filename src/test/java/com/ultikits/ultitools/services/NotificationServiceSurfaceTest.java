@@ -17,6 +17,13 @@ class NotificationServiceSurfaceTest {
     }
 
     @Test
+    void hologramWidgetIsGone() {
+        assertThatThrownBy(() -> getClass().getClassLoader()
+                .loadClass("com.ultikits.ultitools.widgets.Hologram"))
+                .isInstanceOf(ClassNotFoundException.class);
+    }
+
+    @Test
     void notificationServiceHasNoToastMethod() {
         assertThat(NotificationService.class.getMethods())
                 .extracting(Method::getName)
