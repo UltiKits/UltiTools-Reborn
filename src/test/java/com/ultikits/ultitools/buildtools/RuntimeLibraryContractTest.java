@@ -46,21 +46,8 @@ class RuntimeLibraryContractTest {
 
     @Test
     void pluginYmlDeclaresNoAudienceProviderLibrary() throws Exception {
-        Path pluginYml = projectRoot().resolve("target/classes/plugin.yml");
-        assertThat(pluginYml).as("the filtered plugin descriptor must exist").isRegularFile();
-
-        Object descriptor;
-        try (InputStream input = Files.newInputStream(pluginYml)) {
-            descriptor = new Yaml(new SafeConstructor(new LoaderOptions())).load(input);
-        }
-        assertThat(descriptor).isInstanceOf(Map.class);
-        Object libraries = ((Map<?, ?>) descriptor).get("libraries");
-        assertThat(libraries).as("the filtered descriptor's libraries list").isInstanceOf(List.class);
-
         List<String> providerLibraries = new ArrayList<>();
-        for (Object library : (List<?>) libraries) {
-            assertThat(library).as("a Paper library coordinate").isInstanceOf(String.class);
-            String coordinate = (String) library;
+        for (String coordinate : libraryCoordinates()) {
             String[] parts = coordinate.split(":");
             if (parts.length >= 2 && AUDIENCE_PROVIDER.equals(parts[0] + ":" + parts[1])) {
                 providerLibraries.add(coordinate);
@@ -190,7 +177,7 @@ class RuntimeLibraryContractTest {
 
     @Test
     void apiVersionMatchesPaperTwentySixThreeBaseline() throws Exception {
-        Path pluginYml = projectRoot().resolve("target/classes/plugin.yml");
+        Path pluginYml = projectRoot().resolve("target/classes/paper-plugin.yml");
         assertThat(pluginYml).as("the filtered plugin descriptor must exist").isRegularFile();
         Object descriptor;
         try (InputStream input = Files.newInputStream(pluginYml)) {
@@ -203,6 +190,44 @@ class RuntimeLibraryContractTest {
     }
 
     @Test
+    void paperPluginYmlNamesBootstrapperAndLoader() throws Exception {
+        Object descriptor;
+        try (InputStream input = Files.newInputStream(projectRoot().resolve("target/classes/paper-plugin.yml"))) {
+            descriptor = new Yaml(new SafeConstructor(new LoaderOptions())).load(input);
+        }
+        assertThat(descriptor).isInstanceOf(Map.class);
+        Map<?, ?> values = (Map<?, ?>) descriptor;
+        assertThat(values.get("bootstrapper")).isEqualTo("com.ultikits.ultitools.bootstrap.UltiToolsBootstrap");
+        assertThat(values.get("loader")).isEqualTo("com.ultikits.ultitools.bootstrap.UltiToolsLoader");
+        assertThat(values.get("name")).isEqualTo("UltiTools");
+        try (InputStream input = Files.newInputStream(projectRoot().resolve("target/classes/env.yml"))) {
+            Map<?, ?> environment = new Yaml(new SafeConstructor(new LoaderOptions())).load(input);
+            assertThat(values.get("version")).isEqualTo(environment.get("version"));
+        }
+        assertThat(values.get("main")).isEqualTo("com.ultikits.ultitools.UltiTools");
+        assertThat(values.get("prefix")).isEqualTo("UltiTools");
+        assertThat(values.get("load")).isEqualTo("POSTWORLD");
+        assertThat(values.get("authors")).isEqualTo(Collections.singletonList("wisdomme"));
+        assertThat(values.containsKey("libraries")).isFalse();
+        assertThat(values.containsKey("softdepend")).isFalse();
+        assertThat(values.containsKey("website")).isFalse();
+        assertThat(values.containsKey("description")).isFalse();
+        Map<?, ?> server = (Map<?, ?>) ((Map<?, ?>) values.get("dependencies")).get("server");
+        assertThat(server.keySet()).isEqualTo(new HashSet<>(Arrays.asList("Vault", "PlaceholderAPI")));
+        for (Object dependency : server.values()) {
+            assertThat(((Map<?, ?>) dependency).get("required")).isEqualTo(false);
+            assertThat(((Map<?, ?>) dependency).get("join-classpath")).isEqualTo(true);
+            assertThat(((Map<?, ?>) dependency).get("load")).isEqualTo("BEFORE");
+        }
+    }
+
+    @Test
+    void pluginYmlIsAbsent() {
+        assertThat(projectRoot().resolve("src/main/resources/plugin.yml")).doesNotExist();
+        assertThat(projectRoot().resolve("target/classes/plugin.yml")).doesNotExist();
+    }
+
+    @Test
     void retiredCrossVersionLibraryIsNotDeclared() throws Exception {
         assertThat(libraryCoordinates()).noneMatch(coordinate -> coordinate.contains("cryptomorin"));
         assertThat(new String(Files.readAllBytes(projectRoot().resolve("pom.xml")),
@@ -210,19 +235,14 @@ class RuntimeLibraryContractTest {
     }
 
     private static List<String> libraryCoordinates() throws Exception {
-        Object descriptor;
-        try (InputStream input = Files.newInputStream(projectRoot().resolve("target/classes/plugin.yml"))) {
-            descriptor = new Yaml(new SafeConstructor(new LoaderOptions())).load(input);
-        }
-        assertThat(descriptor).isInstanceOf(Map.class);
-        Object libraries = ((Map<?, ?>) descriptor).get("libraries");
-        assertThat(libraries).isInstanceOf(List.class);
-        List<String> result = new ArrayList<>();
-        for (Object library : (List<?>) libraries) {
-            assertThat(library).isInstanceOf(String.class);
-            String coordinate = (String) library;
+        Path resource = projectRoot().resolve("target/classes/ultitools-libraries.txt");
+        assertThat(resource).as("the filtered runtime-library resource must exist").isRegularFile();
+        List<String> result = Files.readAllLines(resource, StandardCharsets.UTF_8).stream()
+                .map(String::trim).filter(line -> !line.isEmpty() && !line.startsWith("#"))
+                .collect(Collectors.toList());
+        assertThat(result).isNotEmpty();
+        for (String coordinate : result) {
             assertThat(coordinate.split(":")).as("Maven library coordinate").hasSize(3);
-            result.add(coordinate);
         }
         return result;
     }

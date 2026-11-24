@@ -186,7 +186,8 @@ public final class PluginYmlReader {
         // UltiToolsPlugin's own getString("version"); released modules quote it ('${project.version}').
         String version = config.getString("version");
         String apiVersion = config.getString("api-version");
-        return new PluginYmlInfo(name, main, loadAfter, softDepend, depend, version, apiVersion);
+        return new PluginYmlInfo(name, main, loadAfter, softDepend, depend, version, apiVersion,
+                config.getString("bootstrapper"));
     }
 
     /**
@@ -221,6 +222,7 @@ public final class PluginYmlReader {
         private final List<String> depend;
         private final String version;
         private final String apiVersion;
+        private final String bootstrapper;
 
         PluginYmlInfo(String name, String main, List<String> loadAfter, List<String> softDepend,
                 List<String> depend) {
@@ -229,6 +231,12 @@ public final class PluginYmlReader {
 
         PluginYmlInfo(String name, String main, List<String> loadAfter, List<String> softDepend,
                 List<String> depend, String version, String apiVersion) {
+            this(name, main, loadAfter, softDepend, depend, version, apiVersion, null);
+        }
+
+        PluginYmlInfo(String name, String main, List<String> loadAfter, List<String> softDepend,
+                List<String> depend, String version, String apiVersion, String bootstrapper) {
+            this.bootstrapper = bootstrapper;
             this.name = name;
             this.main = main;
             this.version = version;
@@ -312,6 +320,16 @@ public final class PluginYmlReader {
          */
         public String getApiVersion() {
             return apiVersion;
+        }
+
+        /**
+         * The optional early-start entry point, read without loading a module class.
+         *
+         * @return the declared bootstrapper class name, or {@code null} when absent
+         * @since 7.0.0
+         */
+        public String getBootstrapper() {
+            return bootstrapper;
         }
     }
 }
