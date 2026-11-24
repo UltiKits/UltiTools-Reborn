@@ -21,7 +21,7 @@ public abstract class StatefulDeclarativeGui<T extends StatefulDeclarativeGui<T>
 
     /**
      * @param ui the screen owner's UI service
-     * @param scheduler the framework-owned scheduler
+     * @param scheduler the module's own injected scheduler
      * @param viewer the viewer
      * @param id the build-context identifier
      * @param title deferred screen title

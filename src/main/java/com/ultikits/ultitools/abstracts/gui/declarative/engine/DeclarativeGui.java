@@ -31,7 +31,7 @@ public abstract class DeclarativeGui {
 
     /**
      * @param ui the screen owner's UI service
-     * @param scheduler the framework-owned scheduler (not the module scheduler)
+     * @param scheduler the module's own injected scheduler
      * @param viewer the viewer
      * @param id the build-context identifier
      * @param title deferred screen title

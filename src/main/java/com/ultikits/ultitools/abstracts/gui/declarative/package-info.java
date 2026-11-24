@@ -37,7 +37,8 @@
  *   <li>RenderNode tree describes immutable Grid snapshots; the backend diffs slots</li>
  *   <li>Supports both StatelessWidget and StatefulWidget</li>
  *   <li>setState triggers a partial rebuild</li>
- *   <li>All updates run on the main thread automatically</li>
+ *   <li>State mutations run on the calling thread; rebuilds run in the viewer's entity context.
+ *       Hand off background results with the module's scheduler before mutating state.</li>
  *   <li>UiService owns screen sessions, actions and close results</li>
  * </ul>
  * <p>
@@ -87,8 +88,13 @@
  *     }
  * }
  *
- * // 2. Open the GUI
+ * // 2. Use the module's injected UiService and Scheduler on the viewer's entity thread.
  * new ShopPage(ui, scheduler, player, items).open();
+ *
+ * // 3. Bind an item area. The last page may contain fewer than nine indexes.
+ * ItemSlotArea.builder(container).firstIndex(page * 9).count(9).build(); // VIEW by default
+ * ItemSlotArea.builder(container).firstIndex(page * 9).count(9)
+ *     .mode(BindingMode.EDITABLE).build(); // Moving items requires explicit opt-in
  * }</pre>
  * <p>
  * <h2>StatefulWidget Example:</h2>

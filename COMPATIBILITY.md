@@ -5,6 +5,69 @@ deprecation and removal work, and which removals each release makes (for 6.3.0, 
 [Removal list for 6.3.0](#removal-list-for-630)). It is written for downstream module authors. What 6.3.1
 changes for UltiCloud is in [UltiCloud protocol 2.1.0 (as of 6.3.1)](#ulticloud-protocol-210-as-of-631).
 
+## Declarative screens use the UI service (as of 7.0.0)
+
+The declarative engine no longer inherits obliviate's `Gui`. It emits immutable `Grid` snapshots;
+`UiService` owns display, click dispatch and session outcomes. Rebuild modules against 7.0.
+
+| 6.x usage | 7.0 replacement |
+|---|---|
+| `super(player, id, "Title", rows)` or the `Component` title overload | `super(ui, scheduler, player, id, Text.plain("Title"), rows)`; pass the module's own injected `UiService` and `Scheduler` |
+| Constructors accepting `InventoryType` | Fixed chest grids with 1–6 rows |
+| `ItemDisplay.builder(itemStack).name("Buy").lore("Details")` | `ItemDisplay.builder(ItemSpec.builder(Material.STONE).name(Text.plain("Buy")).lore(List.of(Text.plain("Details"))).build())` |
+| `TextButton.builder().text("Buy").lore("Details")` | `TextButton.builder().text(Text.plain("Buy")).lore(List.of(Text.plain("Details")))` |
+| `onClick(Consumer<InventoryClickEvent>)` | `onClick(GridAction)`, whose `GridClick` supplies the viewer, slot, click kind and session; `onClick(Runnable)` remains |
+| `IconWrapper.builder(itemStack)` | `ItemSpec.builder(Material.STONE)`; `IconWrapper` is deleted |
+| `getPlayer()` | `viewer()` |
+| `onGuiOpen`, `onGuiClick`, inventory-event `onClose` / `onGuiClose` | Describe content in `build`; put actions on widgets; use `onGuiClose(UiResult<Ack>)` after the tree is disposed |
+| `RenderNodeDiffer` / `DiffResult` | Removed; backend-owned grid comparison replaces engine-owned inventory diffs |
+
+For example, the old string/event-based button:
+
+```java
+super(player, "shop", "Shop", 1);
+// In build(...):
+ItemDisplay.builder(new ItemStack(Material.STONE)).name("Buy")
+    .onClick(event -> event.getWhoClicked().sendMessage("Bought")).build();
+```
+
+becomes a description plus a grid action:
+
+```java
+super(ui, scheduler, player, "shop", Text.plain("Shop"), 1);
+// In build(...):
+ItemDisplay.builder(ItemSpec.builder(Material.STONE).name(Text.plain("Buy")).build())
+    .onClick(click -> click.viewer().sendMessage("Bought")).build();
+```
+
+`open()` now returns a `GridSession`. The title and row count are fixed per page instance.
+Call `open()` on the viewer's entity thread. State mutations happen on the calling thread;
+only rebuilding is marshalled to the viewer's entity thread. Hand off background results with
+`scheduler.entity(viewer).run(...)` before mutating state.
+
+`ItemSlotArea` is new. It binds existing container indexes without copying or moving their items:
+
+```java
+ItemSlotArea.builder(container).firstIndex(page * 9).count(9).startSlot(0).build(); // VIEW
+ItemSlotArea.builder(container).firstIndex(page * 9).count(9).startSlot(0)
+    .mode(BindingMode.EDITABLE).build(); // Explicit opt-in to moving items
+```
+
+A partial last page binds only existing indexes and leaves the remaining area empty. A negative
+`firstIndex`, or one at/after the end of a nonempty container, is rejected. An empty container accepts
+only `firstIndex(0)`. Negative counts and areas outside a six-row grid are also rejected.
+
+中文补充：**7.0 声明式界面不再继承 obliviate `Gui`，改为向界面服务提交不可变 `Grid`。**
+上表与示例给出旧写法到新写法的对应：构造器传模块自己的 `UiService`、`Scheduler` 与 `Text` 标题；
+不再接受 `InventoryType`。`ItemDisplay` 使用 `ItemSpec`，`TextButton` 的名称和说明使用 `Text`；
+点击改为 `GridAction` / `GridClick`（无参 `Runnable` 仍可用）。删除 `IconWrapper`、`RenderNodeDiffer`
+和 `DiffResult`；`getPlayer()` 改为 `viewer()`，旧打开／点击／关闭事件钩子改为组件动作和
+`onGuiClose(UiResult<Ack>)`。`open()` 返回 `GridSession`，每个界面实例的标题和行数固定。
+状态修改在调用线程立即生效，重建才调度到观看者的实体线程；后台结果应先通过模块调度器切回该线程。
+新增 `ItemSlotArea` 默认只读（`VIEW`），允许移动物品必须显式 `.mode(BindingMode.EDITABLE)`；
+末页不足时只绑定存在的下标，其余留空，不移动或复制容器内容。负起始下标、非空容器中大于等于大小的
+起始下标仍拒绝；空容器仅接受起始下标零，负数量和超出六行网格的区域也拒绝。
+
 ## Native item and sound APIs (as of 7.0.0)
 
 UltiTools-API 7.0 no longer supplies XSeries or `XVersionUtils`, including the builder overloads
@@ -3642,10 +3705,9 @@ tell people which floor they are standing on before removing it.
 
 ### Declarative GUI known limitations and author guidance
 
-The limitations collected in [#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)
-remain after the frame and child-ownership corrections in
-[#685](https://github.com/UltiKits/UltiTools-Reborn/pull/685). This is guidance for existing behaviour,
-not a change to lifecycle ordering, exception handling, key matching or grid layout.
+The widget-authoring limitations collected in [#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)
+still apply where described below. The scheduling, session and diagnostic guidance here describes
+7.0's UI-service-based engine, not the old obliviate entry points.
 
 - **A failing `initState` can keep requesting frames.** If it calls `setState` and then throws,
   the page retries once per scheduled frame while open and logs each failure. The frame budget
@@ -3666,25 +3728,33 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   replacement fails to mount. Later frames can then fail with `State is null`. Avoid throwing
   from `build` or `initState`; after correcting the widget, close and reopen the GUI rather than
   relying on another rebuild to repair that wrapper.
-- **Do not close a GUI from inside its `build` method.** Closing disposes the renderer while
-  the running build can still access its root and fail. Close from an event handler instead.
-  A queued rebuild that starts after disposal does nothing; that does not make closing in the
-  middle of an active build safe.
-- **An initial build failure propagates out of `DeclarativeGui.onOpen`.** The first build runs
-  synchronously on the main thread, outside the scheduled frame's per-task exception handler.
-  Do not assume opening a broken widget is swallowed by that handler. Handle expected failures
-  in the widget and render an error state. Normal close releases the mounted tree, provided its
-  disposal callbacks do not themselves throw.
+- **Close through the session.** `GridSession.close()` selects an outcome and schedules completion;
+  it does not synchronously dispose an active build. On result completion the engine cancels pending
+  frames, attempts tree disposal, then invokes `onGuiClose(UiResult<Ack>)`. A disposal failure and a
+  close-hook failure each produce a WARNING naming the screen and module; disposal failure does not
+  prevent the hook. A throwing disposal callback can still leave descendants incompletely cleaned up.
+- **An initial build failure propagates out of `DeclarativeGui.open()`.** The first build runs
+  synchronously on the viewer's entity thread, outside the scheduled frame's per-task exception handler.
+  Opening disposes partial resources and rethrows; it does not display a broken first frame. Handle
+  expected failures inside the widget and render an error state.
+- **Reopening waits for result completion.** Until the previous result completes, `open()` returns
+  the previous session, even if that session has already selected a close outcome. Reopen from the
+  close hook or after the result, not immediately after requesting close.
 - **`GuiScheduler.flush()` is a test utility, not the production frame path.** It drains the
   entire pending queue synchronously without the per-frame budget, and a task failure can
   propagate to its caller. A task that keeps requeuing itself can keep that drain running.
   Use normal scheduled frames in production, not `flush()` to force an update.
-- **A queued task's `Error` is not isolated like an `Exception`.** The per-task handler catches
-  exceptions, not JVM `Error`s such as `StackOverflowError`. An `Error` escapes to the caller of
-  the frame: the server scheduler, or, when the frame runs inline (a `scheduleFrame` or `setState` call
-  on the main thread with no frame running and no delay pending), the code that made that call, such as
-  an event handler; tasks still in the queue do not run in that failed drain. Do not use `Error` for
-  ordinary module failure handling or assume every throwable is caught by the GUI scheduler.
+- **Later frames always run on a later tick in the viewer's entity context.** Ordinary task
+  exceptions produce a WARNING and are isolated. A JVM `Error` produces one SEVERE record and is
+  rethrown unchanged to the scheduling engine; remaining tasks in that frame's budget do not run.
+  The last complete grid stays displayed after a failed build. Do not use `Error` for ordinary module
+  failure handling. State mutation itself is synchronous on the calling thread, not automatically
+  moved into the entity context.
+- **Colliding slots and invalid nodes are author errors.** Out-of-grid nodes and duplicate container
+  indexes on different slots are warned about and skipped. Multiple nodes claiming one grid slot
+  produce a WARNING and the later node wins. Each diagnostic category is logged at most once per
+  location per page instance, including across reopenings. Keep actions stable when possible:
+  allocating a new action each frame makes otherwise identical `GridItem`s unequal to the backend.
 - **One `GridView` cell must produce one rendered leaf.** A wrapper may contain that leaf at
   any depth, but several leaves under the same cell all receive the same computed slot and
   collide. A leaf's explicit `.slot(...)` does not reserve a separate position: the grid's
@@ -3692,12 +3762,17 @@ not a change to lifecycle ordering, exception handling, key matching or grid lay
   cells instead of relying on collision or click-handler ordering.
 
   中文补充：**声明式 GUI 的已知限制与编写建议**（[#690](https://github.com/UltiKits/UltiTools-Reborn/issues/690)）。
-  `initState` 先调用 `setState` 再抛出异常时，页面开着就会每帧重试并记录日志，请在组件内捕获失败并渲染错误状态；
-  需要保留 State 时请为同级子组件使用稳定且互不重复的 `SlotKey`；`State.dispose()` 应可重复调用且不抛异常；
-  单子组件包装器里替换失败后请关闭并重新打开界面；不要在 `build` 中关闭界面；首次构建的异常会从
-  `DeclarativeGui.onOpen` 抛出；`GuiScheduler.flush()` 仅供测试；队列任务抛出的 JVM `Error` 不会被逐任务捕获，
-  会抛给这一帧的调用方（服务器调度器，或帧在主线程内联执行时发起 `scheduleFrame`/`setState` 调用的代码）；
-  `GridView` 的每个格子只应渲染一个叶子组件。
+  `initState` 先请求重建再抛异常时仍可能逐帧重试，应在组件内处理失败；同级 `SlotKey` 必须稳定且唯一，
+  `State.dispose()` 应幂等且不抛异常，单子组件包装器替换失败后应关闭再重开。通过 `GridSession.close()`
+  请求关闭不会同步拆掉正在构建的树；结果完成时先取消帧并尝试清理，再执行关闭钩子。清理和钩子的异常
+  分别记录包含界面与模块的 WARNING，清理失败不阻止钩子，但可能留下未清理完的子组件。
+  首次构建失败从 `DeclarativeGui.open()` 抛出且不显示界面；结果尚未完成时再次 `open()` 仍返回原会话，
+  即使它已选定关闭结果。`GuiScheduler.flush()` 仅供测试，可能持续清空自重排队的任务。
+  后续帧总在下一 tick 的观看者实体线程执行；普通异常记 WARNING，JVM `Error` 记一次 SEVERE 后原样抛给
+  调度引擎，当前帧剩余任务不执行，失败构建保留上一张完整快照。状态修改本身仍在调用线程立即发生。
+  越界节点和不同格子上的重复容器下标记警告并跳过；同一格子被重复占用时记警告、后者覆盖前者；
+  每个界面实例的同类同位置警告只记一次，重开不重置。每帧新建点击动作会令快照不相等；标题按实例固定。
+  `GridView` 每格仅应渲染一个叶子，多叶子会被分配相同位置，显式 `.slot(...)` 也不能避开覆盖。
 
 ### Command bodies run at dispatch (6.3.0) — changed without a migration period
 
