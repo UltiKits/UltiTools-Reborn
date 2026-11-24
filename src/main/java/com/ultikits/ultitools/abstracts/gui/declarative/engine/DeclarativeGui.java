@@ -11,6 +11,8 @@ import com.ultikits.ultitools.ui.ShowOptions;
 import com.ultikits.ultitools.ui.UiResult;
 import com.ultikits.ultitools.ui.UiService;
 import java.util.Objects;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
@@ -20,6 +22,7 @@ import org.jetbrains.annotations.NotNull;
  * @since 6.2.0
  */
 public abstract class DeclarativeGui {
+    private static final Logger LOGGER = Logger.getLogger(DeclarativeGui.class.getName());
     protected final String id;
     private final UiService ui;
     private final Player viewer;
@@ -97,9 +100,19 @@ public abstract class DeclarativeGui {
         firstGrid = null;
         try {
             renderer.dispose();
-        } finally {
-            onGuiClose(result);
+        } catch (RuntimeException | Error failure) {
+            logCloseFailure("dispose", failure);
         }
+        try {
+            onGuiClose(result);
+        } catch (RuntimeException | Error failure) {
+            logCloseFailure("onGuiClose", failure);
+        }
+    }
+
+    private void logCloseFailure(String phase, Throwable failure) {
+        LOGGER.log(Level.WARNING, "Declarative screen '" + id + "' owned by module '" + ui.owner()
+                + "' failed during " + phase, failure);
     }
 
     /** Requests a later frame while this page is mounted. */

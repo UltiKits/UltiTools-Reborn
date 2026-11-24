@@ -173,6 +173,13 @@ class GuiSchedulerTest {
         verify(failure, never()).printStackTrace();
         assertThat(queued).isEmpty();
     }
+    @Test void deferredErrorIsLoggedOnceAtSevereAndRethrownUnchanged() {
+        AssertionError failure = new AssertionError("fatal frame");
+        scheduler.scheduleFrame(() -> { throw failure; });
+        assertThatThrownBy(this::runNext).isSameAs(failure);
+        verify(logger).log(Level.SEVERE, "Error executing GUI frame task: fatal frame", failure);
+        verifyNoMoreInteractions(logger);
+    }
     @Test void frameFailureIsSafeWhenLoggerIsMissing() {
         TestHelper.mockUltiToolsInstance(instance -> when(instance.getLogger()).thenReturn(null));
         assertFrameFailureDoesNotStopLaterTask();

@@ -37,7 +37,7 @@ public class GuiScheduler {
     private long generation;
 
     /**
-     * @param scheduler the framework-owned scheduler, not the module's scheduler
+     * @param scheduler the module's own injected scheduler
      * @param viewer the entity whose screen is being built
      */
     public GuiScheduler(@NotNull Scheduler scheduler, @NotNull Player viewer) {
@@ -49,7 +49,8 @@ public class GuiScheduler {
 
     /**
      * Runs synchronously on the owning thread, otherwise submits tracked work there.
-     * A synchronous depth failure is reported and rethrown; deferred failures are logged instead.
+     * A synchronous depth failure is reported and rethrown. Deferred failures are logged;
+     * JVM Errors are then rethrown unchanged to the scheduling engine.
      * @param task the work to execute
      */
     public void runOnMainThread(@NotNull Runnable task) {
@@ -143,18 +144,22 @@ public class GuiScheduler {
         } catch (RenderDepthExceededException failure) {
             logFrameTaskError(failure);
             reportRenderDepthExceeded(failure);
-        } catch (Exception failure) {
+        } catch (Throwable failure) {
             logFrameTaskError(failure);
+            if (failure instanceof Error error) {
+                throw error;
+            }
         }
     }
 
     @SuppressWarnings("PMD.AvoidCatchingGenericException") // A logger handler may throw any runtime exception.
-    private void logFrameTaskError(Exception failure) {
+    private void logFrameTaskError(Throwable failure) {
         try {
             UltiTools instance = UltiTools.getInstance();
             Logger logger = instance == null ? Logger.getLogger(GuiScheduler.class.getName()) : instance.getLogger();
             if (logger != null) {
-                logger.log(Level.WARNING, "Error executing GUI frame task: " + failure.getMessage(), failure);
+                Level level = failure instanceof Error ? Level.SEVERE : Level.WARNING;
+                logger.log(level, "Error executing GUI frame task: " + failure.getMessage(), failure);
             }
         } catch (RuntimeException ignored) {
             // Paper re-logs stderr through the same handlers; never retry a failed logger there.

@@ -2,6 +2,15 @@ package com.ultikits.ultitools.abstracts.gui.declarative.engine;
 
 import com.ultikits.ultitools.abstracts.gui.declarative.core.BuildContext;
 import com.ultikits.ultitools.abstracts.gui.declarative.core.Widget;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.State;
+import com.ultikits.ultitools.abstracts.gui.declarative.core.StatefulWidget;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+import org.mockbukkit.mockbukkit.entity.PlayerMock;
 import com.ultikits.ultitools.abstracts.gui.declarative.widgets.TextButton;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.ui.Ack;
@@ -82,6 +91,7 @@ class DeclarativeGuiTest {
         assertThat(page.builds).hasValue(builds);
         assertThat(page.closed).isEqualTo(new UiResult.Closed<Ack>(CloseReason.CLOSED_BY_CODE));
         assertThat(page.initializedInHook).isFalse();
+        assertThat(page.lifecycle).containsExactly("dispose", "hook");
         assertThat(page.closes).hasValue(1);
         assertThat(page.open()).isNotSameAs(session);
     }
@@ -136,6 +146,102 @@ class DeclarativeGuiTest {
         assertThat(page.isInitialized()).isFalse();
     }
 
+    @Test void throwingCloseHookLogsOneWarningWithOwnerAndScreen() {
+        Page page = new Page(harness.ui(), harness, viewer);
+        page.hookFailure = new IllegalStateException("hook");
+        harness.open(page);
+        try (GuiLogCapture log = new GuiLogCapture(DeclarativeGui.class)) {
+            harness.close(page);
+            assertThat(log.records()).singleElement().satisfies(record -> {
+                assertThat(record.getLevel()).isEqualTo(Level.WARNING);
+                assertThat(record.getMessage()).contains("declarative", "DeclarativeTests", "onGuiClose");
+                assertThat(record.getThrown()).isSameAs(page.hookFailure);
+            });
+        }
+    }
+
+    @Test void throwingDisposalLogsOneWarningAndStillCallsHook() {
+        Page page = new Page(harness.ui(), harness, viewer);
+        page.disposalFailure = new IllegalStateException("dispose");
+        harness.open(page);
+        try (GuiLogCapture log = new GuiLogCapture(DeclarativeGui.class)) {
+            harness.close(page);
+            assertThat(log.records()).singleElement().satisfies(record -> {
+                assertThat(record.getLevel()).isEqualTo(Level.WARNING);
+                assertThat(record.getMessage()).contains("declarative", "DeclarativeTests", "dispose");
+                assertThat(record.getThrown()).isSameAs(page.disposalFailure);
+            });
+            assertThat(page.lifecycle).containsExactly("dispose", "hook");
+            assertThat(page.closes).hasValue(1);
+        }
+    }
+
+    @Test void ownerUnloadCancelsPendingFramesBeforeReturning() {
+        assertEndingStopsFrames(CloseReason.OWNER_UNLOADED);
+    }
+    @Test void viewerQuitCancelsPendingFrames() {
+        assertEndingStopsFrames(CloseReason.DISCONNECTED);
+    }
+    @Test void replacementCancelsPendingFrames() {
+        assertEndingStopsFrames(CloseReason.REPLACED);
+    }
+
+    private void assertEndingStopsFrames(CloseReason reason) {
+        Scheduler scheduler = mock(Scheduler.class);
+        TaskContext context = spy(harness.scheduler().entity(viewer));
+        List<TaskHandle> handles = new ArrayList<>();
+        when(scheduler.entity(viewer)).thenReturn(context);
+        doAnswer(call -> {
+            TaskHandle handle = spy((TaskHandle) call.callRealMethod());
+            handles.add(handle);
+            return handle;
+        }).when(context).run(any(Runnable.class));
+        Page page = new Page(harness.ui(), scheduler, viewer);
+        GridSession session = page.open(); harness.drain();
+        if (reason == CloseReason.REPLACED) {
+            harness.ui().show(viewer, Grid.builder(Text.plain("Replacement"), 1).build());
+        }
+        page.markNeedsBuild();
+        assertThat(handles).hasSize(1);
+        if (reason == CloseReason.OWNER_UNLOADED) {
+            harness.fixture().unload("DeclarativeTests");
+            assertThat(page.lifecycle).containsExactly("dispose", "hook");
+        } else if (reason == CloseReason.DISCONNECTED) {
+            harness.fixture().disconnect((PlayerMock) viewer);
+        }
+        harness.drain();
+        assertThat(session.result().toCompletableFuture().getNow(null)).isEqualTo(new UiResult.Closed<Ack>(reason));
+        assertThat(page.lifecycle).containsExactly("dispose", "hook");
+        assertThat(page.builds).hasValue(1);
+        assertThat(handles.get(0).completion().toCompletableFuture()).isCompletedExceptionally();
+        if (reason != CloseReason.DISCONNECTED) {
+            verify(handles.get(0)).cancel();
+        }
+        page.markNeedsBuild(); harness.drain();
+        assertThat(handles).hasSize(1);
+        assertThat(page.builds).hasValue(1);
+        assertThat(page.closes).hasValue(1);
+    }
+
+    private static final class DisposalProbe extends StatefulWidget {
+        private final Page page;
+        DisposalProbe(Page page) { this.page = page; }
+        @Override public State<DisposalProbe> createState() { return new DisposalState(page); }
+    }
+
+    private static final class DisposalState extends State<DisposalProbe> {
+        private final Page page;
+        DisposalState(Page page) { this.page = page; }
+        @Override public Widget build(BuildContext context) {
+            return TextButton.builder().text(Text.plain(page.label)).build();
+        }
+        @Override protected void dispose() {
+            super.dispose();
+            page.lifecycle.add("dispose");
+            if (page.disposalFailure != null) { throw page.disposalFailure; }
+        }
+    }
+
     private static final class Page extends DeclarativeGui {
         private final AtomicInteger builds = new AtomicInteger();
         private final AtomicInteger closes = new AtomicInteger();
@@ -143,16 +249,24 @@ class DeclarativeGuiTest {
         private boolean fail;
         private UiResult<Ack> closed;
         private boolean initializedInHook;
+        private final List<String> lifecycle = new ArrayList<>();
+        private IllegalStateException hookFailure;
+        private IllegalStateException disposalFailure;
         Page(UiService ui, GuiTestHarness harness, Player viewer) {
-            super(ui, harness.scheduler(), viewer, "declarative", Text.plain("Test"), 1);
+            this(ui, harness.scheduler(), viewer);
+        }
+        Page(UiService ui, Scheduler scheduler, Player viewer) {
+            super(ui, scheduler, viewer, "declarative", Text.plain("Test"), 1);
         }
         @Override public Widget build(BuildContext context) {
             builds.incrementAndGet();
             if (fail) { throw new IllegalStateException("build failed"); }
-            return TextButton.builder().text(Text.plain(label)).build();
+            return new DisposalProbe(this);
         }
         @Override protected void onGuiClose(UiResult<Ack> result) {
+            lifecycle.add("hook");
             initializedInHook = isInitialized(); closed = result; closes.incrementAndGet();
+            if (hookFailure != null) { throw hookFailure; }
         }
     }
 }
