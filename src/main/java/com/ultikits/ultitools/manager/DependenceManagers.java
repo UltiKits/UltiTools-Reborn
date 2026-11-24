@@ -17,6 +17,11 @@ import com.ultikits.ultitools.services.impl.InMemeryTeleportService;
 import com.ultikits.ultitools.services.impl.InMemoryNotificationService;
 import com.ultikits.ultitools.services.impl.NoOpGameMailService;
 import com.ultikits.ultitools.services.impl.VaultEconomyProvider;
+import com.ultikits.ultitools.text.LocaleResolver;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
+import com.ultikits.ultitools.text.internal.TextEngine;
 import com.ultikits.ultitools.utils.EconomyUtils;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
@@ -40,7 +45,7 @@ public class DependenceManagers {
         context.registerSingleton("ultiTools", plugin);
         initScheduling(plugin);
         initInventoryAPI(plugin);
-        initCoreServices();
+        initCoreServices(plugin);
     }
 
     /** Installs the framework owner before any core service can schedule work. */
@@ -67,7 +72,7 @@ public class DependenceManagers {
      *
      * The framework scheduler defers the economy start-up report until the first server tick.
      */
-    private void initCoreServices() {
+    private void initCoreServices(UltiTools plugin) {
         // Register TeleportService
         InMemeryTeleportService teleportService = new InMemeryTeleportService();
         context.registerSingleton("inMemeryTeleportService", teleportService);
@@ -77,6 +82,18 @@ public class DependenceManagers {
         InMemoryNotificationService notificationService = new InMemoryNotificationService();
         context.registerSingleton("inMemoryNotificationService", notificationService);
         context.registerSingleton(NotificationService.class.getName(), notificationService);
+
+        LocaleResolver localeResolver = ConfiguredLocaleResolver.forConfig(plugin::getConfig, plugin.getLogger());
+        TextEngine textEngine = new TextEngine(localeResolver, plugin.getLogger(),
+                UltiTools.class.getProtectionDomain().getCodeSource().getLocation(),
+                plugin.getDataFolder().toPath().resolve("messages"));
+        context.registerSingleton("textEngine", textEngine);
+        context.registerSingleton(TextEngine.class.getName(), textEngine);
+        context.registerSingleton("localeResolver", localeResolver);
+        context.registerSingleton(LocaleResolver.class.getName(), localeResolver);
+        Messages messages = textEngine.messagesFor(MessageKey.FRAMEWORK_NAMESPACE);
+        context.registerSingleton("frameworkMessages", messages);
+        context.registerSingleton(Messages.class.getName(), messages);
 
         // Register EmailService
         DefaultEmailService emailService = new DefaultEmailService();

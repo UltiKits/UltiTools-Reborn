@@ -6,10 +6,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
+import java.nio.file.Path;
 import java.util.logging.Logger;
 
 import org.bukkit.plugin.java.JavaPlugin;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -404,6 +407,8 @@ class DependenceManagersTest {
     @Nested
     @DisplayName("initCoreServices real registration shape (regression: PR #352 UAT)")
     class InitCoreServicesRegistrationTests {
+        @TempDir
+        Path temporary;
 
         /**
          * Drives the ACTUAL {@code initCoreServices()} private method -- not a
@@ -440,9 +445,12 @@ class DependenceManagersTest {
                 // code path DependenceManagers' own constructor runs, not a hand-copied
                 // reproduction of it.
                 java.lang.reflect.Method initCoreServices =
-                        DependenceManagers.class.getDeclaredMethod("initCoreServices");
+                        DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
                 initCoreServices.setAccessible(true); // NOPMD
-                initCoreServices.invoke(managers);
+                UltiTools core = mock(UltiTools.class);
+                when(core.getLogger()).thenReturn(Logger.getAnonymousLogger());
+                when(core.getDataFolder()).thenReturn(temporary.toFile());
+                initCoreServices.invoke(managers, core);
 
                 // Assert: each interface-typed lookup resolves without throwing.
                 TeleportService teleportService = assertDoesNotThrow(
@@ -464,6 +472,7 @@ class DependenceManagersTest {
                 assertThat(emailService).isNotNull();
             } finally {
                 FrameworkScheduling.uninstall(scheduler);
+                context.close();
             }
         }
 
@@ -490,9 +499,11 @@ class DependenceManagersTest {
             SimpleContainer context = new SimpleContainer();
             setField(managers, "context", context);
 
-            Logger mockUltiToolsLogger = mock(Logger.class);
-            TestHelper.mockUltiToolsInstance(
-                    ultiTools -> when(ultiTools.getLogger()).thenReturn(mockUltiToolsLogger));
+            Logger mockUltiToolsLogger = spy(Logger.getAnonymousLogger());
+            UltiTools mockUltiTools = TestHelper.mockUltiToolsInstance(ultiTools -> {
+                when(ultiTools.getLogger()).thenReturn(mockUltiToolsLogger);
+                when(ultiTools.getDataFolder()).thenReturn(temporary.toFile());
+            });
 
             Scheduler scheduler = mock(Scheduler.class);
             TaskContext global = mock(TaskContext.class);
@@ -501,9 +512,9 @@ class DependenceManagersTest {
             try {
 
                 java.lang.reflect.Method initCoreServices =
-                        DependenceManagers.class.getDeclaredMethod("initCoreServices");
+                        DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
                 initCoreServices.setAccessible(true); // NOPMD
-                initCoreServices.invoke(managers);
+                initCoreServices.invoke(managers, mockUltiTools);
 
                 // The economy start-up report must be handed to the scheduler as a deferred task,
                 // not run inline.
@@ -515,6 +526,7 @@ class DependenceManagersTest {
                 verify(mockUltiToolsLogger, never()).warning(anyString());
             } finally {
                 FrameworkScheduling.uninstall(scheduler);
+                context.close();
             }
         }
     }
