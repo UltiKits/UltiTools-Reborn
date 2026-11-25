@@ -8,6 +8,7 @@ import java.net.URL;
 import java.lang.reflect.Method;
 import java.util.Collections;
 import java.nio.file.Path;
+import java.util.logging.Logger;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -31,7 +32,7 @@ class BootstrapResultTest {
         failures.put(temporary.resolve("z.jar"), failure);
         try (ModuleClassLoader loader = ModuleClassLoader.create(new URL[0], getClass().getClassLoader())) {
             BootstrapResult result = new BootstrapResult(transactions, admission, loader, failure, failures, 3,
-                    new ContributionRegistry(admission, java.util.logging.Logger.getAnonymousLogger()));
+                    new ContributionRegistry(admission, Logger.getAnonymousLogger()), ContributionLedger.EMPTY);
             failures.clear();
             assertThat(result.transactions()).isSameAs(transactions);
             assertThat(result.admission()).isSameAs(admission);

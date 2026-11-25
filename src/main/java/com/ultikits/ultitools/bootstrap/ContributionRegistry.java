@@ -3,6 +3,7 @@ package com.ultikits.ultitools.bootstrap;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -23,6 +24,7 @@ final class ContributionRegistry {
     private final Logger logger;
     private final List<ModuleContributions> modules = new ArrayList<>();
     private final Set<ContentEntry> reserved = new HashSet<>();
+    private final Set<String> withoutHooks = new LinkedHashSet<>();
     private final Set<Path> failures = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean composed = new AtomicBoolean();
     private List<EmbeddedDatapacks.PreparedPack> packs = List.of();
@@ -51,6 +53,10 @@ final class ContributionRegistry {
     }
 
     List<ModuleContributions> modules() { return List.copyOf(modules); }
+
+    void recordWithoutHook(String module) { withoutHooks.add(module); }
+
+    Set<String> withoutHooks() { return Collections.unmodifiableSet(withoutHooks); }
 
     boolean failed(Path jar) { return failures.contains(jar); }
 

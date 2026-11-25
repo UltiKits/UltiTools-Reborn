@@ -28,10 +28,11 @@ public final class BootstrapResult {
     private final Map<Path, Throwable> bootstrapFailures;
     private final int bootstrapsRun;
     private final ContributionRegistry contributions;
+    private final ContributionLedger ledger;
 
     BootstrapResult(@Nullable ModuleFileTransactions transactions, ModuleJarAdmission admission, ModuleClassLoader classLoader,
                     @Nullable IOException classPathFailure, Map<Path, Throwable> failures, int bootstrapsRun,
-                    ContributionRegistry contributions) {
+                    ContributionRegistry contributions, ContributionLedger ledger) {
         this.transactions = transactions;
         this.admission = admission;
         this.classLoader = classLoader;
@@ -39,6 +40,7 @@ public final class BootstrapResult {
         this.bootstrapFailures = Collections.unmodifiableMap(new LinkedHashMap<>(failures));
         this.bootstrapsRun = bootstrapsRun;
         this.contributions = contributions;
+        this.ledger = ledger;
     }
 
     // A failed handover must not repeat filesystem work that may itself have caused the failure.
@@ -46,7 +48,7 @@ public final class BootstrapResult {
         ModuleJarAdmission admission = new ModuleJarAdmission();
         return new BootstrapResult(null, admission,
                 ModuleClassLoader.create(new java.net.URL[0], BootstrapResult.class.getClassLoader()),
-                failure, Collections.emptyMap(), 0, new ContributionRegistry(admission, Logger.getLogger("UltiTools")));
+                failure, Collections.emptyMap(), 0, new ContributionRegistry(admission, Logger.getLogger("UltiTools")), ContributionLedger.EMPTY);
     }
 
     /**
@@ -76,4 +78,6 @@ public final class BootstrapResult {
     public int bootstrapsRun() { return bootstrapsRun; }
 
     ContributionRegistry contributions() { return contributions; }
+
+    ContributionLedger ledger() { return ledger; }
 }

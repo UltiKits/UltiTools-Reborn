@@ -38,6 +38,7 @@ final class ModuleBootstraps {
             }
             String bootstrapper = metadata.getBootstrapper();
             if (bootstrapper == null || bootstrapper.isBlank()) {
+                contributions.recordWithoutHook(moduleName(module.getKey(), metadata));
                 continue;
             }
             attempted++;
@@ -71,9 +72,7 @@ final class ModuleBootstraps {
                 throw new IllegalStateException("bootstrapper does not implement ModuleBootstrap");
             }
             ModuleBootstrap hook = construct(type);
-            String declaredName = metadata.getName();
-            String name = declaredName == null ? jar.getFileName().toString() : declaredName;
-            ModuleContributions contributions = new ModuleContributions(name, jar);
+            ModuleContributions contributions = new ModuleContributions(moduleName(jar, metadata), jar);
             try {
                 hook.bootstrap(new Context(contributions, logger));
                 return contributions;
@@ -83,6 +82,11 @@ final class ModuleBootstraps {
         } finally {
             thread.setContextClassLoader(previous);
         }
+    }
+
+    static String moduleName(Path jar, PluginYmlReader.PluginYmlInfo metadata) {
+        String declared = metadata.getName();
+        return declared == null ? jar.getFileName().toString() : declared;
     }
 
     private static ModuleBootstrap construct(Class<?> type) throws Throwable {

@@ -69,11 +69,13 @@ public final class UltiToolsBootstrap implements PluginBootstrap {
             int moduleJars = urls.length - (serverJar == null ? 0 : 1);
             logger.info(String.format("[UltiTools] Bootstrap: processed pending module changes; %d module JAR(s) "
                     + "on the module class path; %d module bootstrap(s) ran, %d failed.", moduleJars, run.attempted, run.failures.size()));
+            ContributionLedger ledger = ContributionLedger.EMPTY;
             if (classPathFailure == null) {
                 EmbeddedDatapacks.prepare(dataFolder.toPath(), contributions, logger);
+                ledger = ContributionLedger.update(dataFolder.toPath(), admission, contributions, logger);
                 channelInstaller(context, contributions, logger);
             }
-            return new BootstrapResult(transactions, admission, loader, classPathFailure, run.failures, run.attempted, contributions);
+            return new BootstrapResult(transactions, admission, loader, classPathFailure, run.failures, run.attempted, contributions, ledger);
         } catch (RuntimeException | Error failure) {
             try {
                 loader.close();
