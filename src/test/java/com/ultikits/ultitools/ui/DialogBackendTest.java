@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.ui;
 
 import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.ui.runtime.UiRuntime;
+import com.ultikits.ultitools.utils.ReflectionUtil;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.ui.dialog.ButtonRole;
 import com.ultikits.ultitools.ui.dialog.DialogBackend;
@@ -56,7 +58,8 @@ class DialogBackendTest {
             Text text = invocation.getArgument(0);
             return text instanceof Text.Literal literal ? literal.component() : Component.text(((Text.Translated) text).key().translationKey());
         });
-        backend = new DialogBackend(messages, presenter, logger);
+        UiRuntime runtime = (UiRuntime) ReflectionUtil.getFieldValue(fixture, "runtime");
+        backend = new DialogBackend(messages, presenter, logger, runtime::ownerName);
         fixture.register(backend);
     }
 
@@ -186,9 +189,7 @@ class DialogBackendTest {
 
     @Test
     void lateCallback_afterCloseDoesNotReport() {
-        UiSession<Boolean> session = mock(UiSession.class);
-        when(session.viewer()).thenReturn(viewer);
-        when(session.intent()).thenReturn(Confirm.builder(Text.plain("t")).build());
+        UiSession<Boolean> session = confirm();
         UiBackend.BackendCallbacks<Boolean> callbacks = mock(UiBackend.BackendCallbacks.class);
         backend.open(session, callbacks);
         DialogTicket ticket = presenter.last();

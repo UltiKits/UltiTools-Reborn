@@ -1,6 +1,10 @@
 package com.ultikits.ultitools.ui.dialog;
 
 import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.scheduling.ManualScheduler;
+import com.ultikits.ultitools.ui.runtime.NoContainerRuntime;
+import com.ultikits.ultitools.ui.runtime.UiRuntime;
+import org.junit.jupiter.api.AfterEach;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.ui.Choice;
 import com.ultikits.ultitools.ui.CloseReason;
@@ -16,6 +20,8 @@ import java.util.logging.Logger;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.inventory.InventoryView;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -33,11 +39,23 @@ class DialogEscapePolicyTest {
     private final DialogPresenter presenter = mock(DialogPresenter.class);
     private final Player viewer = mock(Player.class);
     private final Logger logger = mock(Logger.class);
-    private final DialogBackend backend = new DialogBackend(messages, presenter, logger);
+    private final ManualScheduler.Engine clock = new ManualScheduler.Engine();
+    private final UiRuntime runtime = new UiRuntime(clock.scheduler("EscapePolicy"), new NoContainerRuntime(),
+            logger, Thread.currentThread());
+    private final DialogBackend backend = new DialogBackend(messages, presenter, logger, runtime::ownerName);
+
+    @AfterEach
+    void closeRuntime() {
+        runtime.close();
+        clock.close();
+    }
 
     @BeforeEach
     void setUp() {
         when(viewer.getUniqueId()).thenReturn(UUID.randomUUID());
+        InventoryView current = mock(InventoryView.class);
+        when(current.getType()).thenReturn(InventoryType.CHEST);
+        when(viewer.getOpenInventory()).thenReturn(current);
         when(messages.render(any(Text.class), any(Audience.class))).thenAnswer(invocation -> {
             Text text = invocation.getArgument(0);
             return text instanceof Text.Literal literal ? literal.component() : Component.text(((Text.Translated) text).key().translationKey());
@@ -49,14 +67,12 @@ class DialogEscapePolicyTest {
         DialogMapper mapper = new DialogMapper(messages);
         assertThat(mapper.map(Notice.builder(Text.plain("t")).build(), viewer, DialogBackend.ESCAPE_CLOSES).escapeCloses()).isFalse();
         assertThat(mapper.map(Confirm.builder(Text.plain("t")).build(), viewer, DialogBackend.ESCAPE_CLOSES).escapeCloses()).isFalse();
-        assertThat(DialogBackend.paper(messages, logger).priority()).isEqualTo(100);
+        assertThat(DialogBackend.paper(messages, logger, runtime::ownerName).priority()).isEqualTo(100);
     }
 
     @Test
     void form_hasAnExplicitCancelButtonAndReportsPlayerClosed() {
-        UiSession<FormResponse> session = mock(UiSession.class);
-        when(session.viewer()).thenReturn(viewer);
-        when(session.intent()).thenReturn(Form.builder(Text.plain("t"))
+        UiSession<FormResponse> session = runtime.service("EscapePolicy").show(viewer, Form.builder(Text.plain("t"))
                 .input(TextInput.builder("name", Text.plain("Name")).build()).build());
         BackendCallbacks<FormResponse> callbacks = mock(BackendCallbacks.class);
         backend.open(session, callbacks);
@@ -77,9 +93,8 @@ class DialogEscapePolicyTest {
 
     @Test
     void choice_hasAnExplicitCancelExitAndReportsPlayerClosed() {
-        UiSession<String> session = mock(UiSession.class);
-        when(session.viewer()).thenReturn(viewer);
-        when(session.intent()).thenReturn(Choice.<String>builder(Text.plain("t")).option("value", Text.plain("Pick")).build());
+        UiSession<String> session = runtime.service("EscapePolicy").show(viewer,
+                Choice.<String>builder(Text.plain("t")).option("value", Text.plain("Pick")).build());
         BackendCallbacks<String> callbacks = mock(BackendCallbacks.class);
         backend.open(session, callbacks);
         ArgumentCaptor<DialogModel> model = ArgumentCaptor.forClass(DialogModel.class);

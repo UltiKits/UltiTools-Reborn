@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.ui.dialog;
 
+import com.ultikits.ultitools.ui.CloseReason;
 import com.ultikits.ultitools.ui.UiBackend.BackendCallbacks;
 import com.ultikits.ultitools.ui.UiIntent;
 import com.ultikits.ultitools.ui.UiResult;
@@ -19,19 +20,24 @@ import org.jetbrains.annotations.Nullable;
 @ApiStatus.Internal
 public final class DialogTicket {
     private final UUID viewerId;
+    private final String ownerName;
     private final Logger logger;
     private final AtomicBoolean showing = new AtomicBoolean();
-    private final AtomicReference<BiConsumer<ButtonRole, @Nullable DialogResponseView>> handler;
+    private final AtomicReference<Callbacks> handler;
 
     /**
      * Retains the typed callbacks only until the first answer or invalidation.
      * @param <R> the intent's answer type
      */
-    <R> DialogTicket(UiSession<R> session, BackendCallbacks<R> callbacks, DialogAnswers answers, Logger logger) {
+    <R> DialogTicket(UiSession<R> session, BackendCallbacks<R> callbacks, DialogAnswers answers, Logger logger,
+                     String ownerName) {
         viewerId = session.viewer().getUniqueId();
         this.logger = logger;
+        this.ownerName = ownerName;
         UiIntent<R> intent = session.intent();
-        handler = new AtomicReference<>((role, response) -> report(intent, callbacks, answers, role, response));
+        handler = new AtomicReference<>(new Callbacks(
+                (role, response) -> report(intent, callbacks, answers, role, response, ownerName),
+                () -> callbacks.closed(CloseReason.INTERRUPTED)));
     }
 
     /**
@@ -39,9 +45,8 @@ public final class DialogTicket {
      * @param <R> the intent's answer type
      */
     private static <R> void report(UiIntent<R> intent, BackendCallbacks<R> callbacks, DialogAnswers answers,
-                                   ButtonRole role, @Nullable DialogResponseView response) {
-        // The current session seam deliberately exposes no owner; never infer it from a title or viewer.
-        UiResult<?> result = answers.read(intent, role, response, "<unavailable through UiSession>");
+                                   ButtonRole role, @Nullable DialogResponseView response, String ownerName) {
+        UiResult<?> result = answers.read(intent, role, response, ownerName);
         if (result instanceof UiResult.Closed<?> closed) {
             callbacks.closed(closed.reason());
         } else {
@@ -62,19 +67,28 @@ public final class DialogTicket {
      * the two atomic operations alone do not make that transition safe for concurrent callback dispatch.
      */
     public void accept(ButtonRole role, @Nullable DialogResponseView response, Audience audience) {
-        BiConsumer<ButtonRole, @Nullable DialogResponseView> current = handler.get();
+        Callbacks current = handler.get();
         if (current == null) {
             return;
         }
         if (!(audience instanceof Player player) || !viewerId.equals(player.getUniqueId())) {
-            logger.warning("Ignored dialog action from a different audience; owner unavailable through UiSession");
+            logger.warning("Ignored dialog action from a different audience for owner " + ownerName);
             return;
         }
         if (handler.compareAndSet(current, null)) {
             showing.set(false);
-            current.accept(role, response);
+            current.answer().accept(role, response);
         }
     }
+
+    /** Ends a game-interrupted screen without sending a later clear-dialog packet to a different screen. */
+    void interrupt() {
+        if (!showing.getAndSet(false)) { return; }
+        Callbacks current = handler.getAndSet(null);
+        if (current != null) { current.interruption().run(); }
+    }
+
+    private record Callbacks(BiConsumer<ButtonRole, @Nullable DialogResponseView> answer, Runnable interruption) { }
 
     /** Drops all references to the intent and callbacks, returning whether a screen still needs dismissal. */
     boolean invalidate() {

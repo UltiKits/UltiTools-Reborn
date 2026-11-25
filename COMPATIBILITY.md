@@ -235,6 +235,58 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 拒绝并告警，嵌套映射仍用于点分键分组。仅读取 `.yml`，`.yaml` 会告警；文件必须为 UTF-8，允许 BOM。
 只带 `zh_CN.yml` 等地区文件却没有 `zh.yml` 时会提示补基础语言文件，不把地区变体回退规则改成模糊匹配。
 
+## UI storage waits at shutdown (as of 7.0.0)
+
+All modules share one approximately 10-second UI-storage wait budget at server stop; only time spent unloading UI storage is charged, not time spent in other module shutdown hooks. Once storage waits exhaust that budget, later modules receive no remaining wait and finish with `UNKNOWN_KEPT_BY_STORE` without returning items, while an ordinary single-module unload retains its own approximately 10-second limit.
+
+When a module is unloaded, reloaded or updated while the server is running, this wait happens on the server thread. If a storage-backed screen has unsaved changes and its store does not answer within about 10 seconds, the wait reaches Paper's default `watchdog.early-warning-delay` (10000 milliseconds, `config/paper-global.yml`), and Paper can print `The server has not responded for 10 seconds! Creating thread dump` with a thread dump that shows the framework's waiting call stack. This is not a crash: the server keeps running and the session ends with `OWNER_UNLOADED` and `UNKNOWN_KEPT_BY_STORE`. Look at the store that did not answer, not at the server. Paper does not print these early warnings during server shutdown. The UI storage wait and the wait for asynchronous commands are independent, so a live unload can wait about 20 seconds when both are stuck.
+
+中文补充：停服时所有模块的界面存储等待共用约 10 秒预算，只扣除界面存储卸载等待本身的耗时，不扣其他模块卸载钩子的耗时；存储等待耗尽预算后，后面的模块没有剩余等待时间，按 `UNKNOWN_KEPT_BY_STORE` 结束且不退还物品；非停服的单模块卸载仍各有约 10 秒上限。
+
+中文补充：服务器运行中卸载、重载或更新模块时，这段等待发生在服务器线程上。存储型界面有未保存的改动、而存储约 10 秒没有答复时，等待时间会达到 Paper 默认的 `watchdog.early-warning-delay`（10000 毫秒，`config/paper-global.yml`），Paper 可能打印 `The server has not responded for 10 seconds! Creating thread dump` 和一段线程转储，其中能看到框架正在等待的调用栈。这不是崩溃：服务器继续运行，会话以 `OWNER_UNLOADED` 与 `UNKNOWN_KEPT_BY_STORE` 结束。该排查的是没有答复的存储，而不是服务器本身。停服过程中 Paper 不打印这种预警。界面存储等待与异步命令等待相互独立，两者都卡住时运行中卸载最多约等 20 秒。
+
+## Game-interrupted screens (as of 7.0.0)
+
+For chest grids and bound-container screens, only a player's own close maps to `PLAYER`. Paper's close reasons
+`DEATH`, `TELEPORT`, `OPEN_NEW`, `PLUGIN`, `UNLOADED` and `UNKNOWN` map to `INTERRUPTED` unless the
+framework has already selected its own outcome. `DISCONNECT` maps to `DISCONNECTED`. `CANT_USE` waits
+for a quit in the same tick (`DISCONNECTED`), otherwise the next cleanup tick selects `INTERRUPTED`.
+This does not add a tick to storage cleanup: changed COMMIT containers still save through the original
+close continuation; unchanged containers do not write. A refused first chest open or title reopen also
+ends immediately with `INTERRUPTED`, even when Paper returns a non-null player-inventory view.
+
+A shown Dialog (notice, confirmation, choice or form) ends with `Closed(INTERRUPTED)` when its player dies,
+changes worlds, or another inventory opens. Cancelled death and inventory-open events do not interrupt it.
+The result follows the existing viewer-context delivery path; the framework does not close the newly opened
+inventory. Showing the next framework screen still ends the old session with `REPLACED`; explicit session
+close, owner unload and timeout retain `CLOSED_BY_CODE`, `OWNER_UNLOADED` and `TIMED_OUT` for both backends.
+Paper has no notification for other ways a Dialog can be displaced, such as another plugin showing its own
+Dialog, so those still rely on `TIMED_OUT`. Give long-lived Dialogs a suitable explicit `ShowOptions` timeout
+instead of relying on the ten-minute default.
+
+Before showing either backend, if the player's current menu is their own survival or creative backpack and
+its cursor or 2x2 crafting inputs are nonempty, the framework closes that menu through vanilla's cleanup:
+items return to the backpack, or drop at the player's feet when it is full. They are not carried into the
+new screen. An empty backpack causes no extra close, and an already-open foreign container is left to
+Paper's normal opening rules. Known limitation: do not open another container for the same storage key while
+an existing screen for that key has unsaved changes; end the old screen and await its commit before reading
+and showing the key again. The framework does not merge independent container copies.
+
+中文补充：箱子 Grid 与绑定容器只有玩家主动关窗才返回 `PLAYER`。Paper 的 `DEATH`、`TELEPORT`、
+`OPEN_NEW`、`PLUGIN`、`UNLOADED`、`UNKNOWN` 均映射为 `INTERRUPTED`（框架已选定自己的结果时除外）；
+`DISCONNECT` 为 `DISCONNECTED`。`CANT_USE` 等待同 tick 的退出事件：退出为 `DISCONNECTED`，否则在
+下一次清理 tick 选 `INTERRUPTED`，不会给存储清理再多加一个 tick；有改动的 COMMIT 仍按原关闭续体保存，
+未改动的不写。首次打开或标题重开被拒绝也立即以 `INTERRUPTED` 结束，即使 Paper 返回非空背包视图。
+Dialog（通知、确认、选择、表单）在玩家死亡、换世界或另一个物品栏打开时以 `INTERRUPTED` 结束，
+取消的死亡与打开事件不打断；结果沿原玩家上下文投递，不关闭外来新窗口。两后端的框架替换仍是
+`REPLACED`，显式关闭、模块卸载、超时仍分别为 `CLOSED_BY_CODE`、`OWNER_UNLOADED`、`TIMED_OUT`。
+其他插件的 Dialog 顶替没有 Paper 通知，继续靠超时；长时间挂着的 Dialog 应显式设置合理超时，
+不要只依赖默认十分钟。
+两后端显示前，若玩家当前只开着生存或创造背包且光标或 2×2 合成输入非空，先走原版关闭清理，
+把物品放回背包，满了掉在脚下，不带入新界面；空背包不额外关闭，外来容器沿用 Paper 的打开规则。
+已知限制：同一存储键的界面仍开着且有未保存改动时，不要为同一键再开一个；先结束旧界面并等待提交，
+再读取存储并打开。框架不合并两份独立容器副本。
+
 ## Declarative screens use the UI service (as of 7.0.0)
 
 The declarative engine no longer inherits obliviate's `Gui`. It emits immutable `Grid` snapshots;

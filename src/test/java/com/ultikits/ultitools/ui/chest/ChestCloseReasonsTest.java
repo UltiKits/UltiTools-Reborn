@@ -13,11 +13,11 @@ import org.junit.jupiter.api.Timeout;
 class ChestCloseReasonsTest {
     @Test void everyPaperReasonUsesTheExistingVocabulary() {
         Map<Reason, CloseReason> table = Map.of(
-                Reason.UNKNOWN, CloseReason.PLAYER, Reason.TELEPORT, CloseReason.PLAYER,
-                Reason.CANT_USE, CloseReason.PLAYER, Reason.UNLOADED, CloseReason.PLAYER,
-                Reason.OPEN_NEW, CloseReason.PLAYER, Reason.PLAYER, CloseReason.PLAYER,
-                Reason.DISCONNECT, CloseReason.DISCONNECTED, Reason.DEATH, CloseReason.PLAYER,
-                Reason.PLUGIN, CloseReason.PLAYER);
+                Reason.UNKNOWN, CloseReason.INTERRUPTED, Reason.TELEPORT, CloseReason.INTERRUPTED,
+                Reason.CANT_USE, CloseReason.INTERRUPTED, Reason.UNLOADED, CloseReason.INTERRUPTED,
+                Reason.OPEN_NEW, CloseReason.INTERRUPTED, Reason.PLAYER, CloseReason.PLAYER,
+                Reason.DISCONNECT, CloseReason.DISCONNECTED, Reason.DEATH, CloseReason.INTERRUPTED,
+                Reason.PLUGIN, CloseReason.INTERRUPTED);
         assertThat(table).hasSize(Reason.values().length);
         table.forEach((reason, expected) -> assertThat(ChestCloseReasons.map(reason)).isEqualTo(expected));
         assertThatNullPointerException().isThrownBy(() -> ChestCloseReasons.map(null));

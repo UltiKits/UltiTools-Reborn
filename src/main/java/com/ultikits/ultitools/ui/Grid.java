@@ -17,7 +17,9 @@ import org.jetbrains.annotations.Nullable;
  * Each slot is empty, an icon ({@link GridItem}: shown, never takeable) or a binding to a {@link SlotContainer}
  * index ({@link #bindings()}; EDITABLE or VIEW). Never completes with a value; it ends with
  * {@link UiResult.Closed}. Refresh by pushing a new snapshot through {@link GridSession#update(Grid)}.
- * Opening a grid never reads or writes the viewer's cursor.
+ * Before opening from the player's own backpack, nonempty cursor or crafting inputs are returned by
+ * vanilla menu cleanup to the backpack (overflow drops at the player's feet), never carried into the grid.
+ * Empty backpacks and foreign containers do not receive an extra framework close.
  */
 public final class Grid implements UiIntent<Ack> {
     /** The fixed number of columns. */
