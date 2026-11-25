@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -111,6 +112,18 @@ class UltiToolsBootstrapTest {
         try (ModuleClassLoader loader = result.classLoader()) {
             assertThat(loader.getURLs()).isEmpty();
             assertThat(result.classPathFailure()).hasCauseInstanceOf(NoClassDefFoundError.class);
+        }
+    }
+
+    @Test
+    void overallPreparationFailureDoesNotInstallHandlers() throws Exception {
+        var context = context(dataFolder());
+        var bootstrap = spy(new UltiToolsBootstrap());
+        doThrow(new IllegalStateException("preparation failed")).when(bootstrap).classPath(any(), any(), any(), any());
+        bootstrap.bootstrap(context);
+        try (var ignored = bootstrap.result().classLoader()) {
+            assertThat(bootstrap.result().contributions().modules()).isEmpty();
+            verify(context, never()).getLifecycleManager();
         }
     }
 

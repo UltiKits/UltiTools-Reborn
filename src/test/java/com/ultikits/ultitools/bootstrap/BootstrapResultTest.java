@@ -30,7 +30,8 @@ class BootstrapResultTest {
         failures.put(temporary.resolve("a.jar"), failure);
         failures.put(temporary.resolve("z.jar"), failure);
         try (ModuleClassLoader loader = ModuleClassLoader.create(new URL[0], getClass().getClassLoader())) {
-            BootstrapResult result = new BootstrapResult(transactions, admission, loader, failure, failures, 3);
+            BootstrapResult result = new BootstrapResult(transactions, admission, loader, failure, failures, 3,
+                    new ContributionRegistry(admission, java.util.logging.Logger.getAnonymousLogger()));
             failures.clear();
             assertThat(result.transactions()).isSameAs(transactions);
             assertThat(result.admission()).isSameAs(admission);

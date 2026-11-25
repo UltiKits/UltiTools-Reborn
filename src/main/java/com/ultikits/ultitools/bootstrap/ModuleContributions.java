@@ -84,6 +84,8 @@ final class ModuleContributions implements EnchantmentChannel, TagChannel, Datap
         Key tagKey = copyKey(tag);
         if (replace) {
             requireNamespace(tagKey);
+        } else {
+            namespace(); // Tag additions also have to be attributed to a valid module namespace.
         }
         tags.add(new TagChange(registry, tagKey, values.stream().map(ModuleContributions::copyKey).toList(), replace));
     }

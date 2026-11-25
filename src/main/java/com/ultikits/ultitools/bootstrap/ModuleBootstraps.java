@@ -93,7 +93,7 @@ final class ModuleBootstraps {
         }
     }
 
-    private static String describe(Throwable failure) {
+    static String describe(Throwable failure) {
         String description = failure.getClass().getName() + ": " + safeMessage(failure);
         try {
             Throwable cause = failure.getCause();
@@ -118,8 +118,12 @@ final class ModuleBootstraps {
     }
 
     static void logFailure(Logger logger, String message, Throwable failure) {
+        log(logger, Level.SEVERE, message, failure);
+    }
+
+    static void log(Logger logger, Level level, String message, Throwable failure) {
         try {
-            logger.log(Level.SEVERE, message, failure);
+            logger.log(level, message, failure);
         } catch (VirtualMachineError fatal) {
             throw fatal;
         } catch (Throwable unavailable) { // NOPMD - a logging handler must not let a module abort bootstrap
