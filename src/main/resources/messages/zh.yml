@@ -41,6 +41,7 @@ module:
   bootstrap:
     failed: "模块 '<module>' 在本次启动的引导阶段失败，未加载；原因见前面的引导错误。"
 reload:
+  framework_overrides_failed: "无法重读框架消息覆盖文件，将保留已加载的消息并继续重载模块：<reason>"
   partial: "模块 <module> 只重载了一部分；未重载：<reasons>"
   summary:
     failed: "重载失败 <failed:'0'> 个（共 <total:'0'> 个模块）：<modules>。每个失败的详情见控制台。"

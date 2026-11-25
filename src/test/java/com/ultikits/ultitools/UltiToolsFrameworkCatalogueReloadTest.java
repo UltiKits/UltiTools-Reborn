@@ -3,12 +3,14 @@ package com.ultikits.ultitools;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.ManagerKeys;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.text.internal.TextEngine;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -71,22 +73,26 @@ class UltiToolsFrameworkCatalogueReloadTest {
     @ParameterizedTest
     @ValueSource(strings = {"en", "zh"})
     void fullReloadWarnsOnceAndStillReloadsModulesAfterUnexpectedOverrideFailure(String code) throws Exception {
+        var locale = Locale.forLanguageTag(code);
         var engine = mock(TextEngine.class);
-        when(engine.fallback()).thenReturn(Locale.forLanguageTag(code));
-        var failure = new IllegalStateException("test override read failed");
+        when(engine.fallback()).thenReturn(locale);
+        var failure = new IllegalStateException("test override read failed: <red>&c");
         doThrow(failure).when(engine).reloadOverrides("ultitools");
         var modules = mock(PluginManager.class);
         when(modules.reloadAllAndReport()).thenReturn(List.of("done"));
         var logger = mock(Logger.class);
         var plugin = reloadablePlugin(engine, modules, logger);
 
-        assertThat(plugin.reloadPluginsAndReport()).containsExactly("done");
+        try (var catalogue = new CommandMessageTestSupport(code);
+             var ignored = FrameworkMessages.overrideForTests(catalogue.messages(), locale)) {
+            assertThat(plugin.reloadPluginsAndReport()).containsExactly("done");
+        }
         verify(modules).reloadAllAndReport();
         var warning = ArgumentCaptor.forClass(String.class);
         verify(logger).log(eq(Level.WARNING), warning.capture(), same(failure));
         assertThat(warning.getValue()).isEqualTo(code.equals("en")
-                ? "Could not reload framework message catalogue overrides."
-                : "无法重载框架消息目录的覆盖文件。");
+                ? "Could not reread the framework message override files; keeping the loaded messages and continuing to reload modules: test override read failed: <red>&c"
+                : "无法重读框架消息覆盖文件，将保留已加载的消息并继续重载模块：test override read failed: <red>&c");
         verifyNoMoreInteractions(logger);
     }
 

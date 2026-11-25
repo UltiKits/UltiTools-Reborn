@@ -26,7 +26,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -1087,11 +1086,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         try {
             engine.reloadOverrides(MessageKey.FRAMEWORK_NAMESPACE);
         } catch (RuntimeException cause) {
-            // This diagnostic must not depend on rendering the catalogue that just failed to reload.
-            String warning = Locale.CHINESE.getLanguage().equals(engine.fallback().getLanguage())
-                    ? "无法重载框架消息目录的覆盖文件。"
-                    : "Could not reload framework message catalogue overrides.";
-            logger.log(Level.WARNING, warning, cause);
+            logger.log(Level.WARNING, FrameworkMessages.plain(RELOAD_FRAMEWORK_OVERRIDES_FAILED,
+                    Arg.string("reason", cause.getMessage() != null ? cause.getMessage() : cause.toString())), cause);
         }
     }
 

@@ -41,6 +41,7 @@ module:
   bootstrap:
     failed: "Module '<module>' is not loaded because its bootstrap phase failed at this start; see the earlier bootstrap error."
 reload:
+  framework_overrides_failed: "Could not reread the framework message override files; keeping the loaded messages and continuing to reload modules: <reason>"
   partial: "Module <module> reloaded partially; not reloaded: <reasons>"
   summary:
     failed: "Failed to reload <failed:'0'> of <total:'0'> modules: <modules>. See the console for each failure."
