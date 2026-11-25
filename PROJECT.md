@@ -28,8 +28,7 @@
 - **Runtime dependency model:** Paper is the only declared server API (`paper-api`, `provided` scope).
   Paper invokes `UltiToolsLoader` to download the coordinates in `src/main/resources/ultitools-libraries.txt`.
   The framework JAR contains only `paper-plugin.yml`; module JARs still use their own `plugin.yml`.
-  Materials, sounds and enchantments use Paper's native APIs. `obliviate-invs` and `UniversalScheduler` use Maven's default
-  `compile` scope and are bundled by maven-shade-plugin.
+  Materials, sounds and enchantments use Paper's native APIs. The framework JAR bundles no third-party library.
   Plain Spigot is not supported. The 7.0 baseline is Paper 26.3 build 258 on Java 25. Each framework
   version targets one latest Paper version; older servers are not promised compatibility (see `COMPATIBILITY.md`).
 - **Downstream:** consumer plugin modules declare `com.ultikits:UltiTools-API` at `provided` scope. Bumping

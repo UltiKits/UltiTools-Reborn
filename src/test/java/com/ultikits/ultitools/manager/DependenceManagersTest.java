@@ -276,14 +276,14 @@ class DependenceManagersTest {
         @Test
         @DisplayName("getContext 方法应该存在")
         void getContextMethodShouldExist() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("getContext");
+            Method method = DependenceManagers.class.getMethod("getContext");
             assertThat(method).isNotNull();
         }
 
         @Test
         @DisplayName("getVersionComparator 方法应该存在")
         void getVersionComparatorMethodShouldExist() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("getVersionComparator");
+            Method method = DependenceManagers.class.getMethod("getVersionComparator");
             assertThat(method).isNotNull();
         }
     }
@@ -373,16 +373,9 @@ class DependenceManagersTest {
     class MethodAccessibilityTests {
 
         @Test
-        @DisplayName("initInventoryAPI 是公开方法")
-        void initInventoryAPIIsPublic() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("initInventoryAPI", UltiTools.class);
-            assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
-        }
-
-        @Test
         @DisplayName("closeContext 是公开方法")
         void closeContextIsPublic() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("closeContext");
+            Method method = DependenceManagers.class.getMethod("closeContext");
             assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
         }
     }
@@ -484,7 +477,7 @@ class DependenceManagersTest {
                 // Act: invoke the real private initCoreServices() method -- the exact
                 // code path DependenceManagers' own constructor runs, not a hand-copied
                 // reproduction of it.
-                java.lang.reflect.Method initCoreServices =
+                Method initCoreServices =
                         DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
                 initCoreServices.setAccessible(true); // NOPMD
                 UltiTools core = mock(UltiTools.class);
@@ -619,7 +612,7 @@ class DependenceManagersTest {
             FrameworkScheduling.install(scheduler);
             try {
 
-                java.lang.reflect.Method initCoreServices =
+                Method initCoreServices =
                         DependenceManagers.class.getDeclaredMethod("initCoreServices", UltiTools.class);
                 initCoreServices.setAccessible(true); // NOPMD
                 initCoreServices.invoke(managers, mockUltiTools);
