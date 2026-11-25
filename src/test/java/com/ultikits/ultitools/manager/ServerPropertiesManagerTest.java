@@ -7,6 +7,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import com.google.gson.JsonObject;
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.config.document.AtomicConfigWriter;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.utils.TestHelper;
 import java.io.*;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
@@ -15,19 +21,35 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
-
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
-import com.google.gson.JsonObject;
-import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.config.document.AtomicConfigWriter;
-import com.ultikits.ultitools.utils.TestHelper;
-
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Test requires reflection to clear the global singleton
 class ServerPropertiesManagerTest {
+
+    private CommandMessageTestSupport messageSupport;
+    private AutoCloseable messageScope;
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void allFailureCategoriesPreserveTheirCompleteText(String code) throws Exception {
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(
+                        support.messages(), Locale.forLanguageTag(code))) {
+            var result = new ServerPropertiesManager.SetAllResult(List.of(), List.of("rcon.password"),
+                    List.of("motd"), List.of(), List.of("pvp"), List.of("simulation-distance"), Map.of());
+            assertThat(result.describeFailure()).isEqualTo("zh".equals(code)
+                    ? "server.properties 批量设置未完全生效；不在白名单因而被拒的键: rcon.password"
+                        + "；写入失败的键: motd；值不是字符串或数字因而无法写入的键: pvp；本服务器版本没有的键: simulation-distance"
+                    : "Batch update of server.properties was not fully applied; keys rejected because they are not whitelisted: rcon.password"
+                        + "; keys that failed to write: motd; keys whose value is neither a string nor a number and so could not be written: pvp"
+                        + "; keys this server version does not have: simulation-distance");
+        }
+    }
 
     private File tempDir;
     private File propsFile;
@@ -51,10 +73,15 @@ class ServerPropertiesManagerTest {
             pw.println("server-port=25565");
         }
         manager = new ServerPropertiesManager(tempDir);
+        messageSupport = new CommandMessageTestSupport("zh");
+        messageScope = FrameworkMessages.overrideForTests(
+                messageSupport.messages(), Locale.CHINESE);
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        messageScope.close();
+        messageSupport.close();
         propsFile.delete();
         tempDir.delete();
         // UltiTools.ultiTools 是全局静态字段。只有部分用例会装它，但不还原就会漏给

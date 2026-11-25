@@ -30,7 +30,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.config.document.AtomicConfigWriter;
-import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
@@ -1136,18 +1136,18 @@ public class ServerPropertiesManager {
             if (rejected.isEmpty() && named.isEmpty() && malformed.isEmpty() && notPresentOnServer.isEmpty()) {
                 return null;
             }
-            StringBuilder sb = new StringBuilder(FrameworkText.text("server.properties 批量设置未完全生效"));
+            StringBuilder sb = new StringBuilder(FrameworkMessages.plain(ManagerKeys.SERVER_PROPERTIES_BATCH_INCOMPLETE));
             if (!rejected.isEmpty()) {
-                sb.append(FrameworkText.text("；不在白名单因而被拒的键: ")).append(String.join(", ", rejected));
+                sb.append(FrameworkMessages.plain(ManagerKeys.SERVER_PROPERTIES_BATCH_REJECTED)).append(String.join(", ", rejected));
             }
             if (!named.isEmpty()) {
-                sb.append(FrameworkText.text("；写入失败的键: ")).append(String.join(", ", named));
+                sb.append(FrameworkMessages.plain(ManagerKeys.SERVER_PROPERTIES_BATCH_WRITE_FAILED)).append(String.join(", ", named));
             }
             if (!malformed.isEmpty()) {
-                sb.append(FrameworkText.text("；值不是字符串或数字因而无法写入的键: ")).append(String.join(", ", malformed));
+                sb.append(FrameworkMessages.plain(ManagerKeys.SERVER_PROPERTIES_BATCH_MALFORMED)).append(String.join(", ", malformed));
             }
             if (!notPresentOnServer.isEmpty()) {
-                sb.append(FrameworkText.text("；本服务器版本没有的键: ")).append(String.join(", ", notPresentOnServer));
+                sb.append(FrameworkMessages.plain(ManagerKeys.SERVER_PROPERTIES_BATCH_NOT_PRESENT)).append(String.join(", ", notPresentOnServer));
             }
             return sb.toString();
         }

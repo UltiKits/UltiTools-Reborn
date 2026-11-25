@@ -274,6 +274,8 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   warn once per key and requested locale. Ship a base catalogue such as `zh.yml` when supplying
   `zh_CN.yml` or other regional variants; a regional-only language warns on load but is not selected
   for other regions or language-only requests.
+- **TPS diagnostic rounding:** in 7.0, `monitor.tps_update` intentionally uses the catalogue renderer's
+  half-even rounding (`19.125` → `19.12`), rather than the 6.x `%.2f` half-up result (`19.13`).
 - **Operator translations:** put only overrides in
   `plugins/UltiTools/pluginConfig/<module>/messages/<locale>.yml`, or
   `plugins/UltiTools/messages/<locale>.yml` for framework messages. New locale files add

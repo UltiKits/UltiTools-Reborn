@@ -11,7 +11,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 
@@ -523,9 +523,9 @@ public class UltiPanelLogTransmitter {
         this.logTransmissionEnabled.set(enabled);
 
         if (enabled) {
-            PanelConnectionLog.log(Level.INFO, FrameworkText.text("[UltiPanel] 日志传输已启用"));
+            PanelConnectionLog.log(Level.INFO, FrameworkMessages.plain(ManagerKeys.PANEL_LOG_ENABLED));
         } else {
-            PanelConnectionLog.log(Level.INFO, FrameworkText.text("[UltiPanel] 日志传输已禁用"));
+            PanelConnectionLog.log(Level.INFO, FrameworkMessages.plain(ManagerKeys.PANEL_LOG_DISABLED));
         }
     }
 
@@ -556,6 +556,6 @@ public class UltiPanelLogTransmitter {
      */
     public void shutdown() {
         logTransmissionEnabled.set(false);
-        PanelConnectionLog.log(Level.INFO, FrameworkText.text("[UltiPanel] 日志传输器已关闭"));
+        PanelConnectionLog.log(Level.INFO, FrameworkMessages.plain(ManagerKeys.PANEL_LOG_CLOSED));
     }
 }

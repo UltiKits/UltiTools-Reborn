@@ -5,6 +5,15 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import java.util.Locale;
+import java.util.logging.LogRecord;
+import java.util.logging.Handler;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -86,6 +95,34 @@ class UltiPanelLogTransmitterTest {
         List<String> messages = new ArrayList<>();
         logs.forEach(e -> messages.add(e.getAsJsonObject().get("message").getAsString()));
         return messages;
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void transmissionDiagnosticsUseServerLanguage(String code) throws Exception {
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setUseParentHandlers(false);
+        logger.addHandler(new Handler() {
+            @Override public void publish(LogRecord record) { records.add(record); }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        });
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                plugin -> when(plugin.getLogger()).thenReturn(logger));
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(
+                        support.messages(), Locale.forLanguageTag(code))) {
+            transmitter.setLogTransmissionEnabled(true);
+            transmitter.setLogTransmissionEnabled(false);
+            transmitter.shutdown();
+            assertThat(records).extracting(LogRecord::getMessage).containsExactly("zh".equals(code)
+                    ? new String[]{"[UltiPanel] 日志传输已启用", "[UltiPanel] 日志传输已禁用", "[UltiPanel] 日志传输器已关闭"}
+                    : new String[]{"[UltiPanel] Log transmission enabled", "[UltiPanel] Log transmission disabled",
+                        "[UltiPanel] Log transmitter shut down"});
+            assertThat(records).extracting(LogRecord::getLevel).containsOnly(Level.INFO);
+            assertThat(records).extracting(LogRecord::getThrown).containsOnlyNulls();
+        }
     }
 
     @Test

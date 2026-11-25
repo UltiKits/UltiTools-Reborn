@@ -16,10 +16,14 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import java.util.Locale;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import com.ultikits.ultitools.handler.SystemLogHandler;
 import com.ultikits.ultitools.testutil.LoggedLines;
 import com.ultikits.ultitools.websocket.PanelConnectionLog;
@@ -63,20 +67,26 @@ class PanelConnectionMarkingSitesTest {
         return records.get(0);
     }
 
-    @Test
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
     @DisplayName("SystemLogHandler: a record it cannot hand on is reported as a marked WARNING")
-    void systemLogHandlerFailureIsMarked() {
-        UltiPanelLogTransmitter transmitter = mock(UltiPanelLogTransmitter.class);
-        doThrow(new IllegalStateException("transmitter broke"))
-                .when(transmitter).sendLog(anyString(), anyString(), anyString(), any());
-        SystemLogHandler handler = new SystemLogHandler(transmitter);
-        LogRecord record = new LogRecord(Level.INFO, "a line");
-        record.setLoggerName("plugin.MyPlugin");
+    void systemLogHandlerFailureIsMarked(String code) throws Exception {
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.forLanguageTag(code))) {
+            UltiPanelLogTransmitter transmitter = mock(UltiPanelLogTransmitter.class);
+            doThrow(new IllegalStateException("transmitter broke"))
+                    .when(transmitter).sendLog(anyString(), anyString(), anyString(), any());
+            SystemLogHandler handler = new SystemLogHandler(transmitter);
+            LogRecord record = new LogRecord(Level.INFO, "a line");
+            record.setLoggerName("plugin.MyPlugin");
 
-        handler.publish(record);
+            handler.publish(record);
 
-        LogRecord report = onlyWarning();
-        assertThat(report.getMessage()).contains("transmitter broke");
-        assertThat(PanelConnectionLog.isPanelConnectionRecord(report)).isTrue();
+            LogRecord report = onlyWarning();
+            assertThat(report.getMessage()).isEqualTo("zh".equals(code)
+                    ? "[UltiPanel] SystemLogHandler处理日志记录失败: transmitter broke"
+                    : "[UltiPanel] SystemLogHandler failed to process a log record: transmitter broke");
+            assertThat(PanelConnectionLog.isPanelConnectionRecord(report)).isTrue();
+        }
     }
 }
