@@ -176,7 +176,7 @@ class UltiToolsCommandsTest {
         assertThat(result).isTrue();
         String reply = player.nextMessage();
         assertThat(reply).as("the sender is told the reload failed, naming the module")
-                .contains("BrokenModule").contains("failed to reload").contains("hook boom")
+                .contains("BrokenModule").contains("重载失败").contains("hook boom")
                 .doesNotContain("%s");
         assertThat(player.nextMessage()).as("no success reply follows a failure").isNull();
     }
@@ -212,7 +212,8 @@ class UltiToolsCommandsTest {
         CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload", "GoodModule"});
         server.getScheduler().performOneTick();
 
-        assertThat(player.nextMessage()).isEqualTo("模块 GoodModule 已重载");
+        assertThat(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(player.nextComponentMessage()))
+                .isEqualTo("模块 GoodModule 已重载");
     }
 
     @SuppressWarnings("unchecked")
@@ -242,9 +243,9 @@ class UltiToolsCommandsTest {
         CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload", "SneakyModule"});
         server.getScheduler().performOneTick();
 
-        assertThat(player.nextMessage()).contains("RecursiveModule").contains("failed to reload")
+        assertThat(player.nextMessage()).contains("RecursiveModule").contains("重载失败")
                 .contains("recursive onReload");
-        assertThat(player.nextMessage()).contains("SneakyModule").contains("failed to reload").contains("disk gone");
+        assertThat(player.nextMessage()).contains("SneakyModule").contains("重载失败").contains("disk gone");
     }
 
     @Test
