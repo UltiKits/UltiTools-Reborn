@@ -3,6 +3,12 @@ package com.ultikits.ultitools;
 import static com.ultikits.ultitools.utils.CommonUtils.getUltiToolsUUID;
 import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
 
+import static com.ultikits.ultitools.UltiToolsKeys.*;
+
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
+import java.time.Duration;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -439,8 +445,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
             EarlyLogCapture.release();
             return;
         }
-        long ticks = EarlyLogCapture.RELEASE_AFTER_MS / 50L + 20L;
-        Bukkit.getScheduler().runTaskLater(this, EarlyLogCapture::releaseIfExpired, ticks);
+        FrameworkScheduling.scheduler().global().runLater(
+                Duration.ofMillis(EarlyLogCapture.RELEASE_AFTER_MS + 1000L), EarlyLogCapture::releaseIfExpired);
     }
 
     // Package-private lifecycle seam: validate before accessing a failed handover's resources.
@@ -933,7 +939,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     private void scheduleStartupMessages() {
-        getServer().getScheduler().scheduleSyncDelayedTask(this, () -> {
+        FrameworkScheduling.scheduler().global().run(() -> {
             CloudAuthManager.CloudStatus status = CloudAuthManager.status();
             if (status.isLinked()) {
                 getLogger().log(Level.INFO, "UltiCloud: linked as " + status.getServerName()
@@ -941,12 +947,16 @@ public final class UltiTools extends JavaPlugin implements Localized {
             } else {
                 getLogger().log(Level.INFO, "UltiCloud: Not linked. Use /ulticloud login to link this server.");
             }
-            getLogger().log(Level.INFO, String.format(i18n("数据存储方式：%s"), dataStore.getStoreType()));
-            getLogger().log(Level.INFO, String.format(i18n("UltiTools-API已启动，当前版本：%s"), getEnv().getString("version")));
+            getLogger().log(Level.INFO, FrameworkMessages.plain(STARTUP_DATA_STORE,
+                    Arg.string("store", String.valueOf(dataStore.getStoreType()))));
+            getLogger().log(Level.INFO, FrameworkMessages.plain(STARTUP_ENABLED,
+                    Arg.string("version", String.valueOf(getEnv().getString("version")))));
             try {
-                getLogger().log(Level.INFO, String.format(i18n("服务器UUID: %s"), getUltiToolsUUID()));
+                getLogger().log(Level.INFO, FrameworkMessages.plain(STARTUP_SERVER_UUID,
+                        Arg.string("uuid", String.valueOf(getUltiToolsUUID()))));
             } catch (IOException e) {
-                getLogger().log(Level.WARNING, i18n("获取服务器UUID失败！") + e.getMessage());
+                getLogger().log(Level.WARNING, FrameworkMessages.plain(STARTUP_SERVER_UUID_FAILED,
+                        Arg.string("error", String.valueOf(e.getMessage()))));
             }
 
             // Start the async update check; onDisable stops it (D19-032).
