@@ -27,7 +27,7 @@ class UiResultTest {
             assertThat(result).isEqualTo(new UiResult.Closed<>(reason));
             assertThatThrownBy(result::value).isInstanceOf(IllegalStateException.class).hasMessageContaining(reason.name());
         }
-        assertThat(CloseReason.values()).hasSize(7);
+        assertThat(CloseReason.values()).hasSize(8);
         assertThat(ClickKind.values()).hasSize(8);
     }
 
