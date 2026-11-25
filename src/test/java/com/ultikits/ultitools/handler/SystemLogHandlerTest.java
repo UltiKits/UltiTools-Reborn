@@ -11,6 +11,29 @@ import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.text.LocaleResolver;
+import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.text.internal.MessageRenderer;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.logging.Handler;
+import java.util.logging.Logger;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
@@ -165,8 +188,16 @@ class SystemLogHandlerTest {
         verify(mockTransmitter).sendLog(eq("info"), eq("Net msg"), eq("network"), isNull());
     }
     
-    @Test
-    void testFormatMessageExceptionFallback() {
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void testFormatMessageExceptionFallback(String code) throws Exception {
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.forLanguageTag(code))) {
+            assertFallbackMessage(code);
+        }
+    }
+
+    private void assertFallbackMessage(String code) {
         // Force an exception in String.format by using invalid format specifier
         // But String.format throws IllegalFormatException which is unchecked.
         // The code catches Exception.
@@ -177,7 +208,97 @@ class SystemLogHandlerTest {
         handler.publish(record);
 
         // Expect fallback: "Hello %d [参数: World]"
-        verify(mockTransmitter).sendLog(eq("info"), eq("Hello %d [参数: World]"), anyString(), isNull());
+        verify(mockTransmitter).sendLog(eq("info"), eq("zh".equals(code)
+                ? "Hello %d [参数: World]" : "Hello %d [parameters: World]"), anyString(), isNull());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void configurationAndFailureDiagnosticsUseServerLanguage(String code) throws Exception {
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = collectingLogger(records);
+        UltiTools plugin = mock(UltiTools.class);
+        YamlConfiguration config = mock(YamlConfiguration.class);
+        when(plugin.getLogger()).thenReturn(logger);
+        when(plugin.getConfig()).thenReturn(config);
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.forLanguageTag(code));
+                MockedStatic<UltiTools> singleton = mockStatic(UltiTools.class)) {
+            singleton.when(UltiTools::getInstance).thenReturn(plugin);
+            handler.loadConfiguration();
+            when(config.contains(anyString())).thenThrow(new IllegalStateException("broken"));
+            handler.loadConfiguration();
+            doThrow(new IllegalStateException("sink down")).when(mockTransmitter)
+                    .sendLog(anyString(), anyString(), anyString(), isNull());
+            handler.publish(new LogRecord(Level.INFO, "outer"));
+            assertThat(records).extracting(LogRecord::getMessage).containsExactly("zh".equals(code)
+                    ? new String[]{"[UltiPanel] 系统日志处理器配置已加载",
+                        "[UltiPanel] 加载日志配置失败，使用默认配置: broken",
+                        "[UltiPanel] SystemLogHandler处理日志记录失败: sink down"}
+                    : new String[]{"[UltiPanel] System log handler configuration loaded",
+                        "[UltiPanel] Failed to load the log configuration, using the defaults: broken",
+                        "[UltiPanel] SystemLogHandler failed to process a log record: sink down"});
+            assertThat(records).extracting(LogRecord::getLevel)
+                    .containsExactly(Level.INFO, Level.WARNING, Level.WARNING);
+            assertThat(records).extracting(LogRecord::getThrown).containsOnlyNulls();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void configurationSummaryPreservesAllFiveLines(String code) throws Exception {
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.forLanguageTag(code))) {
+            for (boolean connected : new boolean[]{true, false}) {
+                SystemLogHandler configured = new SystemLogHandler(connected ? mockTransmitter : null);
+                configured.setEnabledLevels(Set.of("info"));
+                configured.setExcludedLoggers(Set.of("excluded"));
+                String expected = "zh".equals(code)
+                        ? "SystemLogHandler配置信息:\n- 最小日志级别: INFO\n- 启用的级别: [info]\n"
+                            + "- 排除的记录器数量: 1\n- 日志传输器状态: " + (connected ? "已连接" : "未连接")
+                        : "SystemLogHandler configuration:\n- Minimum log level: INFO\n- Enabled levels: [info]\n"
+                            + "- Excluded loggers: 1\n- Log transmitter status: " + (connected ? "Connected" : "Not connected");
+                assertThat(configured.getConfigurationInfo()).isEqualTo(expected);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void missingKeyWarningInsideHandlerIsBounded(String code) throws Exception {
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = collectingLogger(records);
+        logger.addHandler(handler);
+        Messages messages = mock(Messages.class);
+        var renderer = new MessageRenderer(namespace -> null, mock(LocaleResolver.class), logger);
+        when(messages.render(any(), any(Locale.class)))
+                .thenAnswer(call -> renderer.render(call.getArgument(0), call.getArgument(1)));
+        LogRecord invalid = new LogRecord(Level.INFO, "value %d");
+        invalid.setParameters(new Object[]{"not a number"});
+        try (var scope = FrameworkMessages.overrideForTests(messages, Locale.forLanguageTag(code))) {
+            assertDoesNotThrow(() -> {
+                handler.publish(invalid);
+                handler.publish(invalid);
+            });
+            assertThat(records).hasSize(1);
+            assertThat(records.getFirst().getMessage()).isEqualTo("Missing message {0} for {1}");
+            assertThat(records.getFirst().getLevel()).isEqualTo(Level.WARNING);
+            verify(mockTransmitter, times(2)).sendLog(eq("info"), anyString(), anyString(), isNull());
+            verifyNoMoreInteractions(mockTransmitter);
+        } finally {
+            logger.removeHandler(handler);
+        }
+    }
+
+    private static Logger collectingLogger(List<LogRecord> records) {
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setUseParentHandlers(false);
+        logger.addHandler(new Handler() {
+            @Override public void publish(LogRecord record) { records.add(record); }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        });
+        return logger;
     }
 
     // ==================== CR-02: ErrorReportCollector decoupled from the levels filter ====================

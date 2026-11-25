@@ -44,6 +44,7 @@ public final class FrameworkMessages {
 
     /**
      * Renders plain text in the server's fallback language without logging or throwing on unavailability.
+     * The renderer may log once for a missing key or an invalid argument format.
      * @param key the framework message key
      * @param args named message arguments
      * @return rendered text, or the key string when framework services or rendering are unavailable
