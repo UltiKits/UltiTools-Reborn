@@ -140,8 +140,64 @@ public class PluginManager {
      */
     static final String RELOAD_PARTIAL_LINE_KEY = "Module %s reloaded partially; not reloaded: %s";
 
+    /**
+     * Whether an unmodified reload summary's indexed line is a per-module detail already logged
+     * by that module. Internal command-output metadata, not a module API. Unknown lists keep all
+     * their replies; localized message text is never parsed to decide whether to suppress output.
+     *
+     * @param summary the list returned by {@link #reloadAllAndReport()}
+     * @param index the line being sent
+     * @return whether this line is already logged as a module's partial-reload summary
+     */
+    @ApiStatus.Internal
+    public static boolean isLoggedPartialReloadLine(List<String> summary, int index) {
+        return summary instanceof ReloadSummary
+                && index >= ((ReloadSummary) summary).headlineCount && index < summary.size();
+    }
+
+    /**
+     * The lines {@code /ul reload} replies to the native console: the headlines of an unmodified
+     * reload summary, without the per-module details each module has already logged there (#665).
+     * When per-module details follow the headlines, the last headline
+     * introduces them with a colon; the console reply drops that trailing colon, because the
+     * details it introduced are not repeated beneath it (#824). Unknown lists carry no metadata
+     * and are returned unchanged. Internal command-output metadata, not a module API.
+     *
+     * @param summary the list returned by {@link #reloadAllAndReport()}
+     * @return the lines to send to the native console
+     * @since 6.4.0
+     */
+    @ApiStatus.Internal
+    public static List<String> nativeConsoleReloadReply(List<String> summary) {
+        if (!(summary instanceof ReloadSummary)) {
+            return new ArrayList<>(summary);
+        }
+        int headlines = ((ReloadSummary) summary).headlineCount;
+        List<String> reply = new ArrayList<>(summary.subList(0, Math.min(headlines, summary.size())));
+        if (headlines < summary.size() && !reply.isEmpty()) {
+            int last = reply.size() - 1;
+            reply.set(last, withoutTrailingColon(reply.get(last)));
+        }
+        return reply;
+    }
+
     /** Code point of the full-width colon the Chinese catalogue ends a headline with. */
     private static final int FULL_WIDTH_COLON = 0xFF1A;
+
+    /** A headline without the ASCII or full-width colon that introduced the lines below it. */
+    private static String withoutTrailingColon(String headline) {
+        if (headline.isEmpty()) {
+            return headline;
+        }
+        int last = headline.charAt(headline.length() - 1);
+        return last == ':' || last == FULL_WIDTH_COLON ? headline.substring(0, headline.length() - 1) : headline;
+    }
+
+    /** Retains normal List behavior while carrying the boundary between headlines and details. */
+    private static final class ReloadSummary extends ArrayList<String> {
+        private static final long serialVersionUID = 1L;
+        private int headlineCount;
+    }
 
     /**
      * Framework i18n key for the one line logged when a module cannot load because a plugin its
@@ -260,22 +316,6 @@ public class PluginManager {
      */
     static final Set<Class<?>> FRAMEWORK_SCHEDULED_OWNER_TYPES = Collections.unmodifiableSet(
             new LinkedHashSet<>(Collections.<Class<?>>singletonList(PlayerCacheManager.class)));
-
-    /** The framework's own package, in both the dotted and the internal (slash) spelling. */
-    private static final String FRAMEWORK_PACKAGE = "com.ultikits.ultitools.";
-    private static final String FRAMEWORK_PACKAGE_INTERNAL = "com/ultikits/ultitools/";
-
-    /**
-     * A bare JVM internal (slash-separated) binary class name: one or more identifier segments
-     * joined by {@code /}, each starting with a letter, {@code _} or {@code $}. Deliberately
-     * rejects anything carrying a space, parenthesis or colon -- which is exactly the shape of the
-     * JVM-specific " (wrong name: ...)" detail some JVMs append to a {@link NoClassDefFoundError}
-     * message for a class/file name mismatch (a jar-content problem, not "a type this class
-     * references is absent") and of any non-{@link NoClassDefFoundError} {@link LinkageError}'s
-     * prose message (Codex review, PR #551 round 1, P2).
-     */
-    private static final Pattern INTERNAL_CLASS_NAME_PATTERN =
-            Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:/[A-Za-z_$][A-Za-z0-9_$]*)*");
 
     /** Creates a standalone manager with its own admission snapshot. */
     public PluginManager() {
@@ -1700,6 +1740,10 @@ public class PluginManager {
         }
     }
 
+    /** The framework's own package, in both the dotted and the internal (slash) spelling. */
+    private static final String FRAMEWORK_PACKAGE = "com.ultikits.ultitools.";
+    private static final String FRAMEWORK_PACKAGE_INTERNAL = "com/ultikits/ultitools/";
+
     /**
      * Decides whether a failure to load a module's declared main class means the module was built
      * against a different UltiTools-API than the one installed -- usually an older one, the case an
@@ -2047,6 +2091,18 @@ public class PluginManager {
         Plugin plugin = Bukkit.getPluginManager().getPlugin(pluginName);
         return plugin == null || !plugin.isEnabled();
     }
+
+    /**
+     * A bare JVM internal (slash-separated) binary class name: one or more identifier segments
+     * joined by {@code /}, each starting with a letter, {@code _} or {@code $}. Deliberately
+     * rejects anything carrying a space, parenthesis or colon -- which is exactly the shape of the
+     * JVM-specific " (wrong name: ...)" detail some JVMs append to a {@link NoClassDefFoundError}
+     * message for a class/file name mismatch (a jar-content problem, not "a type this class
+     * references is absent") and of any non-{@link NoClassDefFoundError} {@link LinkageError}'s
+     * prose message (Codex review, PR #551 round 1, P2).
+     */
+    private static final Pattern INTERNAL_CLASS_NAME_PATTERN =
+            Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:/[A-Za-z_$][A-Za-z0-9_$]*)*");
 
     /**
      * Extraction of the internal (dot-qualified) name of the class {@code failure} reports
@@ -4105,61 +4161,5 @@ public class PluginManager {
             eventBus.register(eventType, annotation.priority(), annotation.ignoreCancelled(),
                     pluginName, method, bean);
         }
-    }
-
-    /**
-     * Whether an unmodified reload summary's indexed line is a per-module detail already logged
-     * by that module. Internal command-output metadata, not a module API. Unknown lists keep all
-     * their replies; localized message text is never parsed to decide whether to suppress output.
-     *
-     * @param summary the list returned by {@link #reloadAllAndReport()}
-     * @param index the line being sent
-     * @return whether this line is already logged as a module's partial-reload summary
-     */
-    @ApiStatus.Internal
-    public static boolean isLoggedPartialReloadLine(List<String> summary, int index) {
-        return summary instanceof ReloadSummary
-                && index >= ((ReloadSummary) summary).headlineCount && index < summary.size();
-    }
-
-    /**
-     * The lines {@code /ul reload} replies to the native console: the headlines of an unmodified
-     * reload summary, without the per-module details each module has already logged there (#665).
-     * When per-module details follow the headlines, the last headline
-     * introduces them with a colon; the console reply drops that trailing colon, because the
-     * details it introduced are not repeated beneath it (#824). Unknown lists carry no metadata
-     * and are returned unchanged. Internal command-output metadata, not a module API.
-     *
-     * @param summary the list returned by {@link #reloadAllAndReport()}
-     * @return the lines to send to the native console
-     * @since 6.4.0
-     */
-    @ApiStatus.Internal
-    public static List<String> nativeConsoleReloadReply(List<String> summary) {
-        if (!(summary instanceof ReloadSummary)) {
-            return new ArrayList<>(summary);
-        }
-        int headlines = ((ReloadSummary) summary).headlineCount;
-        List<String> reply = new ArrayList<>(summary.subList(0, Math.min(headlines, summary.size())));
-        if (headlines < summary.size() && !reply.isEmpty()) {
-            int last = reply.size() - 1;
-            reply.set(last, withoutTrailingColon(reply.get(last)));
-        }
-        return reply;
-    }
-
-    /** A headline without the ASCII or full-width colon that introduced the lines below it. */
-    private static String withoutTrailingColon(String headline) {
-        if (headline.isEmpty()) {
-            return headline;
-        }
-        int last = headline.charAt(headline.length() - 1);
-        return last == ':' || last == FULL_WIDTH_COLON ? headline.substring(0, headline.length() - 1) : headline;
-    }
-
-    /** Retains normal List behavior while carrying the boundary between headlines and details. */
-    private static final class ReloadSummary extends ArrayList<String> {
-        private static final long serialVersionUID = 1L;
-        private int headlineCount;
     }
 }
