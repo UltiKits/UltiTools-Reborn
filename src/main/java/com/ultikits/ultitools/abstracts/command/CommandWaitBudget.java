@@ -6,11 +6,6 @@ import java.util.function.LongSupplier;
 
 /** A drain's remaining allowance; only time spent waiting for command bodies is charged. */
 final class CommandWaitBudget {
-    @FunctionalInterface
-    interface Awaiter {
-        void await(Object monitor, long nanos) throws InterruptedException;
-    }
-
     private final LongSupplier clock;
     private final Awaiter awaiter;
     private long remaining;
@@ -37,5 +32,10 @@ final class CommandWaitBudget {
             remaining = Math.max(0, remaining - elapsed);
         }
         return true;
+    }
+
+    @FunctionalInterface
+    interface Awaiter {
+        void await(Object monitor, long nanos) throws InterruptedException;
     }
 }
