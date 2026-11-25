@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -33,6 +34,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 /** Regression coverage for sender-aware completion through the Bukkit entry point (#547). */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class ConsoleTabCompletionTest {
     private ServerMock server;
     private Command command;

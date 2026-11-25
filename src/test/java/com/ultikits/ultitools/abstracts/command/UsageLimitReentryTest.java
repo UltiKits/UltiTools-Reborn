@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import static org.mockito.ArgumentMatchers.argThat;
+import net.kyori.adventure.text.Component;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -40,6 +43,7 @@ import com.ultikits.ultitools.annotations.command.UsageLimit;
  * released when the outer body returns, normally or by throwing.
  */
 @DisplayName("@UsageLimit when a body re-enters its own command inline (#541)")
+@ExtendWith(CommandTestExtension.class)
 class UsageLimitReentryTest {
 
     private MockedStatic<UltiTools> ultiToolsMock;
@@ -122,7 +126,7 @@ class UsageLimitReentryTest {
         com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, command, "reenter", new String[]{"sender"});
 
         assertEquals(1, executor.senderBodies.get(), "only the outer body ran; the nested call was refused");
-        verify(player).sendMessage(org.mockito.ArgumentMatchers.contains("请先等待上一条命令执行完毕"));
+        verify(player).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("请先等待上一条命令执行完毕")));
         assertFalse(executor.getLockValidator().isLocked(player.getUniqueId(),
                         pathKey("senderScoped")),
                 "no lock stays held after the outer body returns");
@@ -153,8 +157,7 @@ class UsageLimitReentryTest {
         Player other = player();
         com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(viaConsole, other, command, "reenter", new String[]{"all"});
         assertEquals(1, viaConsole.allBodies.get(), "the console's nested call meets the player's server-wide lock");
-        verify(viaConsole.nestedSender).sendMessage(
-                org.mockito.ArgumentMatchers.contains("请先等待其他玩家发送的命令执行完毕"));
+        verify(viaConsole.nestedSender).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("请先等待其他玩家发送的命令执行完毕")));
         assertFalse(viaConsole.getLockValidator().isLocked(other.getUniqueId(), pathKey("allScoped")),
                 "the server-wide lock is released when the outer body returns");
     }

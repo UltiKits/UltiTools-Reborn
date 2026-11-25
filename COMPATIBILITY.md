@@ -82,7 +82,7 @@ Additional 6.x migration differences:
 
 ### Replies, ownership and lifecycle
 
-- Unmatched input retains the framework's existing unknown-command / usage language keys.
+- Unmatched input retains the framework's existing unknown-command / usage wording.
   Unknown first tokens retain the gated help fallthrough; deeper failures list usages from the
   typed tree. Every intermediate node and non-greedy path has an `args` fallback (or `args_` if
   that name is already used). Such fallbacks can make otherwise-invalid input appear valid to
@@ -163,6 +163,78 @@ Additional 6.x migration differences:
 玩家在线期间权限变化不会自动刷新客户端命令树，须重新登录或执行 `/minecraft:reload`；执行时仍实时检查权限。
 模块必须重新编译，不能只修改 `api-version`。
 
+### Command feedback and asynchronous unload (as of 7.0.0)
+
+Framework command feedback now uses `Messages.send(sender, Text)` rather than sentence-key
+`i18n` strings. With `language: auto`, each player receives their current client language;
+console, command blocks and panel feedback use `fallback-language`. The wording and colours
+of the bundled replies are retained. Module help and custom parser exception details remain
+module-owned; the parser helpers' fixed English details are not translated.
+
+All thirteen framework keys use the `ultitools:` namespace:
+
+- `command.error.op_required`, `command.error.no_permission`, `command.error.player_only`,
+  `command.error.console_only`, `command.error.sender_locked`, `command.error.server_locked`,
+  `command.error.cooldown`, `command.error.execution_failed`;
+- `command.async.processing`, `command.async.timeout`;
+- `command.reply.unknown`, `command.reply.usage`, `command.reply.argument_error`.
+
+Override them in `plugins/UltiTools/messages/<locale>.yml` using dotted or nested YAML keys and
+MiniMessage values. Framework catalogue overrides currently require a restart. Arguments are
+literal text or components, not MiniMessage templates: `<target>` and `<words...>` in usages
+remain visible. Native translatable argument-error components are retained where Paper supplies
+them; plain parser details are passed through literally.
+
+`ValidationResult.failure(Text, String)` and `getErrorText()` provide deferred text for validators.
+`ChainValidationResult.getErrorText()` reads the first failure, like `getErrorMessage()`. A
+Text-backed failure returns **null** from `getErrorMessage()`; consumers must check `getErrorText()`
+first. The existing String factories remain supported and custom String messages are sent unchanged.
+`@AsyncCommand.processingMessageKey` now takes `<namespace>:<path>`; its colour comes from that
+catalogue. An invalid value warns once per executor/value and uses `ultitools:command.async.processing`.
+
+`@RunAsync` and `@AsyncCommand` command bodies remain **framework-owned**, not module-owned.
+They use `Scheduler.async().run`; synchronous bodies run inline on the global tick thread, or
+are handed to `global().run` off that thread. Bodies are not entity tasks: a player leaving must
+not skip the body and its completion/lock-release hooks. A timeout notice alone uses that player's
+`entity(player)` context, or `global()` for other senders. Completion cancels its timeout task.
+Timeout stops waiting and reports once; it never cancels or interrupts the body.
+
+At server shutdown, **all command executors share about ten seconds of waiting in total**, including
+accepted async invocations' completion hooks. Framework-owned executors are explicitly registered
+and drained at the start of `onDisable`, before any framework service is shut down; module and root
+container drains use the same remaining allowance. Only time actually waiting for command bodies
+consumes it, not intervening service cleanup; starting shutdown again does not reset it. A single
+module unload outside shutdown gives that module's executors one fresh shared ten-second allowance;
+separate module unloads do not consume each other's allowance. Command waiting is independent of
+the [UI shutdown allowance](#ui-storage-waits-at-shutdown-as-of-700).
+New async submissions to unloading executors are refused. Once the allowance is exhausted, further
+executors do not wait. Each executor still running warns once with its name and remaining invocation
+count; bodies continue in the background without interruption. Do not block a command waiting for a
+global/entity callback during unload: the unloading tick thread cannot run that callback while waiting,
+and later framework submissions are refused once its scheduler retires. A module's injected scheduler
+has its own retirement rules. Cooldown seconds remain plain integers without locale grouping.
+
+中文补充：框架命令反馈已改用 `Messages`；`language: auto` 时按各玩家当前客户端语言渲染，
+控制台、命令方块和面板使用后备语言。上列 13 个键都属于 `ultitools` 命名空间，可在
+`plugins/UltiTools/messages/<locale>.yml` 中覆盖；框架目录覆盖目前须重启生效。原有回复措辞和
+颜色保留，用法里的 `<target>`、`<words...>` 等参数不会当模板解析；模块帮助及解析器异常原文
+仍归模块所有，两个固定英文解析错误不翻译。校验失败先读取 `getErrorText()`；由 Text 构造的
+失败其 `getErrorMessage()` 为 null，旧 String 工厂及自定义字符串回复继续原样支持。
+`processingMessageKey` 改用带命名空间的 `<namespace>:<path>`，颜色由模块目录决定；非法值
+每个执行器／值只警告一次，回退默认“处理中...”键。
+
+异步命令体仍归框架调度器所有，同步命令已在 global tick 线程时立即执行，否则交给 global；
+只有超时提示跟随玩家实体，其他发送者走 global。命令按时结束会取消看门狗，超时只停止等待、
+提示一次，不取消或中断命令体。整次停服的全部命令执行器共用约 10 秒的剩余等待预算，包含
+完成钩子与锁释放；框架自带执行器显式登记，在 onDisable 开头、任何框架服务关闭前先等待，
+模块与根容器继续使用同一份预算。只有实际等待命令体的时间才扣，服务清理时间不扣，重复开始
+停服不恢复预算。非停服时单个模块卸载，其全部执行器共用一次新的约 10 秒等待预算，不同模块
+先后单独卸载互不影响。命令预算与[界面关停预算](#ui-storage-waits-at-shutdown-as-of-700)互相独立。
+卸载中的执行器拒绝新的异步提交；预算耗尽后其余执行器不再等，仍有运行任务的执行器各警告
+一次（类名、剩余数量），命令体不中断、继续在后台运行。卸载期间不要阻塞等待跳回 global／
+entity 的回调：等待中的 tick 线程无法执行它，框架调度器收回后再提交也会被拒绝；模块注入的
+调度器另按模块生命周期收回。冷却秒数保持无千位分隔符的纯整数。
+
 ## Message catalogues and automatic fallback (as of 7.0.0)
 
 7.0 introduces namespace-bound `Messages` and `LocaleResolver`. Modules ship UTF-8
@@ -239,11 +311,33 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 
 All modules share one approximately 10-second UI-storage wait budget at server stop; only time spent unloading UI storage is charged, not time spent in other module shutdown hooks. Once storage waits exhaust that budget, later modules receive no remaining wait and finish with `UNKNOWN_KEPT_BY_STORE` without returning items, while an ordinary single-module unload retains its own approximately 10-second limit.
 
-When a module is unloaded, reloaded or updated while the server is running, this wait happens on the server thread. If a storage-backed screen has unsaved changes and its store does not answer within about 10 seconds, the wait reaches Paper's default `watchdog.early-warning-delay` (10000 milliseconds, `config/paper-global.yml`), and Paper can print `The server has not responded for 10 seconds! Creating thread dump` with a thread dump that shows the framework's waiting call stack. This is not a crash: the server keeps running and the session ends with `OWNER_UNLOADED` and `UNKNOWN_KEPT_BY_STORE`. Look at the store that did not answer, not at the server. Paper does not print these early warnings during server shutdown. The UI storage wait and the wait for asynchronous commands are independent, so a live unload can wait about 20 seconds when both are stuck.
-
 中文补充：停服时所有模块的界面存储等待共用约 10 秒预算，只扣除界面存储卸载等待本身的耗时，不扣其他模块卸载钩子的耗时；存储等待耗尽预算后，后面的模块没有剩余等待时间，按 `UNKNOWN_KEPT_BY_STORE` 结束且不退还物品；非停服的单模块卸载仍各有约 10 秒上限。
 
-中文补充：服务器运行中卸载、重载或更新模块时，这段等待发生在服务器线程上。存储型界面有未保存的改动、而存储约 10 秒没有答复时，等待时间会达到 Paper 默认的 `watchdog.early-warning-delay`（10000 毫秒，`config/paper-global.yml`），Paper 可能打印 `The server has not responded for 10 seconds! Creating thread dump` 和一段线程转储，其中能看到框架正在等待的调用栈。这不是崩溃：服务器继续运行，会话以 `OWNER_UNLOADED` 与 `UNKNOWN_KEPT_BY_STORE` 结束。该排查的是没有答复的存储，而不是服务器本身。停服过程中 Paper 不打印这种预警。界面存储等待与异步命令等待相互独立，两者都卡住时运行中卸载最多约等 20 秒。
+### Live-unload waits and Paper watchdog warnings
+
+When a module is unloaded, reloaded or updated while the server is running, command and UI-storage
+waits happen on the server thread. If an async command body has not finished within about ten seconds,
+or a storage-backed screen has unsaved changes and its store does not answer within that wait, Paper's
+default `watchdog.early-warning-delay` of 10000 milliseconds in `config/paper-global.yml` can produce
+`The server has not responded for 10 seconds! Creating thread dump` and a thread dump showing the
+framework's waiting call stack. This warning is not a crash: the server continues running after the
+wait. An unanswered UI store leaves the session with `OWNER_UNLOADED` and `UNKNOWN_KEPT_BY_STORE`.
+Investigate the unfinished command body or the store that did not answer, not the server itself.
+Command waiting and UI save waiting have independent allowances; if both use their full allowances,
+server shutdown or a live module unload can wait about **twenty seconds**, excluding other cleanup.
+Paper can repeat the warning during a live-unload wait (default `watchdog.early-warning-every`:
+5000 milliseconds). These early
+warnings are not emitted during server shutdown.
+
+中文补充：服务器运行中卸载、重载或更新模块时，命令与界面存储等待都发生在服务器线程上。
+如果异步命令体约 10 秒内没有结束，或存储型界面有未保存的改动而存储在这段等待中没有答复，
+Paper 默认的预警延迟（`config/paper-global.yml` 中 `watchdog.early-warning-delay`，10000 毫秒）
+可能触发控制台日志 `The server has not responded for 10 seconds! Creating thread dump` 与线程转储，
+其中能看到框架等待的调用栈。这不是崩溃，等待结束后服务器继续运行；存储未答复的界面会话以
+`OWNER_UNLOADED` 与 `UNKNOWN_KEPT_BY_STORE` 结束。不需要处理服务器本身，应检查那个没有结束的
+命令体或没有答复的存储。命令等待与界面保存等待的预算各自独立，两者都等满时，停服或运行中
+卸载最坏会等待约 20 秒，不含其他清理；运行中卸载等待期间 Paper 可能重复预警
+（`watchdog.early-warning-every` 默认 5000 毫秒）。停服过程中不会发出这种预警。
 
 ## Game-interrupted screens (as of 7.0.0)
 

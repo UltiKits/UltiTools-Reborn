@@ -1,4 +1,21 @@
 # Framework messages use stable dotted keys and MiniMessage values.
+command:
+  error:
+    op_required: "<red>You don't have permission to run this command!"
+    no_permission: "<gray>Executing this command requires <white><permission> <gray>permission"
+    player_only: "This command can only be performed in GAME!"
+    console_only: "This command can only be performed in CONSOLE!"
+    sender_locked: "<red>Please wait for last Command Processing!"
+    server_locked: "<red>Please wait for last Command Processing which sent by other players!"
+    cooldown: "<red>Frequent operations, please try again in <seconds:'0'> seconds"
+    execution_failed: "<red>Command execution failed: <error>"
+  async:
+    processing: "<yellow>Processing..."
+    timeout: "<red>Command execution timed out; no longer waiting. The command continues running in the background."
+  reply:
+    unknown: "<red>Unknown command, please enter /<label> <help> for help"
+    usage: "<yellow>Correct Usage: <gray>/<label> <format>"
+    argument_error: "<red><error>"
 ui:
   ok: "OK"
   "yes": "Yes"

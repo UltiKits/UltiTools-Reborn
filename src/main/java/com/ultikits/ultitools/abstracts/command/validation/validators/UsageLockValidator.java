@@ -2,13 +2,14 @@ package com.ultikits.ultitools.abstracts.command.validation.validators;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.CommandKeys;
+import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.PlayerCache;
 import com.ultikits.ultitools.annotations.PlayerCacheSaver;
 import com.ultikits.ultitools.annotations.command.UsageLimit;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.utils.ReflectionUtil;
-import org.bukkit.ChatColor;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.lang.reflect.Method;
@@ -104,12 +105,12 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
         UsageLimit limit = resolveLimit(method, context.getExecutorClass());
         if (limit.value() == UsageLimit.LimitType.SENDER) {
             return ValidationResult.failure(
-                    ChatColor.RED + UltiTools.getInstance().i18n("请先等待上一条命令执行完毕！"),
+                    Text.of(CommandKeys.SENDER_LOCKED),
                     "command.error.sender_locked"
             );
         }
         return ValidationResult.failure(
-                ChatColor.RED + UltiTools.getInstance().i18n("请先等待其他玩家发送的命令执行完毕！"),
+                Text.of(CommandKeys.SERVER_LOCKED),
                 "command.error.server_locked"
         );
     }

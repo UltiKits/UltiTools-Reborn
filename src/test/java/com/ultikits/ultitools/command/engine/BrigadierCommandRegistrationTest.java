@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.command.engine;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -22,6 +24,7 @@ import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.manager.CommandManager;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 
+@ExtendWith(CommandTestExtension.class)
 class BrigadierCommandRegistrationTest {
     @Test void moduleBeanAliasesRegisterOnceAndUnloadingHidesTheLiveTree() throws Exception {
         try (var bukkit = mockStatic(Bukkit.class); var ulti = mockStatic(UltiTools.class)) {

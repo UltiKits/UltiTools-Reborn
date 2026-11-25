@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.ultikits.ultitools.command.engine.CommandTestSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -49,6 +50,7 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
  * @since 6.3.0
  */
 @DisplayName("#381 help is gated on sender type and permission")
+@ExtendWith(CommandTestExtension.class)
 class HelpGateTest {
 
     private Command command;

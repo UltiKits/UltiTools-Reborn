@@ -1,11 +1,12 @@
 package com.ultikits.ultitools.abstracts.command.validation.validators;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.abstracts.command.CommandKeys;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.abstracts.command.validation.CommandValidator;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
-import org.bukkit.ChatColor;
 
 import java.lang.reflect.Method;
 
@@ -61,7 +62,7 @@ public class PermissionValidator implements CommandValidator {
         // Check OP requirement
         if (requireOp && !context.getSender().isOp()) {
             return ValidationResult.failure(
-                    ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"),
+                    Text.of(CommandKeys.OP_REQUIRED),
                     "command.error.op_required"
             );
         }
@@ -72,7 +73,7 @@ public class PermissionValidator implements CommandValidator {
             CmdMapping mapping = method.getAnnotation(CmdMapping.class);
             if (mapping.requireOp() && !context.getSender().isOp()) {
                 return ValidationResult.failure(
-                        ChatColor.RED + UltiTools.getInstance().i18n("你没有权限执行这个指令！"),
+                        Text.of(CommandKeys.OP_REQUIRED),
                         "command.error.op_required"
                 );
             }
@@ -81,18 +82,21 @@ public class PermissionValidator implements CommandValidator {
         // Check base permission
         if (basePermission != null && !context.getSender().hasPermission(basePermission)) {
             return ValidationResult.failure(
-                    String.format(UltiTools.getInstance().i18n("需要权限"), basePermission),
+                    Text.of(CommandKeys.NO_PERMISSION, Arg.string("permission", basePermission)),
                     "command.error.no_permission"
             );
         }
         
-        // Check method-level permission
+        return validateMethodPermission(context, method);
+    }
+
+    private static ValidationResult validateMethodPermission(CommandContext context, Method method) {
         if (method != null && method.isAnnotationPresent(CmdMapping.class)) {
             CmdMapping mapping = method.getAnnotation(CmdMapping.class);
             String methodPermission = mapping.permission();
             if (!methodPermission.isEmpty() && !context.getSender().hasPermission(methodPermission)) {
                 return ValidationResult.failure(
-                        String.format(UltiTools.getInstance().i18n("需要权限"), methodPermission),
+                        Text.of(CommandKeys.NO_PERMISSION, Arg.string("permission", methodPermission)),
                         "command.error.no_permission"
                 );
             }

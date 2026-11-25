@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.commands;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -48,6 +50,7 @@ import com.ultikits.ultitools.utils.CloudAuthManager.ReconnectResult;
 import com.ultikits.ultitools.utils.CloudAuthManager.ReconnectResult.Kind;
 import com.ultikits.ultitools.utils.TestHelper;
 
+@ExtendWith(CommandTestExtension.class)
 class CloudReconnectCommandTest {
     private Logger logger;
     private Object previousPlugin;

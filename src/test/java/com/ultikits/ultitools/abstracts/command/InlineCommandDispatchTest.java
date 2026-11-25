@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -25,8 +26,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.minecart.CommandMinecart;
-import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitScheduler;
+import com.ultikits.ultitools.scheduling.Scheduler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -54,11 +54,12 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
  * {@code onCommand} returned" is observable directly.
  */
 @DisplayName("Command bodies run at dispatch on the primary thread (#541)")
+@ExtendWith(CommandTestExtension.class)
 class InlineCommandDispatchTest {
 
     private MockedStatic<UltiTools> ultiToolsMock;
     private MockedStatic<Bukkit> bukkitMock;
-    private BukkitScheduler scheduler;
+    private Scheduler scheduler;
     private final List<Runnable> deferred = new ArrayList<>();
     private Command command;
 
@@ -100,18 +101,18 @@ class InlineCommandDispatchTest {
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(ultiTools);
 
-        scheduler = mock(BukkitScheduler.class);
-        lenient().when(scheduler.runTask(any(Plugin.class), any(Runnable.class))).thenAnswer(inv -> {
-            deferred.add(inv.getArgument(1));
+        scheduler = CommandRuntime.scheduler();
+        lenient().when(scheduler.global().run(any(Runnable.class))).thenAnswer(inv -> {
+            deferred.add(inv.getArgument(0));
             return null;
         });
-        lenient().when(scheduler.runTaskAsynchronously(any(Plugin.class), any(Runnable.class))).thenAnswer(inv -> {
-            deferred.add(inv.getArgument(1));
+        lenient().when(scheduler.async().run(any(Runnable.class))).thenAnswer(inv -> {
+            deferred.add(inv.getArgument(0));
             return null;
         });
         bukkitMock = mockStatic(Bukkit.class);
-        bukkitMock.when(Bukkit::getScheduler).thenReturn(scheduler);
-        bukkitMock.when(Bukkit::isPrimaryThread).thenReturn(true);
+
+        lenient().when(CommandRuntime.scheduler().global().isCurrentThread()).thenReturn(true);
 
         command = mock(Command.class);
         lenient().when(command.getName()).thenReturn("replyprobe");
@@ -130,7 +131,7 @@ class InlineCommandDispatchTest {
 
         assertEquals(1, executor.bodies.get(), "the body must have run before onCommand returned");
         verify(sender).sendMessage("module reply");
-        verify(scheduler, never()).runTask(any(Plugin.class), any(Runnable.class));
+        verify(scheduler.global(), never()).run(any(Runnable.class));
     }
 
     @Test
@@ -162,14 +163,14 @@ class InlineCommandDispatchTest {
     @Test
     @DisplayName("off the primary thread the body is handed to runTask and has not run when onCommand returns")
     void offThePrimaryThreadTheBodyIsDeferred() {
-        bukkitMock.when(Bukkit::isPrimaryThread).thenReturn(false);
+        when(scheduler.global().isCurrentThread()).thenReturn(false);
         ReplyingExecutor executor = new ReplyingExecutor();
         BlockCommandSender block = mock(BlockCommandSender.class);
 
         com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, block, command, "replyprobe", new String[]{});
 
         assertEquals(0, executor.bodies.get(), "the body must wait for the main thread");
-        verify(scheduler, times(1)).runTask(any(Plugin.class), any(Runnable.class));
+        verify(scheduler.global(), times(1)).run(any(Runnable.class));
         deferred.forEach(Runnable::run);
         assertEquals(1, executor.bodies.get());
         verify(block).sendMessage("module reply");
@@ -199,8 +200,8 @@ class InlineCommandDispatchTest {
         com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, mock(ConsoleCommandSender.class), command, "replyprobe", new String[]{"async"});
 
         assertEquals(0, executor.asyncBodies.get(), "an async body never runs on the dispatching thread");
-        verify(scheduler, times(1)).runTaskAsynchronously(any(Plugin.class), any(Runnable.class));
-        verify(scheduler, never()).runTask(any(Plugin.class), any(Runnable.class));
+        verify(scheduler.async(), times(1)).run(any(Runnable.class));
+        verify(scheduler.global(), never()).run(any(Runnable.class));
     }
 
     @Test

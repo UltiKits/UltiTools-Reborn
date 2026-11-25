@@ -1,8 +1,9 @@
 package com.ultikits.ultitools.command.engine;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -13,7 +14,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitScheduler;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
@@ -27,6 +29,7 @@ import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.annotations.command.CmdSender;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 
+@ExtendWith(CommandTestExtension.class)
 class CommandDispatchTest {
     @Test void passesTypedValuesAndTheActualSenderThroughTheDispatcher() throws Exception {
         try (var bukkit = mockStatic(Bukkit.class)) {
@@ -51,17 +54,17 @@ class CommandDispatchTest {
         try (var bukkit = mockStatic(Bukkit.class); var ulti = mockStatic(UltiTools.class)) {
             UltiTools plugin = mock(UltiTools.class);
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
-            BukkitScheduler scheduler = mock(BukkitScheduler.class);
-            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            var async = CommandRuntime.scheduler().async();
             AtomicReference<Thread> invoked = new AtomicReference<>();
             doAnswer(call -> {
-                Runnable task = call.getArgument(1);
+                Runnable task = call.getArgument(0);
                 Thread thread = new Thread(task, "command-test-worker");
                 thread.start();
-                thread.join();
+                thread.join(5000);
+                assertThat(thread.isAlive()).isFalse();
                 invoked.set(thread);
-                return mock(org.bukkit.scheduler.BukkitTask.class);
-            }).when(scheduler).runTaskAsynchronously(eq(plugin), any(Runnable.class));
+                return mock(TaskHandle.class);
+            }).when(async).run(any(Runnable.class));
             Fixture executor = new Fixture();
             assertThat(dispatcher(executor).execute("test async", source(mock(CommandSender.class)))).isEqualTo(1);
             assertThat(executor.thread).isSameAs(invoked.get()).isNotSameAs(Thread.currentThread());

@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
@@ -38,6 +40,7 @@ import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 
 /** Real connector -> manager -> lifecycle registrar regression; no legacy Bukkit executor cast. */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class ConnectorPathRegistrationTest {
     private static final String LABEL = "connectorpathbasecmd";
     private PluginManager pluginManager;

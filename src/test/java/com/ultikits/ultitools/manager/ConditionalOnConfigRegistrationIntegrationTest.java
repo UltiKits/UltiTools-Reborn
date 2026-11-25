@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -36,6 +38,7 @@ import com.ultikits.ultitools.context.SimpleContainer;
  */
 @DisplayName("@ConditionalOnConfig at the Paper commands-event boundary")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class ConditionalOnConfigRegistrationIntegrationTest {
 
     private UltiTools previousUltiTools;

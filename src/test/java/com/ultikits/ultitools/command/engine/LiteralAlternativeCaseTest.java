@@ -1,9 +1,12 @@
 package com.ultikits.ultitools.command.engine;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
@@ -37,13 +40,14 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 
+@ExtendWith(CommandTestExtension.class)
 class LiteralAlternativeCaseTest {
     private MockedStatic<Bukkit> bukkit;
     private MockedStatic<UltiTools> ulti;
     private Fixture executor;
     private CommandDispatcher<CommandSourceStack> dispatcher;
     private CommandSourceStack source;
-    private final List<String> replies = new ArrayList<>();
+    private final List<Component> replies = new ArrayList<>();
 
     @BeforeEach void setUp() {
         bukkit = mockStatic(Bukkit.class);
@@ -55,7 +59,8 @@ class LiteralAlternativeCaseTest {
         executor = new Fixture();
         dispatcher = CommandTestSupport.dispatcher(executor, "test");
         var sender = mock(CommandSender.class);
-        doAnswer(call -> replies.add(call.getArgument(0))).when(sender).sendMessage(anyString());
+        doAnswer(call -> replies.add(Component.text(call.getArgument(0, String.class)))).when(sender).sendMessage(anyString());
+        doAnswer(call -> replies.add(call.getArgument(0))).when(sender).sendMessage(any(Component.class));
         source = CommandDispatchTest.source(sender);
     }
     @AfterEach void tearDown() {
@@ -87,7 +92,7 @@ class LiteralAlternativeCaseTest {
         assertThat(dispatcher.execute("test SECRET", source)).isEqualTo(1);
         assertThat(executor.secretBodies).isZero();
         assertThat(executor.greedyBodies).isZero();
-        List<String> hiddenReplies = List.copyOf(replies);
+        List<Component> hiddenReplies = List.copyOf(replies);
         assertThat(hiddenReplies).isNotEmpty();
         replies.clear();
 
@@ -109,7 +114,7 @@ class LiteralAlternativeCaseTest {
         assertThat(replies).isEmpty();
     }
     @Test void anUnavailableExactLiteralWithRootGreedyUsesTheRegisteredListener() throws Exception {
-        List<String> expected = unknownRepliesWithoutRootGreedy();
+        List<Component> expected = unknownRepliesWithoutRootGreedy();
         assertThat(expected).isNotEmpty();
         var plugin = UltiTools.getInstance();
         var plugins = mock(PluginManager.class);
@@ -175,7 +180,7 @@ class LiteralAlternativeCaseTest {
         assertThat(commands.getDispatcher().execute("raw all", source)).isEqualTo(11);
     }
 
-    private List<String> unknownRepliesWithoutRootGreedy() throws Exception {
+    private List<Component> unknownRepliesWithoutRootGreedy() throws Exception {
         var invocation = new CommandInvocation(executor, "control");
         var compiled = new CommandTreeCompiler(new StringNativeArgumentTypes()).compile(executor, "fixture",
                 List.of("control"), "", false, invocation::run, invocation::help);
@@ -193,7 +198,7 @@ class LiteralAlternativeCaseTest {
         var commands = new RecordingCommands();
         bindings.onCommands(commands);
         assertThat(commands.getDispatcher().execute("control MISSING", source)).isEqualTo(1);
-        List<String> expected = replies.stream().map(message -> message.replace("/control ", "/test ")).toList();
+        List<Component> expected = replies.stream().map(message -> message.replaceText(replacement -> replacement.matchLiteral("/control ").replacement("/test ")).compact()).toList();
         replies.clear();
         return expected;
     }

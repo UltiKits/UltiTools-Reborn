@@ -1,5 +1,10 @@
 package com.ultikits.ultitools.commands;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -47,6 +52,7 @@ import net.kyori.adventure.text.event.ClickEvent;
 
 @DisplayName("PluginInstallCommands Enhanced Coverage Tests")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class PluginInstallCommandsEnhancedTest {
 
     private ServerMock server;
@@ -152,6 +158,11 @@ class PluginInstallCommandsEnhancedTest {
         }).when(scheduler).runTaskAsynchronously(any(org.bukkit.plugin.Plugin.class), any(Runnable.class));
         mockedBukkit = mockStatic(org.bukkit.Bukkit.class, org.mockito.Mockito.CALLS_REAL_METHODS);
         mockedBukkit.when(org.bukkit.Bukkit::getScheduler).thenReturn(scheduler);
+        TaskContext async = CommandRuntime.scheduler().async();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            invocation.getArgument(0, Runnable.class).run();
+            return mock(TaskHandle.class);
+        }).when(async).run(any(Runnable.class));
     }
 
     @AfterEach

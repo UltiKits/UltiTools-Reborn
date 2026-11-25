@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.item.impl.ItemServices;
 import com.ultikits.ultitools.item.ItemRenderer;
@@ -173,6 +174,9 @@ public class DependenceManagers {
     public void closeContext() {
         Throwable uiFailure = null;
         try {
+            if (context != null) {
+                CommandRuntime.awaitAsyncCommands(context.getSingletonValues());
+            }
             if (uiManager != null) { uiManager.close(); }
         } catch (Throwable failure) {
             uiFailure = failure;

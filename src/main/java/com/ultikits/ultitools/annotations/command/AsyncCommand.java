@@ -11,8 +11,17 @@ import java.lang.annotation.Target;
  * When applied, the command will be executed in an async thread.
  * <p>
  * <b>Warning:</b> Async commands should not directly access Bukkit APIs that must run on main thread.
- * Use {@link org.bukkit.scheduler.BukkitScheduler#runTask(org.bukkit.plugin.Plugin, Runnable)}
- * to sync back to main thread when needed.
+ * Inject {@link com.ultikits.ultitools.scheduling.Scheduler} and use
+ * {@code scheduler.global().run(...)} for global work or {@code scheduler.entity(player).run(...)}
+ * for player-owned work. Command bodies themselves use the framework-owned async scheduler.
+ * <p>
+ * At server stop all executors share approximately ten seconds of command waiting, including
+ * completion hooks; core commands are drained before framework services shut down. Only actual
+ * command waiting consumes the allowance, and repeated shutdown starts do not replenish it.
+ * A separate module unload shares a fresh ten-second allowance across that module's executors.
+ * This allowance is independent of UI shutdown waiting (up to about twenty seconds combined).
+ * Bodies are never interrupted. Do not block awaiting a tick-thread handoff during that wait:
+ * the unload thread owns the tick thread, and scheduling is rejected once the relevant owner retires.
  *
  * <p><strong>Example:</strong></p>
  * <pre>{@code
@@ -23,7 +32,7 @@ import java.lang.annotation.Target;
  *     performBackup();
  *     
  *     // Sync back to main thread for Bukkit operations
- *     Bukkit.getScheduler().runTask(plugin, () -> {
+ *     scheduler.entity(player).run(() -> {
  *         player.sendMessage("Backup completed!");
  *     });
  * }
@@ -46,9 +55,11 @@ public @interface AsyncCommand {
     boolean showProcessing() default true;
 
     /**
-     * Custom processing message key for i18n.
+     * Custom message key in {@code "<namespace>:<path>"} form, for example {@code "my-module:busy"}.
+     * The module catalogue supplies its colors. Invalid syntax logs one warning per executor and
+     * value and uses the framework's default processing message.
      *
-     * @return the i18n key, or empty for default message
+     * @return the namespaced message key, or empty for the default message
      */
     String processingMessageKey() default "";
     
@@ -62,7 +73,7 @@ public @interface AsyncCommand {
      * structurally identical case, D-10.) When the configured duration elapses with the body
      * still running, the framework stops waiting and sends the sender a timeout message --
      * exactly once. The command body is <em>never</em> interrupted
-     * or cancelled: Bukkit's async scheduler runs on a shared thread pool, and interrupting a
+     * or cancelled: the framework's async scheduler runs on a shared thread pool, and interrupting a
      * pooled thread is unsafe, since it can affect unrelated tasks sharing that pool. The body
      * keeps running to completion on its own; whatever it does after the deadline -- return,
      * throw, send further messages of its own -- happens exactly as if no timeout had fired,

@@ -4,6 +4,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.Message;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -17,11 +18,14 @@ import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import com.mojang.brigadier.tree.ArgumentCommandNode;
 import com.mojang.brigadier.tree.CommandNode;
 import com.mojang.brigadier.tree.LiteralCommandNode;
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.CommandKeys;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.Text;
+import io.papermc.paper.command.brigadier.MessageComponentSerializer;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 
 /** Shared framework replies for Paper-retained callbacks and unavailable-literal syntax events. */
@@ -133,7 +137,7 @@ final class FrameworkReplies {
             throws CommandSyntaxException {
         if (!(failure.getType() instanceof TypeParserArgumentType.ParserFailure)) return reply(context);
         if (!new CommandInvocation(executor, original.getLiteral()).refused(context)) {
-            context.getSource().getSender().sendMessage(ChatColor.RED + failure.getRawMessage().getString());
+            sendArgumentError(context.getSource().getSender(), failure.getRawMessage());
         }
         return Command.SINGLE_SUCCESS;
     }
@@ -190,10 +194,10 @@ final class FrameworkReplies {
     private void sendReply(CommandContext<CommandSourceStack> context, Walk walk) {
         var sender = context.getSource().getSender();
         if (walk.parseError() != null) {
-            sender.sendMessage(ChatColor.RED + walk.parseError());
+            sendArgumentError(sender, walk.parseError());
         } else if (walk.depth() == 0) {
-            sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("未知指令，请使用/%s %s获取帮助"),
-                    original.getLiteral(), executor.helpCommand()));
+            CommandRuntime.messages().send(sender, Text.of(CommandKeys.UNKNOWN,
+                    Arg.string("label", original.getLiteral()), Arg.string("help", executor.helpCommand())));
             executor.handleGatedHelp(new CommandInvocation(executor, original.getLiteral()).context(context));
         } else {
             sendUsages(context, walk, sender);
@@ -206,8 +210,22 @@ final class FrameworkReplies {
         if (formats.isEmpty() && walk.deepest().getName().equalsIgnoreCase(executor.helpCommand())) {
             formats.add(executor.helpCommand());
         }
-        for (String format : formats) sender.sendMessage(String.format(UltiTools.getInstance().i18n("指令正确用法"),
-                original.getLiteral(), format));
+        for (String format : formats) {
+            CommandRuntime.messages().send(sender, Text.of(CommandKeys.USAGE,
+                    Arg.string("label", original.getLiteral()), Arg.string("format", format)));
+        }
+    }
+
+    private static void sendArgumentError(CommandSender sender, Message message) {
+        CommandRuntime.messages().send(sender, Text.of(CommandKeys.ARGUMENT_ERROR, argumentError(message)));
+    }
+
+    private static Arg argumentError(Message message) {
+        try {
+            return Arg.component("error", MessageComponentSerializer.message().deserialize(message));
+        } catch (RuntimeException unavailable) {
+            return Arg.string("error", message.getString());
+        }
     }
 
     /** The recovery walk uses the compiled tree's argument parsers and preserves quoted/greedy argument contents. */
@@ -223,7 +241,7 @@ final class FrameworkReplies {
             try {
                 step = next(deepest, reader, source);
             } catch (CommandSyntaxException failure) {
-                return new Walk(deepest, depth, input, failure.getRawMessage().getString());
+                return new Walk(deepest, depth, input, failure.getRawMessage());
             }
             if (step == null || !step.node().canUse(source)) {
                 canonical.append(' ').append(input.substring(start));
@@ -296,6 +314,6 @@ final class FrameworkReplies {
         }
     }
 
-    private record Walk(CommandNode<CommandSourceStack> deepest, int depth, String canonical, String parseError) { }
+    private record Walk(CommandNode<CommandSourceStack> deepest, int depth, String canonical, Message parseError) { }
     private record Step(CommandNode<CommandSourceStack> node, int end, String literal) { }
 }

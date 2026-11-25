@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.command.engine;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -44,6 +47,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
+@ExtendWith(CommandTestExtension.class)
 class HiddenCommandRepliesTest {
     private static final Component VANILLA_ERROR = Component.text("Incorrect argument for command", NamedTextColor.RED);
     private MockedStatic<Bukkit> bukkit;
@@ -57,7 +61,7 @@ class HiddenCommandRepliesTest {
     private CommandEngine engine;
     private PluginManager plugins;
     private UltiTools plugin;
-    private final List<String> replies = new ArrayList<>();
+    private final List<Component> replies = new ArrayList<>();
     private final AtomicInteger redispatches = new AtomicInteger();
 
     @BeforeEach void setUp() {
@@ -72,7 +76,8 @@ class HiddenCommandRepliesTest {
         executor = new Fixture();
         player = mock(Player.class);
         when(player.getUniqueId()).thenReturn(new UUID(0, 1));
-        doAnswer(call -> replies.add(call.getArgument(0))).when(player).sendMessage(anyString());
+        doAnswer(call -> replies.add(Component.text(call.getArgument(0, String.class)))).when(player).sendMessage(anyString());
+        doAnswer(call -> replies.add(call.getArgument(0))).when(player).sendMessage(any(Component.class));
         source = CommandTestSupport.source(player);
         var invocation = new CommandInvocation(executor, "hidden");
         var compiled = new CommandTreeCompiler(new StringNativeArgumentTypes()).compile(executor,
@@ -137,9 +142,11 @@ class HiddenCommandRepliesTest {
     void hiddenAndMissingCommandsSendIdenticalOrderedReplies(String hidden, String missing, int retries,
             boolean nativeRefusal) throws Exception {
         assertThat(dispatcher.execute("hidden " + missing, source)).isEqualTo(1);
-        List<String> expected = List.copyOf(replies);
-        assertThat(expected).isNotEmpty().noneMatch(message -> message.contains("secret")
-                || message.contains("console") || message.contains("number") || message.contains("operator"));
+        List<Component> expected = List.copyOf(replies);
+        assertThat(expected).isNotEmpty().noneMatch(message -> CommandMessageTestSupport.plain(message).contains("secret")
+                || CommandMessageTestSupport.plain(message).contains("console")
+                || CommandMessageTestSupport.plain(message).contains("number")
+                || CommandMessageTestSupport.plain(message).contains("operator"));
         assertThat(redispatches.get()).isEqualTo(retries);
         replies.clear();
         redispatches.set(0);
@@ -164,7 +171,7 @@ class HiddenCommandRepliesTest {
     @ValueSource(strings = {"hidden", "alternate", "ultitools:hidden", "ultitools:alternate"})
     void exactHiddenLiteralUsesTheRegisteredListenerForEveryDeliveredLabel(String label) throws Exception {
         assertThat(eventDispatcher.execute(label + " missing", source)).isEqualTo(1);
-        List<String> expected = List.copyOf(replies);
+        List<Component> expected = List.copyOf(replies);
         assertThat(expected).isNotEmpty();
         replies.clear();
         assertThatThrownBy(() -> eventDispatcher.execute(label + " secret", source)).isInstanceOf(CommandSyntaxException.class);

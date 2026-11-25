@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.abstracts.data;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -29,8 +31,9 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitScheduler;
-import org.bukkit.scheduler.BukkitTask;
+import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
+import com.ultikits.ultitools.scheduling.TaskHandle;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -54,6 +57,7 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * Unit tests for BaseDataEntity and AuditableDataEntity.
  */
 @DisplayName("Data Entity Tests")
+@ExtendWith(CommandTestExtension.class)
 public class DataEntityTest {
 
     @AfterEach
@@ -467,7 +471,7 @@ public class DataEntityTest {
          * mocking is thread-scoped and the error-report path in {@code run()} calls
          * {@code UltiTools.getInstance()} from whatever thread the handler runs on.
          */
-        private BukkitTask runOnNewThreadCapturingPostState(Runnable r) {
+        private TaskHandle runOnNewThreadCapturingPostState(Runnable r) {
             Thread t = new Thread(() -> {
                 try (MockedStatic<UltiTools> inner = mockStatic(UltiTools.class)) {
                     UltiTools mockUltiToolsForThread = stubUltiTools();
@@ -483,7 +487,7 @@ public class DataEntityTest {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            return mock(BukkitTask.class);
+            return mock(TaskHandle.class);
         }
 
         /**
@@ -493,14 +497,13 @@ public class DataEntityTest {
          * path, where the body is still handed to {@code runTask}.
          */
         private void dispatchOnPrimaryThread(BaseCommandExecutor executor, CommandSender sender, String[] args) {
-            BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
-            when(mockScheduler.runTask(any(), any(Runnable.class)))
-                    .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(1)));
+            Scheduler mockScheduler = CommandRuntime.scheduler();
+            when(mockScheduler.global().run(any(Runnable.class)))
+                    .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(0)));
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
                  MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
-                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
-                bukkitMock.when(Bukkit::isPrimaryThread).thenReturn(true);
+                when(mockScheduler.global().isCurrentThread()).thenReturn(true);
                 UltiTools mockUltiTools = stubUltiTools();
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, mockCommand, "probe", args);
@@ -508,15 +511,15 @@ public class DataEntityTest {
         }
 
         private void dispatch(BaseCommandExecutor executor, CommandSender sender, String[] args) {
-            BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
-            when(mockScheduler.runTask(any(), any(Runnable.class)))
-                    .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(1)));
-            when(mockScheduler.runTaskAsynchronously(any(), any(Runnable.class)))
-                    .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(1)));
+            Scheduler mockScheduler = CommandRuntime.scheduler();
+            when(mockScheduler.global().run(any(Runnable.class)))
+                    .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(0)));
+            when(mockScheduler.async().run(any(Runnable.class)))
+                    .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(0)));
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
                  MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
-                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+                when(mockScheduler.global().isCurrentThread()).thenReturn(false);
                 UltiTools mockUltiTools = stubUltiTools();
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, mockCommand, "probe", args);
@@ -647,9 +650,9 @@ public class DataEntityTest {
 
         private void dispatchOnPool(ExecutorService pool, BaseCommandExecutor executor, CommandSender sender,
                                      String[] args) throws Exception {
-            BukkitScheduler mockScheduler = mock(BukkitScheduler.class);
-            Answer<BukkitTask> submit = inv -> {
-                Runnable r = inv.getArgument(1);
+            Scheduler mockScheduler = CommandRuntime.scheduler();
+            Answer<TaskHandle> submit = inv -> {
+                Runnable r = inv.getArgument(0);
                 pool.submit(() -> {
                     try (MockedStatic<UltiTools> inner = mockStatic(UltiTools.class)) {
                         UltiTools mockUltiToolsForThread = stubUltiTools();
@@ -657,14 +660,14 @@ public class DataEntityTest {
                         r.run();
                     }
                 }).get(5, TimeUnit.SECONDS);
-                return mock(BukkitTask.class);
+                return mock(TaskHandle.class);
             };
-            when(mockScheduler.runTask(any(), any(Runnable.class))).thenAnswer(submit);
-            when(mockScheduler.runTaskAsynchronously(any(), any(Runnable.class))).thenAnswer(submit);
+            when(mockScheduler.global().run(any(Runnable.class))).thenAnswer(submit);
+            when(mockScheduler.async().run(any(Runnable.class))).thenAnswer(submit);
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
                  MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
-                bukkitMock.when(Bukkit::getScheduler).thenReturn(mockScheduler);
+                when(mockScheduler.global().isCurrentThread()).thenReturn(false);
                 UltiTools mockUltiTools = stubUltiTools();
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
                 com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, mockCommand, "probe", args);

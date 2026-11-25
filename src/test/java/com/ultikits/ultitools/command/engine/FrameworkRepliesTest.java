@@ -1,11 +1,16 @@
 package com.ultikits.ultitools.command.engine;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -22,6 +27,7 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 
+@ExtendWith(CommandTestExtension.class)
 class FrameworkRepliesTest {
     @Test void mistakesAtEveryDepthUseFrameworkRepliesAndValidPathsKeepPriority() throws Exception {
         try (var bukkit = mockStatic(Bukkit.class); var ulti = mockStatic(UltiTools.class)) {
@@ -33,6 +39,8 @@ class FrameworkRepliesTest {
             List<String> replies = new ArrayList<>();
             CommandSender sender = mock(CommandSender.class);
             doAnswer(call -> replies.add(call.getArgument(0))).when(sender).sendMessage(anyString());
+            doAnswer(call -> replies.add(CommandMessageTestSupport.plain(call.getArgument(0))))
+                    .when(sender).sendMessage(any(Component.class));
             var dispatcher = CommandTestSupport.dispatcher(executor, "test");
             var source = CommandDispatchTest.source(sender);
             for (String line : List.of("test sett x", "test count abc", "test count", "test list extra", "test")) {
@@ -40,7 +48,7 @@ class FrameworkRepliesTest {
             }
             assertThat(replies).hasSize(7);
             assertThat(replies.getFirst()).contains("未知指令");
-            assertThat(replies).filteredOn(text -> text.contains("指令正确用法")).hasSize(3);
+            assertThat(replies).filteredOn(text -> text.contains("正确用法")).hasSize(3);
             assertThat(dispatcher.execute("test count 5", source)).isEqualTo(1);
             assertThat(executor.count).isEqualTo(5);
             assertThat(replies).hasSize(7);

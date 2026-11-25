@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
@@ -48,6 +49,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  * test class was removed rather than left comparing against nothing.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class BaseCommandExecutorTabCompletionTest {
 
     private ServerMock server;

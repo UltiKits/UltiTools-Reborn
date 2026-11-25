@@ -3,11 +3,13 @@ package com.ultikits.ultitools.manager;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.doReturn;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -41,6 +43,8 @@ import com.ultikits.ultitools.text.InMemoryMessages;
 import com.ultikits.ultitools.text.Messages;
 
 import java.util.Locale;
+import java.util.List;
+import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import java.util.Optional;
 import com.ultikits.ultitools.services.EmailService;
 import com.ultikits.ultitools.services.NotificationService;
@@ -166,6 +170,21 @@ class DependenceManagersTest {
             // Act & Assert - 不应该抛出异常
             assertDoesNotThrow(() -> managers.closeContext());
         }
+    }
+
+    @Test
+    void commandExecutorsDrainBeforeTheRootContainerClosesItsServices() throws Exception {
+        DependenceManagers managers = createManagersWithMockedFields();
+        SimpleContainer context = mock(SimpleContainer.class);
+        BaseCommandExecutor executor = mock(BaseCommandExecutor.class);
+        when(context.getSingletonValues()).thenReturn(List.of(executor));
+        setField(managers, "context", context);
+        managers.closeContext();
+        var order = inOrder(executor, context);
+        order.verify(executor).awaitAsyncCommands();
+        order.verify(context).close();
+        assertThat(mockingDetails(context).getInvocations())
+                .filteredOn(call -> call.getMethod().getName().equals("close")).hasSize(1);
     }
 
     @Nested

@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.abstracts.data;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -45,6 +47,7 @@ import com.ultikits.ultitools.annotations.command.CmdTarget;
  * once the nested dispatch returns, and nothing is left on the thread after the outermost command.
  */
 @DisplayName("A nested inline command keeps each body's own current user (#541)")
+@ExtendWith(CommandTestExtension.class)
 class NestedCommandCurrentUserTest {
 
     private MockedStatic<UltiTools> ultiToolsMock;

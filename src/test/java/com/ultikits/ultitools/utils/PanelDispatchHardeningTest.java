@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
@@ -51,6 +53,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @Timeout(30)
+@ExtendWith(CommandTestExtension.class)
 class PanelDispatchHardeningTest {
     private ServerMock server;
     private CommandExecutionManager manager;

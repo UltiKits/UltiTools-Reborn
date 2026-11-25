@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -19,10 +20,12 @@ import java.util.logging.Logger;
 
 import javax.annotation.Nullable;
 
-import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
-import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.entity.Player;
+import com.ultikits.ultitools.scheduling.TaskContext;
+import com.ultikits.ultitools.scheduling.TaskHandle;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
@@ -44,8 +47,11 @@ import com.ultikits.ultitools.annotations.command.RunAsync;
 import com.ultikits.ultitools.manager.ErrorReportCollector;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
 import com.ultikits.ultitools.manager.TriggerContext;
-import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.ReflectionUtil;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.text.MessageKey;
+import java.util.concurrent.ConcurrentHashMap;
 
 import lombok.Getter;
 
@@ -78,6 +84,12 @@ import lombok.Getter;
 public abstract class BaseCommandExecutor {
     
     private final BiMap<String, Method> mappings = HashBiMap.create();
+    private final Set<String> invalidProcessingKeys = ConcurrentHashMap.newKeySet();
+    private final Object asyncCommandsMonitor = new Object();
+    private int asyncCommands;
+    private boolean asyncUnloading;
+    private boolean asyncUnloadWaitFinished;
+    private CommandWaitBudget asyncUnloadBudget;
     
     @Getter
     private final ValidatorChain validatorChain;
@@ -241,6 +253,8 @@ public abstract class BaseCommandExecutor {
     @PreDestroy
     @SuppressWarnings("PMD.UnusedPrivateMethod")
     private void unregisterValidatorsFromPlayerCache() {
+        // Reflection does not promise an order between this hook and the separate wait hook.
+        awaitAsyncCommands();
         List<BaseCommandExecutor> otherActive = leaveDispatchedExecutors(this);
         // Identity, not equals: a module's own validator subclass may define equals, and two
         // distinct instances must each be released.
@@ -262,6 +276,89 @@ public abstract class BaseCommandExecutor {
                 UsageLockValidator lock = (UsageLockValidator) candidate;
                 lock.releasePlayerCacheRegistration();
                 lock.clearAllLocks();
+            }
+        }
+    }
+
+    final void beginAsyncUnload(CommandWaitBudget budget) {
+        synchronized (asyncCommandsMonitor) {
+            if (!asyncUnloading) {
+                asyncUnloading = true;
+                asyncUnloadBudget = budget;
+            }
+        }
+    }
+
+    /**
+     * Waits once for accepted asynchronous invocations and their completion hooks, using the
+     * module drain's remaining allowance or the shared server-stop allowance (ten seconds total).
+     * Only actual command waiting consumes that allowance. Never cancels or interrupts a body.
+     * Managers call this before releasing module resources or the framework scheduler; the
+     * container hook also covers executors owned by a directly constructed container.
+     *
+     * @since 7.0.0
+     */
+    @PreDestroy
+    @ApiStatus.Internal
+    public final void awaitAsyncCommands() {
+        synchronized (asyncCommandsMonitor) {
+            if (asyncUnloadWaitFinished) {
+                return;
+            }
+            if (!asyncUnloading) {
+                beginAsyncUnload(CommandRuntime.waitBudget());
+            }
+            waitForAsyncCommands();
+            if (!asyncUnloadWaitFinished && asyncCommands > 0) {
+                Logger.getLogger(BaseCommandExecutor.class.getName()).log(Level.WARNING,
+                        "Async command unload wait expired for {0}: {1} invocation(s); work continues in the background",
+                        new Object[] {getClass().getName(), asyncCommands});
+            }
+            asyncUnloadWaitFinished = true;
+        }
+    }
+
+    private void waitForAsyncCommands() {
+        while (asyncCommands > 0) {
+            try {
+                if (!asyncUnloadBudget.await(asyncCommandsMonitor)) {
+                    return;
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private void submitAsyncCommand(Runnable body) {
+        synchronized (asyncCommandsMonitor) {
+            if (asyncUnloading) {
+                throw new RejectedExecutionException("Command executor is unloading: " + getClass().getName());
+            }
+            // Reserve before submission: a worker may finish before TaskContext.run returns.
+            asyncCommands++;
+        }
+        AtomicBoolean finished = new AtomicBoolean();
+        try {
+            CommandRuntime.scheduler().async().run(() -> {
+                try {
+                    body.run();
+                } finally {
+                    finishAsyncCommand(finished);
+                }
+            });
+        } catch (RuntimeException | Error refused) {
+            finishAsyncCommand(finished);
+            throw refused;
+        }
+    }
+
+    private void finishAsyncCommand(AtomicBoolean finished) {
+        if (finished.compareAndSet(false, true)) {
+            synchronized (asyncCommandsMonitor) {
+                asyncCommands--;
+                asyncCommandsMonitor.notifyAll();
             }
         }
     }
@@ -358,8 +455,8 @@ public abstract class BaseCommandExecutor {
         joinDispatchedExecutors();
         ValidatorChain.ChainValidationResult validationResult = validatorChain.validate(context);
         if (!validationResult.isValid()) {
-            if (validationResult.getErrorMessage() != null) context.getSender().sendMessage(validationResult.getErrorMessage());
             notifyRefused(context, validationResult);
+            sendValidationFailure(context.getSender(), validationResult.getErrorText(), validationResult.getErrorMessage());
             return true;
         }
         Object[] methodParams;
@@ -427,7 +524,7 @@ public abstract class BaseCommandExecutor {
      * <p>
      * A synchronous body runs at once, inside the dispatch, when this is called on the server's
      * primary thread -- which is where Bukkit dispatches every command a player, the console, a
-     * command block or the panel sends -- and is handed to {@code runTask} only when it is not
+     * command block or the panel sends -- and is handed to {@code global().run} only when it is not
      * (as of 6.3.0, #541; before, every synchronous body was deferred one tick). An
      * {@code @AsyncCommand}/{@code @RunAsync} body always runs asynchronously.
      *
@@ -464,21 +561,18 @@ public abstract class BaseCommandExecutor {
         // WIRE-12/D-13: shared between the command body's own completion and the timeout
         // watcher armed below. Whichever side wins the CAS is the ONLY side that reports to
         // the sender -- the loser is a no-op. Read/set from two different threads (the async
-        // worker running the body and the delayed async watcher task), so this MUST be an
+        // worker running the body and the delayed sender-context watcher task), so this MUST be an
         // atomic, not a plain boolean. Harmless when timeout() <= 0: no watcher is armed, so
         // nothing else ever touches this flag and the body's own CAS below is a pure no-op.
         final AtomicBoolean reported = new AtomicBoolean(false);
 
-        BukkitRunnable runnable = new BukkitRunnable() {
-            @Override
-            public void run() {
-                invokeCommandBody(context, method, params, ranValidators, triggerCtx, reported);
-            }
-        };
+        final AtomicReference<TaskHandle> timeoutWatcher = new AtomicReference<>();
+        Runnable runnable = () -> invokeCommandBody(context, method, params, ranValidators,
+                triggerCtx, reported, timeoutWatcher);
 
         if (isAsync) {
-            dispatchAsyncCommand(context, asyncCommand, runnable, reported, ranValidators);
-        } else if (Bukkit.isPrimaryThread()) {
+            dispatchAsyncCommand(context, asyncCommand, runnable, reported, timeoutWatcher, ranValidators);
+        } else if (CommandRuntime.scheduler().global().isCurrentThread()) {
             // #541 (maintainer's answer of 2026-09-29): on the server thread the body runs now,
             // inside the dispatch, as Bukkit's own commands do -- so a command block, a command
             // minecart, the panel's remote command and RCON receive its replies while their
@@ -488,7 +582,7 @@ public abstract class BaseCommandExecutor {
         } else {
             // Off the server thread the body must not touch the Bukkit API directly, so it is
             // handed to the main thread, exactly as before 6.3.0.
-            dispatchScheduled(context, ranValidators, () -> runnable.runTask(UltiTools.getInstance()));
+            dispatchScheduled(context, ranValidators, () -> CommandRuntime.scheduler().global().run(runnable));
         }
     }
 
@@ -514,7 +608,7 @@ public abstract class BaseCommandExecutor {
     /**
      * Runs the matched command method plus its surrounding bookkeeping (audit-user context,
      * post-action validator hooks, error reporting, the WIRE-12 completion flag) -- the body of
-     * the {@link BukkitRunnable} {@link #executeCommand} schedules.
+     * the {@link Runnable} {@link #executeCommand} schedules.
      * <p>
      * Split out of {@code executeCommand} purely to bring the enclosing method's
      * NPathComplexity back under threshold; the control flow below, and therefore the runtime
@@ -525,12 +619,12 @@ public abstract class BaseCommandExecutor {
      */
     private void invokeCommandBody(CommandContext context, Method method, Object[] params,
                                     List<CommandValidator> ranValidators, TriggerContext triggerCtx,
-                                    AtomicBoolean reported) {
+                                    AtomicBoolean reported, AtomicReference<TaskHandle> timeoutWatcher) {
         try {
             // T-02-REP-1/T-02-EOP-4 (02-08): the current-user context for
             // AuditableDataEntity's audit columns is set and restored HERE, inside the
             // runnable that actually invokes the matched method -- not around the
-            // runTask()/runTaskAsynchronously() call that may schedule this runnable. An
+            // global/async submission call that may schedule this runnable. An
             // off-primary-thread sync body and every @AsyncCommand/@RunAsync body run on
             // another thread; a ThreadLocal write made on the scheduling thread would be
             // invisible on whichever thread actually executes this run() (T-02-REP-4).
@@ -569,6 +663,7 @@ public abstract class BaseCommandExecutor {
             // The body is NEVER interrupted to make this deadline; it always runs this
             // finally exactly once, win or lose the race.
             reported.compareAndSet(false, true);
+            cancelTimeoutWatcher(timeoutWatcher);
         }
     }
 
@@ -637,9 +732,7 @@ public abstract class BaseCommandExecutor {
             }
             CommandValidator.ValidationResult result = validator.validate(context);
             if (!result.isValid()) {
-                if (result.getErrorMessage() != null) {
-                    context.getSender().sendMessage(result.getErrorMessage());
-                }
+                sendValidationFailure(context.getSender(), result.getErrorText(), result.getErrorMessage());
                 return true;
             }
         }
@@ -648,8 +741,8 @@ public abstract class BaseCommandExecutor {
     }
 
     /**
-     * Sends the user-facing failure message, logs the exception, and best-effort reports it to
-     * {@link ErrorReportCollector} for a command method that threw. Split out of
+     * Logs the exception and best-effort reports it to {@link ErrorReportCollector}, then attempts
+     * the user-facing failure message for a command method that threw. Split out of
      * {@link #invokeCommandBody} for the same NPathComplexity reason as that extraction.
      *
      * @since 6.3.0
@@ -657,7 +750,6 @@ public abstract class BaseCommandExecutor {
     private void reportCommandExecutionError(CommandContext context, Method method, Exception e,
                                               TriggerContext triggerCtx) {
         Throwable cause = e.getCause() != null ? e.getCause() : e;
-        context.getSender().sendMessage(ChatColor.RED + FrameworkText.format("命令执行出错: %s", describe(cause)));
         Logger.getLogger(BaseCommandExecutor.class.getName())
                 .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
         // Report to error collector
@@ -668,6 +760,36 @@ public abstract class BaseCommandExecutor {
             }
         } catch (Exception ignored) {
             // Never re-enter logging from error reporting
+        }
+        try {
+            CommandRuntime.messages().send(context.getSender(), Text.of(CommandKeys.EXECUTION_FAILED,
+                    Arg.string("error", describe(cause))));
+        } catch (RuntimeException unavailable) {
+            // The original failure is already logged and reported, even after services retire.
+        }
+    }
+
+    static void sendValidationFailure(CommandSender sender, @Nullable Text text, @Nullable String legacyMessage) {
+        if (text != null) {
+            CommandRuntime.messages().send(sender, text);
+        } else if (legacyMessage != null) {
+            sender.sendMessage(legacyMessage);
+        }
+    }
+
+    private Text processingText(String key) {
+        if (key.isEmpty()) {
+            return Text.of(CommandKeys.PROCESSING);
+        }
+        try {
+            return Text.of(MessageKey.parse(key));
+        } catch (IllegalArgumentException invalid) {
+            if (invalidProcessingKeys.add(key)) {
+                Logger.getLogger(BaseCommandExecutor.class.getName()).log(Level.WARNING,
+                        "Invalid processingMessageKey on {0}: {1}; using the default processing message",
+                        new Object[] {getClass().getName(), key});
+            }
+            return Text.of(CommandKeys.PROCESSING);
         }
     }
 
@@ -706,7 +828,8 @@ public abstract class BaseCommandExecutor {
      * @since 6.3.0
      */
     private void dispatchAsyncCommand(CommandContext context, AsyncCommand asyncCommand,
-                                       BukkitRunnable runnable, AtomicBoolean reported,
+                                       Runnable runnable, AtomicBoolean reported,
+                                       AtomicReference<TaskHandle> timeoutWatcher,
                                        List<CommandValidator> ranValidators) {
         // The refusal hooks (#568) cover only what happens before the body is accepted: the
         // processing notice and the body's submission. Once the scheduler has accepted the body,
@@ -716,11 +839,7 @@ public abstract class BaseCommandExecutor {
         dispatchScheduled(context, ranValidators, () -> {
             // Show processing message if enabled
             if (asyncCommand != null && asyncCommand.showProcessing()) {
-                String processingKey = asyncCommand.processingMessageKey();
-                String processingMsg = processingKey.isEmpty()
-                        ? FrameworkText.text("处理中...")
-                        : UltiTools.getInstance().i18n(processingKey);
-                context.getSender().sendMessage(ChatColor.YELLOW + processingMsg);
+                CommandRuntime.messages().send(context.getSender(), processingText(asyncCommand.processingMessageKey()));
             }
 
             // WIRE-12/D-13: schedule the command body asynchronously EXACTLY ONCE. A timeout
@@ -728,11 +847,11 @@ public abstract class BaseCommandExecutor {
             // this runnable in another one -- that "wrap and re-dispatch" shape is what
             // produced the double async dispatch this replaces, on the DEFAULT path of every
             // @AsyncCommand (timeout()'s default is 30).
-            runnable.runTaskAsynchronously(UltiTools.getInstance());
+            submitAsyncCommand(runnable);
         });
 
         if (asyncCommand != null && asyncCommand.timeout() > 0) {
-            armTimeoutWatcher(context, asyncCommand, reported);
+            armTimeoutWatcher(context, asyncCommand, reported, timeoutWatcher);
         }
     }
 
@@ -743,26 +862,31 @@ public abstract class BaseCommandExecutor {
      *
      * @since 6.3.0
      */
-    private void armTimeoutWatcher(CommandContext context, AsyncCommand asyncCommand, AtomicBoolean reported) {
-        // The watcher does NOT touch, cancel, or interrupt the body's task -- Bukkit's
-        // async scheduler pool is shared, and interrupting a pooled thread is unsafe
-        // (it can affect unrelated tasks). It only stops WAITING and reports, once,
-        // via the CAS above; the body keeps running to completion regardless and its
-        // result (success or exception) is discarded from the watcher's perspective.
-        BukkitRunnable watcher = new BukkitRunnable() {
-            @Override
-            public void run() {
-                if (reported.compareAndSet(false, true)) {
-                    // Paper's AsyncCatcher governs what may be touched off the main
-                    // thread; hop back through it to send the message, same mechanism
-                    // CommandExecutionManager already uses for this purpose.
-                    Bukkit.getScheduler().runTask(UltiTools.getInstance(), () ->
-                            context.getSender().sendMessage(ChatColor.RED + UltiTools.getInstance()
-                                    .i18n("命令执行超时，已停止等待，命令仍在后台继续执行")));
-                }
+    private static void armTimeoutWatcher(CommandContext context, AsyncCommand asyncCommand,
+                                          AtomicBoolean reported, AtomicReference<TaskHandle> timeoutWatcher) {
+        // A tick-affine watcher only stops waiting. It never cancels or interrupts the command body.
+        TaskHandle watcher = replyContext(context.getSender()).runLater(Duration.ofSeconds(asyncCommand.timeout()), () -> {
+            if (reported.compareAndSet(false, true)) {
+                CommandRuntime.messages().send(context.getSender(), Text.of(CommandKeys.TIMEOUT));
             }
-        };
-        watcher.runTaskLaterAsynchronously(UltiTools.getInstance(), asyncCommand.timeout() * 20L);
+        });
+        timeoutWatcher.set(watcher);
+        // The async body can finish before submission of this watcher returns.
+        if (reported.get()) {
+            cancelTimeoutWatcher(timeoutWatcher);
+        }
+    }
+
+    private static TaskContext replyContext(CommandSender sender) {
+        return sender instanceof Player player
+                ? CommandRuntime.scheduler().entity(player) : CommandRuntime.scheduler().global();
+    }
+
+    private static void cancelTimeoutWatcher(AtomicReference<TaskHandle> timeoutWatcher) {
+        TaskHandle watcher = timeoutWatcher.getAndSet(null);
+        if (watcher != null) {
+            watcher.cancel();
+        }
     }
 
 

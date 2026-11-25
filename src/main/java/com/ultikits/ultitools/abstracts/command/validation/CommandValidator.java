@@ -1,8 +1,10 @@
 package com.ultikits.ultitools.abstracts.command.validation;
 
 import com.ultikits.ultitools.abstracts.command.CommandContext;
+import com.ultikits.ultitools.text.Text;
 
 import javax.annotation.Nullable;
+import java.util.Objects;
 
 /**
  * Interface for command validation following the Chain of Responsibility pattern.
@@ -111,11 +113,39 @@ public interface CommandValidator {
         private final boolean valid;
         private final String errorMessage;
         private final String errorKey;
+        private final Text errorText;
 
         private ValidationResult(boolean valid, @Nullable String errorMessage, @Nullable String errorKey) {
+            this(valid, errorMessage, errorKey, null);
+        }
+
+        private ValidationResult(boolean valid, @Nullable String errorMessage, @Nullable String errorKey,
+                                 @Nullable Text errorText) {
             this.valid = valid;
             this.errorMessage = errorMessage;
             this.errorKey = errorKey;
+            this.errorText = errorText;
+        }
+
+        /**
+         * Creates a failure rendered in the eventual recipient's language.
+         * @param message deferred error text
+         * @param errorKey diagnostic key, retained independently of the text
+         * @return a failure whose {@link #getErrorMessage()} is null
+         * @since 7.0.0
+         */
+        public static ValidationResult failure(Text message, String errorKey) {
+            return new ValidationResult(false, null, errorKey, Objects.requireNonNull(message, "message"));
+        }
+
+        /**
+         * Returns deferred text, or null for success and legacy string failures.
+         * @return deferred error text
+         * @since 7.0.0
+         */
+        @Nullable
+        public Text getErrorText() {
+            return errorText;
         }
 
         /**
@@ -160,7 +190,7 @@ public interface CommandValidator {
         /**
          * Gets the error message if validation failed.
          *
-         * @return the error message, or null if valid
+         * @return the legacy string, or null if valid or constructed with deferred {@link Text}
          */
         @Nullable
         public String getErrorMessage() {

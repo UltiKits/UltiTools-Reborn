@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.commands;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
@@ -10,6 +12,7 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.ConsoleCommandSender;
@@ -35,6 +38,7 @@ import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class UltiToolsCommandsTest {
 
     private ServerMock server;
@@ -50,6 +54,7 @@ class UltiToolsCommandsTest {
         MockBukkit.createMockPlugin();
         
         player = server.addPlayer("testplayer");
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         player.setOp(true);
         
         mockCommand = mock(Command.class);

@@ -412,7 +412,7 @@ class ValidationChainTest {
 
             ValidatorChain.ChainValidationResult result = chain.validate(playerContext);
             assertFalse(result.isValid());
-            assertNotNull(result.getErrorMessage());
+            assertNotNull(result.getErrorText());
         }
 
         @Test

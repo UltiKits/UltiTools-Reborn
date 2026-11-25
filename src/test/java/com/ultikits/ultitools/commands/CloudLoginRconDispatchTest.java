@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.commands;
 
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -54,6 +56,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("ulticloud login over RCON answers inside the dispatch (#740)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class CloudLoginRconDispatchTest {
 
     private static final String CONSOLE_NOTICE = ChatColor.AQUA
