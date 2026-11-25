@@ -206,7 +206,6 @@
                             <!-- These arrive transitively through paper-api (provided), the sanctioned runtime API boundary. -->
                             <ignoredUsedUndeclaredDependencies>
                                 <ignoredUsedUndeclaredDependency>com.mojang:brigadier</ignoredUsedUndeclaredDependency>
-                                <ignoredUsedUndeclaredDependency>net.md-5:bungeecord-chat</ignoredUsedUndeclaredDependency>
                                 <ignoredUsedUndeclaredDependency>org.yaml:snakeyaml</ignoredUsedUndeclaredDependency>
                                 <ignoredUsedUndeclaredDependency>net.kyori:adventure-text-serializer-legacy</ignoredUsedUndeclaredDependency>
                                 <ignoredUsedUndeclaredDependency>net.kyori:adventure-text-serializer-plain</ignoredUsedUndeclaredDependency>
