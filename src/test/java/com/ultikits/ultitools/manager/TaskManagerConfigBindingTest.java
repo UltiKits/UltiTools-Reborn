@@ -73,6 +73,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("TaskManager config-bound @Scheduled (#531)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@org.junit.jupiter.api.extension.ExtendWith(FrameworkMessagesExtension.class)
 class TaskManagerConfigBindingTest {
 
     private ServerMock server;

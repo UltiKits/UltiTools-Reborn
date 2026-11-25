@@ -50,6 +50,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("#554: a module whose required plugin is missing gets one line naming it")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@org.junit.jupiter.api.extension.ExtendWith(FrameworkMessagesExtension.class)
 class PluginManagerMissingDependencyLineTest {
 
     private static final String REQUIRED_PLUGIN = "FakeVault";

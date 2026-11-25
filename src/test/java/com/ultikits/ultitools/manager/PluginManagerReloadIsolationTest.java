@@ -33,6 +33,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("PluginManager.reload() isolates a failing module and names it in the summary (#509)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@org.junit.jupiter.api.extension.ExtendWith(FrameworkMessagesExtension.class)
 class PluginManagerReloadIsolationTest {
 
     private PluginManager pluginManager;

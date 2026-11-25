@@ -54,6 +54,7 @@ import net.bytebuddy.jar.asm.Opcodes;
  */
 @DisplayName("The boot load summary counts every module JAR that did not load (18-41)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@org.junit.jupiter.api.extension.ExtendWith(FrameworkMessagesExtension.class)
 class PluginManagerLoadSummaryTest {
 
     private static final String PACKAGE = "com.ultikits.testfixtures.loadsummary.";

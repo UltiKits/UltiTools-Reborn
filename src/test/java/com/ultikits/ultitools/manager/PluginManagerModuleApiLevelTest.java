@@ -1,13 +1,10 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.ultikits.testfixtures.dependprecheck.PrecheckModule;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -23,7 +20,6 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.mockito.MockedStatic;
 
 import java.io.File;
-import java.io.InputStreamReader;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -46,6 +42,16 @@ class PluginManagerModuleApiLevelTest {
     private static final String INVALID_CHINESE = "模块 '%s' 未声明有效的 api-version（读到的值：%s）；UltiTools-API %s 要求模块声明 %d 或更高的整数；拒绝加载。请安装针对当前 UltiTools-API 重新构建的模块。";
 
     @TempDir Path temp;
+    private com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport textSupport;
+    private AutoCloseable textScope;
+
+    @org.junit.jupiter.api.AfterEach
+    void closeCatalogue() throws Exception {
+        if (textScope != null) {
+            textScope.close();
+            textSupport.close();
+        }
+    }
 
     @Test
     void api630_isRefusedBeforeClassLoadingWithEnglishHint() throws Exception {
@@ -178,12 +184,10 @@ class PluginManagerModuleApiLevelTest {
     }
 
     private UltiTools framework(String language) throws Exception {
-        JsonObject catalogue;
-        try (InputStreamReader input = new InputStreamReader(getClass().getResourceAsStream("/lang/" + language + ".json"), StandardCharsets.UTF_8)) {
-            catalogue = JsonParser.parseReader(input).getAsJsonObject();
-        }
+        textSupport = new com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport(language);
+        textScope = com.ultikits.ultitools.text.internal.FrameworkMessages.overrideForTests(
+                textSupport.messages(), java.util.Locale.forLanguageTag(language));
         UltiTools framework = mock(UltiTools.class);
-        when(framework.i18n(anyString())).thenAnswer(call -> catalogue.get(call.getArgument(0, String.class)).getAsString());
         when(framework.getDescription()).thenReturn(new PluginDescriptionFile("UltiTools", VERSION, "unused.Main"));
         return framework;
     }
