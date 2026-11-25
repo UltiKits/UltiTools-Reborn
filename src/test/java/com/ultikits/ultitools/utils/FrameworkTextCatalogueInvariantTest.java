@@ -574,8 +574,12 @@ class FrameworkTextCatalogueInvariantTest {
 
     @Test
     void variableKeyExemptionsAreBoundToTheirDeclarationSite() {
+        // The one remaining exempt literal is exempt only where it is declared (UltiToolsCommands#help):
+        // the same literal in any other file is an ordinary violation.
+        String exemptLiteral = KEYS_VIA_VARIABLE.get(0)
+                .replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+        assertThat(plainViolations("String raw = \"" + exemptLiteral + "\";")).hasSize(1);
         assertThat(plainViolations("player.sendMessage(\"上一页\");")).hasSize(1);
-        assertThat(plainViolations("String raw = \"取消\";")).hasSize(1);
     }
 
     @Test

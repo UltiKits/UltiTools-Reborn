@@ -542,7 +542,7 @@ eventBus.publish(new BalanceChangeEvent(player, 100.0));
 
 ### More Built-in
 
-- **GUI Framework** — Inventory GUIs with pagination via ObliviateInvs, plus a declarative reactive GUI system
+- **GUI Framework** — A declarative, reactive chest GUI system, plus a UI service for dialogs (notice, confirmation, form, choice)
 - **i18n** — Built-in internationalization with `i18n("key")`
 - **Module Management** — Install and update modules through UPM; changes take effect at the next server start
 - **WebSocket + UltiPanel** — Remote server management (commands, files, monitoring, logs)

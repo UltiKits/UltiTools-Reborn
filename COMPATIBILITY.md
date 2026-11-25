@@ -537,7 +537,9 @@ Component no = Component.text("[Cancel]", NamedTextColor.RED).clickEvent(ClickEv
 player.sendMessage(Component.text("Delete this home?").appendNewline().append(yes).append(Component.space()).append(no));
 ```
 
-When writing callbacks in a module, account for these properties:
+When writing callbacks in a module, account for these properties. Where a bullet mentions 6.x, it
+compares with the removed framework chat confirmation (`widgets.impl.ChatConfirm`, which ran its
+buttons through the `/ultitools_callback` command), not with callbacks a module wrote itself:
 
 - **Lifetime:** prompts expire on the server after Paper's default callback lifetime (about 12 hours).
   Clicking an expired button does nothing. In 6.x, pending callbacks did not expire.
@@ -553,9 +555,10 @@ When writing callbacks in a module, account for these properties:
   from the unloaded module. In 6.x, these callbacks were retained without an expiry.
 
 中文补充：7.0 删除三个旧箱子页面基类、旧 `widgets.Confirm` 及其聊天／箱子实现、`Buttons`、
-`ViewType` 与 `DependenceManagers#initInventoryAPI`，不保留废弃桥接。表中通用页面改为
-`DeclarativeGui` 的组件树；分页在 `State` 中维护页码，用 `GridView.items(列表, 构建函数)` 放入
-当前页切片，由 `TextButton` 通过 `setState(...)` 翻页；路线切换可用非空 `Navigator.of(context)`
+`ViewType` 与 `DependenceManagers#initInventoryAPI`，不保留废弃桥接；模块须按 7.0 重新构建。
+表中通用页面改为 `DeclarativeGui` 的组件树；分页在 `State` 中维护页码，用
+`GridView.items(列表, 构建函数)` 放入当前页切片，由 `TextButton` 通过 `setState(...)` 翻页
+（`GridView` 没有页码 API）；路线切换可用非空 `Navigator.of(context)`
 返回的状态的 `push`、`pop`、`pushReplacement`、`canPop`。确认改用 `ui.Confirm`，结果区分
 `Completed(true/false)` 与 `Closed(reason)`，默认按钮键为 `ui.yes` / `ui.no`，可用 `yes` / `no`
 覆盖；旧按钮枚举无替代类型，文字改用组件标签或 `ui.ok` / `ui.cancel`。框架不再打包

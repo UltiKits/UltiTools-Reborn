@@ -307,11 +307,11 @@ instrument in this codebase. The last three
 `UltiTools.onEnable()` itself — before the module class loader is built, and after
 `PluginManager#init` returns — and likewise reconcile against no annotation.
 
-## Native materials and sounds
+## Native sounds
 
-The framework uses Paper's native materials and sound registry. Both behaviours are reached through
-a shipped module, so each row names the module path that exercises it. No annotation drives either
-behaviour, so these rows reconcile against no annotation.
+The framework uses Paper's native sound registry. The behaviour is reached through a shipped module,
+so the row names the module path that exercises it. No annotation drives it, so the row reconciles
+against no annotation.
 
 | ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
 |---|---|---|---|---|---|---|---|---|

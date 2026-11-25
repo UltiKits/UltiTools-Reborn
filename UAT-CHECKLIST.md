@@ -403,7 +403,7 @@ C02, C03 and C04 occur once each per server, and each is followed by a multi-lin
 line is `java.lang.NoClassDefFoundError: com/ultikits/ultitools/utils/SimpleHttpClient$Response`; these
 trace records are not additional WARNING messages.
 
-## Native materials and sounds
+## Native sounds
 
 | ID | Preconditions | Steps | Expected | Layer | Covers |
 |---|---|---|---|---|---|
