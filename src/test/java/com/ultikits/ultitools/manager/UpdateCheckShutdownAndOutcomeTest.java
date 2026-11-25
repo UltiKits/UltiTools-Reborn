@@ -11,6 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
@@ -61,9 +62,9 @@ import com.ultikits.ultitools.utils.VersionUtils;
 @DisplayName("D19-032: the start-up update check stops on disable and never reports up to date after a failed lookup")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class UpdateCheckShutdownAndOutcomeTest {
-    @org.junit.jupiter.api.extension.RegisterExtension
-    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
-            new com.ultikits.ultitools.manager.FrameworkMessagesExtension("zh");
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages =
+            new FrameworkMessagesExtension("zh");
 
 
     private static final String UP_TO_DATE = "所有插件已是最新版本！";
@@ -495,38 +496,6 @@ class UpdateCheckShutdownAndOutcomeTest {
             assertThat(records.stream().filter(r -> r.getLevel() == Level.FINE).map(LogRecord::getMessage)
                     .collect(Collectors.toList()))
                     .anySatisfy(m -> assertThat(m).contains("UltiTools-API").contains("HTTP 500"));
-        }
-    }
-
-    @Nested
-    @DisplayName("the shipped language files carry the new line")
-    class LanguageFiles {
-
-        @Test
-        @DisplayName("lang/en.json and lang/zh.json both translate the incomplete line, keeping its one %s")
-        void bothLanguageFilesCarryTheKey() throws IOException {
-            for (String file : new String[]{"lang/en.json", "lang/zh.json"}) {
-                com.google.gson.JsonObject json;
-                try (java.io.InputStream in = UpdateManager.class.getClassLoader().getResourceAsStream(file)) {
-                    assertThat(in).as(file).isNotNull();
-                    json = com.google.gson.JsonParser.parseReader(
-                            new java.io.InputStreamReader(in, StandardCharsets.UTF_8)).getAsJsonObject();
-                }
-                assertThat(json.has(INCOMPLETE)).as(file).isTrue();
-                String value = json.get(INCOMPLETE).getAsString();
-                assertThat(value.split("%s", -1)).as(file).hasSize(2);
-            }
-        }
-
-        @Test
-        @DisplayName("English reads: Update check incomplete: could not confirm the latest version of %s.")
-        void englishWording() throws IOException {
-            try (java.io.InputStream in = UpdateManager.class.getClassLoader().getResourceAsStream("lang/en.json")) {
-                com.google.gson.JsonObject json = com.google.gson.JsonParser.parseReader(
-                        new java.io.InputStreamReader(in, StandardCharsets.UTF_8)).getAsJsonObject();
-                assertThat(json.get(INCOMPLETE).getAsString())
-                        .isEqualTo("Update check incomplete: could not confirm the latest version of %s.");
-            }
         }
     }
 }

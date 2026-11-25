@@ -10,13 +10,12 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 /** Real framework catalogue in the selected language for regression fixtures. */
 public final class FrameworkMessagesExtension implements BeforeEachCallback, AfterEachCallback {
     private final String language;
+    private CommandMessageTestSupport support;
+    private AutoCloseable scope;
 
     public FrameworkMessagesExtension() { this("en"); }
 
     public FrameworkMessagesExtension(String language) { this.language = language; }
-
-    private CommandMessageTestSupport support;
-    private AutoCloseable scope;
 
     @Override
     public void beforeEach(ExtensionContext context) {

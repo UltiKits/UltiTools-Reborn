@@ -26,6 +26,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -1069,7 +1070,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         initLanguage();
         DependenceManagers managers = getDependenceManagers();
         reloadFrameworkCatalogue(managers != null && managers.getContext() != null
-                ? managers.getContext().getBean(TextEngine.class) : null);
+                ? managers.getContext().getBean(TextEngine.class) : null, getLogger());
         // Tell an open UltiCloud connection about a changed operator setting (plan 22-22); reads config only
         CloudFeatures features = cloudFeatures;
         if (features != null) {
@@ -1079,9 +1080,18 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     /** Re-reads framework overrides only on full reload, not during startup fallback initialization. */
-    static void reloadFrameworkCatalogue(@Nullable TextEngine engine) {
-        if (engine != null) {
+    static void reloadFrameworkCatalogue(@Nullable TextEngine engine, Logger logger) {
+        if (engine == null) {
+            return;
+        }
+        try {
             engine.reloadOverrides(MessageKey.FRAMEWORK_NAMESPACE);
+        } catch (RuntimeException cause) {
+            // This diagnostic must not depend on rendering the catalogue that just failed to reload.
+            String warning = Locale.CHINESE.getLanguage().equals(engine.fallback().getLanguage())
+                    ? "无法重载框架消息目录的覆盖文件。"
+                    : "Could not reload framework message catalogue overrides.";
+            logger.log(Level.WARNING, warning, cause);
         }
     }
 

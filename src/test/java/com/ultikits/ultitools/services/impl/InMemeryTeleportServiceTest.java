@@ -9,10 +9,15 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
+import com.ultikits.ultitools.manager.FrameworkMessagesExtension;
 import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.List;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Optional;
 import java.util.UUID;
@@ -28,6 +33,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.PlayerCacheManager;
@@ -42,6 +49,8 @@ import java.time.Duration;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import com.ultikits.ultitools.scheduling.internal.PaperBackend;
 import com.ultikits.ultitools.scheduling.internal.PaperSchedulerEngine;
+import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.mockbukkit.mockbukkit.MockBukkit;
@@ -54,9 +63,9 @@ import org.mockbukkit.mockbukkit.entity.PlayerMock;
 @DisplayName("InMemeryTeleportService 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class InMemeryTeleportServiceTest {
-    @org.junit.jupiter.api.extension.RegisterExtension
-    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
-            new com.ultikits.ultitools.manager.FrameworkMessagesExtension("en");
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages =
+            new FrameworkMessagesExtension("en");
 
 
     private ServerMock server;
@@ -200,6 +209,27 @@ class InMemeryTeleportServiceTest {
         server.getScheduler().performTicks(60);
         assertThat(player.getLocation()).isEqualTo(moved);
         assertThat(teleportService.getLastTeleportLocation(player.getUniqueId())).isEmpty();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0, true, 1", "1, true, 0", "1, false, 0"})
+    void titleRenderFailureCancelsCountdownWithoutRepeatingTeleport(int delay, boolean active, int teleports)
+            throws Exception {
+        var player = spy(server.addPlayer());
+        var target = player.getLocation().clone().add(100, 0, 100);
+        var countdown = captureCountdown(player);
+        var failure = new IllegalStateException("test title renderer failed");
+        var messages = mock(Messages.class, ignored -> { throw failure; });
+
+        try (var scope = FrameworkMessages.overrideForTests(messages, Locale.ENGLISH)) {
+            teleportService.delayTeleport(player, target, delay);
+            InMemeryTeleportService.setTeleportingStatus(player.getUniqueId(), active);
+            server.getScheduler().performTicks(21);
+        }
+
+        assertThat(countdown.get().state()).isEqualTo(TaskState.CANCELLED);
+        assertThat(InMemeryTeleportService.getTeleportingStatus(player.getUniqueId())).isFalse();
+        verify(player, times(teleports)).teleport(target);
     }
 
     private AtomicReference<TaskHandle> captureCountdown(PlayerMock player) {

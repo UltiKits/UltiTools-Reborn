@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -52,7 +53,7 @@ import net.bytebuddy.jar.asm.Opcodes;
 @DisplayName("PluginManager: modules built against a different UltiTools-API are refused with an upgrade hint")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginManagerLegacyModuleLoadTest {
-    @org.junit.jupiter.api.extension.RegisterExtension
+    @RegisterExtension
     final FrameworkMessagesExtension frameworkMessages = new FrameworkMessagesExtension();
 
     private static final String LEGACY_MAIN = "com.ultikits.testfixtures.legacymodule.LegacyModule";

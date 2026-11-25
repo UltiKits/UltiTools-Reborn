@@ -5,10 +5,23 @@ import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.text.*;
 import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import java.util.Locale;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class ConfigBindingMessagesTest {
+    @Test
+    void reloadFailedExceptionKeepsEnglishButReportUsesFallbackLanguage() throws Exception {
+        try (var support = new CommandMessageTestSupport("zh");
+             var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.CHINESE)) {
+            var failure = new ConfigBindings.ReloadFailedException("config.yml");
+            assertThat(failure).hasMessage("the reload of config.yml did not complete (for example, its write-back "
+                    + "threw an IOException), so its values were not validated");
+            assertThat(failure.reportReason())
+                    .isEqualTo("config.yml 的重载未完成（例如写回时抛出了 IOException），因此其值尚未通过校验");
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"en", "zh"})
     void timer_rule(String code) throws Exception {

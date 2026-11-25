@@ -3,6 +3,8 @@ package com.ultikits.ultitools.listeners;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
+import com.ultikits.ultitools.manager.FrameworkMessagesExtension;
 import java.lang.reflect.Field;
 import java.util.*;
 import java.util.logging.Logger;
@@ -21,9 +23,9 @@ import com.ultikits.ultitools.manager.UpdateManager;
 
 @DisplayName("UpdateJoinListener Tests")
 class UpdateJoinListenerTest {
-    @org.junit.jupiter.api.extension.RegisterExtension
-    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
-            new com.ultikits.ultitools.manager.FrameworkMessagesExtension("en");
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages =
+            new FrameworkMessagesExtension("en");
 
 
     private UpdateManager mockUpdateManager;

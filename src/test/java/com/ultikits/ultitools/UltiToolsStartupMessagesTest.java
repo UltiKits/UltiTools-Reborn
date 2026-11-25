@@ -94,7 +94,9 @@ class UltiToolsStartupMessagesTest {
             var method = UltiTools.class.getDeclaredMethod("releaseEarlyLogCapture", boolean.class);
             method.setAccessible(true);
             method.invoke(mock(UltiTools.class), true);
-            verify(global).runLater(eq(Duration.ofMillis(EarlyLogCapture.RELEASE_AFTER_MS + 1000L)), any(Runnable.class));
+            var delay = ArgumentCaptor.forClass(Duration.class);
+            verify(global).runLater(delay.capture(), any(Runnable.class));
+            assertThat(delay.getValue()).isEqualTo(Duration.ofMillis(EarlyLogCapture.RELEASE_AFTER_MS + 1000L));
             bukkit.verify(Bukkit::getScheduler, never());
         } finally {
             FrameworkScheduling.uninstall(scheduler);

@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -33,7 +34,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("PluginManager.reload() isolates a failing module and names it in the summary (#509)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-@org.junit.jupiter.api.extension.ExtendWith(FrameworkMessagesExtension.class)
+@ExtendWith(FrameworkMessagesExtension.class)
 class PluginManagerReloadIsolationTest {
 
     private PluginManager pluginManager;

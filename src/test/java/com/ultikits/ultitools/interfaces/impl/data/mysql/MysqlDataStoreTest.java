@@ -13,6 +13,8 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
+import com.ultikits.ultitools.manager.FrameworkMessagesExtension;
 import java.io.File;
 import java.util.Properties;
 
@@ -58,9 +60,9 @@ import lombok.EqualsAndHashCode;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("MysqlDataStore 测试")
 class MysqlDataStoreTest {
-    @org.junit.jupiter.api.extension.RegisterExtension
-    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
-            new com.ultikits.ultitools.manager.FrameworkMessagesExtension("en");
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages =
+            new FrameworkMessagesExtension("en");
 
 
     @Mock
@@ -665,6 +667,7 @@ class MysqlDataStoreTest {
                 // MockedConstruction wraps the cause; verify catalogue wording and absence of legacy lookups.
                 verify(mockUltiTools, org.mockito.Mockito.never()).i18n(anyString());
                 verify(mockLogger).log(eq(Level.SEVERE), contains("MySQL connection failed:"));
+                assertThat(store.getDataSource()).isNull();
             }
         }
     }

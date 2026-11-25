@@ -283,7 +283,16 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   overrides and its locale configuration.
   Log lines, the `/ul reload` summary and module reload reasons are rendered in the server's
   fallback language; chat replies and titles use each player's language.
+  If `language` and `fallback-language` are both set and differ, framework logs and reload summaries
+  follow `fallback-language`.
+  A malformed override file is ignored with a warning; its messages revert to the bundled text, not
+  the last valid override. Deleting the override file also restores the bundled text.
+  `/ul reload` also re-reads the bundled catalogue from the framework JAR on disk. Replacing or
+  partially copying the JAR while the server is running can break framework messages until restart;
+  stop the server before replacing the JAR.
   `/ul reload` 同时重读框架覆盖文件与语言配置；日志、重载汇总及模块重载原因使用服务器回退语言，聊天回复与标题使用各玩家的语言。
+  两项语言配置不同时，框架日志与汇总跟随 `fallback-language`。覆盖文件格式错误时会告警并回到内置文案，而不是沿用上一次覆盖；删除覆盖文件也会恢复内置文案。
+  重载也会重读磁盘上框架 JAR 内的目录，运行中替换或只拷贝了一部分可能导致框架消息在重启前异常，请先停服再替换 JAR。
 - **Migration:** 6.x language files, sentence keys, custom language names and operator edits
   are not automatically converted to the new catalogues. Re-create the required overrides
   with dotted keys and MiniMessage syntax. The old `i18n` path remains temporarily while its

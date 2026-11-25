@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -46,7 +47,7 @@ import com.ultikits.ultitools.interfaces.IPlugin;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 class PluginManagerClassScanningTest {
-    @org.junit.jupiter.api.extension.RegisterExtension
+    @RegisterExtension
     final FrameworkMessagesExtension frameworkMessages = new FrameworkMessagesExtension("zh");
 
     /** The duplicate-copy warning's catalogue key (UltiTools-Dev-Doc#96); its English text is in en.json. */

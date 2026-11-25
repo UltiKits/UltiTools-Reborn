@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mockStatic;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -37,7 +38,7 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 
 class LegacyTokenCleanupTest {
-    @org.junit.jupiter.api.extension.RegisterExtension
+    @RegisterExtension
     final FrameworkMessagesExtension frameworkMessages = new FrameworkMessagesExtension();
     private static final String UUID = "0123456789abcdef0123456789abcdef";
     private static final String LEGACY = "{\"uuid\":\"" + UUID + "\",\"cloud_token\":{\"access_token\":\"old-test-only\"}}";

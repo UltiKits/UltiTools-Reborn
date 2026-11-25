@@ -18,15 +18,19 @@ import java.util.Set;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 import org.bukkit.Bukkit;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 class FrameworkManagerMessagesTest {
     @ParameterizedTest
-    @ValueSource(strings = {"en", "zh"})
-    void reloadSummariesKeepAllFourOutcomes(String code) throws Exception {
+    @MethodSource("reloadSummaryCases")
+    void reloadSummaryMatchesOutcome(String code, boolean partial, boolean failed, List<String> expected)
+            throws Exception {
         List<String> logs = new ArrayList<>();
         try (var support = new CommandMessageTestSupport(code);
              var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.forLanguageTag(code));
@@ -35,29 +39,37 @@ class FrameworkManagerMessagesTest {
             var manager = new PluginManager();
             var module = mock(UltiToolsPlugin.class);
             when(module.getPluginName()).thenReturn("Probe");
-            when(module.reloadWithReport()).thenReturn(new ReloadReport());
+            var report = new ReloadReport();
+            if (partial) {
+                report.partial("detail");
+            }
+            when(module.reloadWithReport()).thenReturn(report);
             PluginListSeeding.add(manager, module);
-            assertThat(manager.reloadAllAndReport()).containsExactly(code.equals("en")
-                    ? "All 1 modules reloaded." : "已重载全部 1 个模块。");
-            var partial = new ReloadReport();
-            partial.partial("detail");
-            when(module.reloadWithReport()).thenReturn(partial);
-            assertThat(manager.reloadAllAndReport()).containsExactly(code.equals("en")
-                    ? "Reloaded 1 modules; 1 only partially:" : "已重载 1 个模块，其中 1 个只重载了一部分：",
-                    code.equals("en") ? "Module Probe reloaded partially; not reloaded: detail" : "模块 Probe 只重载了一部分；未重载：detail");
-            var failed = mock(UltiToolsPlugin.class);
-            when(failed.getPluginName()).thenReturn("Broken");
-            when(failed.reloadWithReport()).thenThrow(new IllegalStateException("failed"));
-            PluginListSeeding.add(manager, failed);
-            assertThat(manager.reloadAllAndReport()).containsExactly(code.equals("en")
-                    ? "Failed to reload 1 of 2 modules: Broken. See the console for each failure." : "重载失败 1 个（共 2 个模块）：Broken。每个失败的详情见控制台。",
-                    code.equals("en") ? "1 of the others reloaded only partially:" : "其余模块中有 1 个只重载了一部分：",
-                    code.equals("en") ? "Module Probe reloaded partially; not reloaded: detail" : "模块 Probe 只重载了一部分；未重载：detail");
-            when(module.reloadWithReport()).thenReturn(new ReloadReport());
-            assertThat(manager.reloadAllAndReport()).containsExactly(code.equals("en")
-                    ? "Failed to reload 1 of 2 modules: Broken. See the console for each failure." : "重载失败 1 个（共 2 个模块）：Broken。每个失败的详情见控制台。");
-            assertThat(logs).contains(code.equals("en") ? "[UltiTools-API] All 1 modules reloaded." : "[UltiTools-API] 已重载全部 1 个模块。");
+            if (failed) {
+                var broken = mock(UltiToolsPlugin.class);
+                when(broken.getPluginName()).thenReturn("Broken");
+                when(broken.reloadWithReport()).thenThrow(new IllegalStateException("failed"));
+                PluginListSeeding.add(manager, broken);
+            }
+            assertThat(manager.reloadAllAndReport()).containsExactlyElementsOf(expected);
+            assertThat(logs).contains("[UltiTools-API] " + expected.getFirst());
         }
+    }
+
+    private static Stream<Arguments> reloadSummaryCases() {
+        String enPartial = "Module Probe reloaded partially; not reloaded: detail";
+        String zhPartial = "模块 Probe 只重载了一部分；未重载：detail";
+        String enFailed = "Failed to reload 1 of 2 modules: Broken. See the console for each failure.";
+        String zhFailed = "重载失败 1 个（共 2 个模块）：Broken。每个失败的详情见控制台。";
+        return Stream.of(
+                Arguments.of("en", false, false, List.of("All 1 modules reloaded.")),
+                Arguments.of("zh", false, false, List.of("已重载全部 1 个模块。")),
+                Arguments.of("en", true, false, List.of("Reloaded 1 modules; 1 only partially:", enPartial)),
+                Arguments.of("zh", true, false, List.of("已重载 1 个模块，其中 1 个只重载了一部分：", zhPartial)),
+                Arguments.of("en", true, true, List.of(enFailed, "1 of the others reloaded only partially:", enPartial)),
+                Arguments.of("zh", true, true, List.of(zhFailed, "其余模块中有 1 个只重载了一部分：", zhPartial)),
+                Arguments.of("en", false, true, List.of(enFailed)),
+                Arguments.of("zh", false, true, List.of(zhFailed)));
     }
 
     @ParameterizedTest

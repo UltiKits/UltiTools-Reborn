@@ -163,10 +163,18 @@ public class InMemeryTeleportService implements TeleportService {
 
                     @Override
                     public void accept(TaskHandle handle) {
-                        DelayTeleportResult result = processDelayTeleportTick(player, location, time);
-                        time = result.remainingTime;
-                        if (result.shouldCancel) {
-                            handle.cancel();
+                        DelayTeleportResult result = null;
+                        try {
+                            result = processDelayTeleportTick(player, location, time);
+                            time = result.remainingTime;
+                        } finally {
+                            // A failed tick must not repeat, especially after teleport() has already moved the player.
+                            if (result == null) {
+                                teleportingPlayers.replace(player.getUniqueId(), false);
+                            }
+                            if (result == null || result.shouldCancel) {
+                                handle.cancel();
+                            }
                         }
                     }
                 });

@@ -270,7 +270,8 @@ final class ConfigBindings {
         private final String configFilePath;
 
         ReloadFailedException(String configFilePath) {
-            super(reloadReason(CONFIG_BINDING_RELOAD_INCOMPLETE, Arg.string("file", String.valueOf(configFilePath))));
+            super("the reload of " + configFilePath + " did not complete (for example, its write-back "
+                    + "threw an IOException), so its values were not validated");
             this.configFilePath = configFilePath;
         }
 
