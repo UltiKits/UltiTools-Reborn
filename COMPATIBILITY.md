@@ -180,7 +180,7 @@ All thirteen framework keys use the `ultitools:` namespace:
 - `command.reply.unknown`, `command.reply.usage`, `command.reply.argument_error`.
 
 Override them in `plugins/UltiTools/messages/<locale>.yml` using dotted or nested YAML keys and
-MiniMessage values. Framework catalogue overrides currently require a restart. Arguments are
+MiniMessage values. `/ul reload` re-reads framework catalogue overrides as well (as of 7.0.0). Arguments are
 literal text or components, not MiniMessage templates: `<target>` and `<words...>` in usages
 remain visible. Native translatable argument-error components are retained where Paper supplies
 them; plain parser details are passed through literally.
@@ -279,9 +279,11 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   `plugins/UltiTools/messages/<locale>.yml` for framework messages. New locale files add
   languages. The framework reads these files but never writes them. It rewrites its own
   `messages/reference/` examples from shipped bytes at startup; editing those examples has no
-  effect. `/ul reload <module>` reloads module overrides. **Known limitation:** framework
-  catalogue overrides currently reload only on restart, not `/ul reload`; locale configuration
-  itself does reload. A later text-migration change supplies the catalogue-reload hook.
+  effect. `/ul reload <module>` reloads module overrides. `/ul reload` reloads the framework's
+  overrides and its locale configuration.
+  Log lines, the `/ul reload` summary and module reload reasons are rendered in the server's
+  fallback language; chat replies and titles use each player's language.
+  `/ul reload` 同时重读框架覆盖文件与语言配置；日志、重载汇总及模块重载原因使用服务器回退语言，聊天回复与标题使用各玩家的语言。
 - **Migration:** 6.x language files, sentence keys, custom language names and operator edits
   are not automatically converted to the new catalogues. Re-create the required overrides
   with dotted keys and MiniMessage syntax. The old `i18n` path remains temporarily while its

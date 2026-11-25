@@ -1065,12 +1065,22 @@ public final class UltiTools extends JavaPlugin implements Localized {
         reloadConfig();
         // Reinitialize framework language based on (possibly changed) config
         initLanguage();
+        DependenceManagers managers = getDependenceManagers();
+        reloadFrameworkCatalogue(managers != null && managers.getContext() != null
+                ? managers.getContext().getBean(TextEngine.class) : null);
         // Tell an open UltiCloud connection about a changed operator setting (plan 22-22); reads config only
         CloudFeatures features = cloudFeatures;
         if (features != null) {
             features.onReload();
         }
         return pluginManager.reloadAllAndReport();
+    }
+
+    /** Re-reads framework overrides only on full reload, not during startup fallback initialization. */
+    static void reloadFrameworkCatalogue(@org.jetbrains.annotations.Nullable TextEngine engine) {
+        if (engine != null) {
+            engine.reloadOverrides(com.ultikits.ultitools.text.MessageKey.FRAMEWORK_NAMESPACE);
+        }
     }
 
     /**
