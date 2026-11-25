@@ -30,7 +30,8 @@ import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.commands.CloudLoginCommand;
 import com.ultikits.ultitools.entities.AccessDecision;
 import com.ultikits.ultitools.entities.Capability;
-import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -360,7 +361,7 @@ public class CommandExecutionManager {
         if (!decision.isAllowed()) {
             // Keep this WARNING line: it is the operator's record of a refused remote command.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.format("[远程命令] 已拦截: %s", shown));
+                    FrameworkMessages.plain(ManagerKeys.REMOTE_COMMAND_BLOCKED, Arg.string("command", String.valueOf(shown))));
             recordCommandDecision(shown, actor, decision.getMessage());
             sink.blocked(baseCommandName(command), resultMessage(decision.getMessage()));
             return;
@@ -374,7 +375,7 @@ public class CommandExecutionManager {
             return;
         }
         UltiTools.getInstance().getLogger().log(Level.INFO,
-                FrameworkText.format("[远程命令] > %s", shown));
+                FrameworkMessages.plain(ManagerKeys.REMOTE_COMMAND_ECHO, Arg.string("command", String.valueOf(shown))));
         recordCommandDecision(shown, actor, null);
         mainThread.execute(() -> executeCaptured(command, shown, actor, sink));
     }
@@ -552,7 +553,7 @@ public class CommandExecutionManager {
             // server thread, including a listed sibling alias, and report the spelling that matched.
             AccessDecision decision = canonicalCommandDecision(matched + argumentsOf(commandLine));
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                    FrameworkText.format("[远程命令] 已拦截: %s", shown));
+                    FrameworkMessages.plain(ManagerKeys.REMOTE_COMMAND_BLOCKED, Arg.string("command", String.valueOf(shown))));
             recordCommandDecision(shown, actor, decision.getMessage());
             sink.blocked(matched, resultMessage(decision.getMessage()));
             return;
@@ -697,7 +698,7 @@ public class CommandExecutionManager {
         feedback.take();
         // The panel receives only the message. Keep the stack locally, without command arguments.
         UltiTools.getInstance().getLogger().log(Level.WARNING,
-                FrameworkText.format("[远程命令] 命令执行异常: %s", baseCommandName(commandLine)), failure);
+                FrameworkMessages.plain(ManagerKeys.REMOTE_COMMAND_FAILED, Arg.string("command", String.valueOf(baseCommandName(commandLine)))), failure);
         sink.failed(resultMessage(failure.getMessage()));
     }
 
