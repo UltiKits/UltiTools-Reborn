@@ -20,6 +20,7 @@ import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.Capability;
 import com.ultikits.ultitools.exceptions.DataAccessException;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 
 /**
  * The single owner of one UltiCloud login's entire lifetime.
@@ -129,14 +130,6 @@ final class CloudSession {
     /** Logged when UltiCloud answers {@code access_denied} to a re-pair code. */
     static final String REPAIR_CODE_DENIED = "UltiCloud: the re-pair code was refused. Create a new one in the panel "
         + "(server settings > Revoke and re-pair), or run /ulticloud login without a code.";
-    /**
-     * The language-catalogue key of the one SEVERE line printed when the gateway's welcome names a
-     * different server id than the linked one (contract answer 21, SEMANTICS 16).
-     */
-    static final String SERVER_ID_MISMATCH_KEY = "UltiCloud answered this server's connection with a different "
-            + "server ID than the one it is linked to. Reconnecting has stopped and the credential is kept. "
-            + "Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login to link this server again.";
-
     /** Added to the device poll interval for each {@code slow_down} answer (RFC 8628 section 3.5). */
     private static final long DEVICE_SLOW_DOWN_INCREMENT_MS = 5_000L;
 
@@ -1034,9 +1027,7 @@ final class CloudSession {
                     return;
                 }
                 mismatchReported = true;
-                UltiTools plugin = UltiTools.getInstance();
-                String text = plugin == null ? null : plugin.i18n(SERVER_ID_MISMATCH_KEY);
-                PanelConnectionLog.log(Level.SEVERE, text == null ? SERVER_ID_MISMATCH_KEY : text);
+                PanelConnectionLog.log(Level.SEVERE, FrameworkMessages.plain(UtilsKeys.CLOUD_SESSION_SERVER_ID_MISMATCH));
             }
         }
 

@@ -3,7 +3,8 @@ package com.ultikits.ultitools.manager;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.text.Arg;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -146,7 +147,7 @@ public class ServerMonitorManager {
                 lastCpuUsage = Math.min((systemLoad / processors) * 100, 100);
             }
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkText.format("无法获取CPU使用率: %s", e.getMessage()));
+            UltiTools.getInstance().getLogger().log(Level.FINE, FrameworkMessages.plain(ManagerKeys.MONITOR_CPU_UNAVAILABLE, Arg.string("error", String.valueOf(e.getMessage()))));
         }
     }
     
@@ -249,7 +250,7 @@ public class ServerMonitorManager {
             return true;
         }
         UltiTools.getInstance().getLogger().log(Level.SEVERE,
-            FrameworkText.text("[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。"));
+            FrameworkMessages.plain(ManagerKeys.MONITOR_OFF_MAIN_THREAD));
         return false;
     }
 
@@ -277,7 +278,7 @@ public class ServerMonitorManager {
             // Same convention as cancelTask: hand the exception itself to the logger instead of
             // concatenating getMessage() at the call site.
             UltiTools.getInstance().getLogger().log(Level.WARNING,
-                FrameworkText.text("[ServerMonitor] 采样服务器状态失败"), e);
+                FrameworkMessages.plain(ManagerKeys.MONITOR_SAMPLE_FAILED), e);
         }
         return false;
     }
@@ -391,8 +392,11 @@ public class ServerMonitorManager {
         historyIndex++;
         lastTick = currentTime;
 
-        UltiTools.getInstance().getLogger().log(Level.FINEST, 
-            FrameworkText.format("TPS更新: 当前TPS=%.2f, 时间间隔=%dms", currentTPS, timeDiff));
+        var logger = UltiTools.getInstance().getLogger();
+        if (logger.isLoggable(Level.FINEST)) {
+            logger.log(Level.FINEST, FrameworkMessages.plain(ManagerKeys.MONITOR_TPS_UPDATE,
+                    Arg.number("tps", currentTPS), Arg.number("interval", timeDiff)));
+        }
     }
     
     /**
