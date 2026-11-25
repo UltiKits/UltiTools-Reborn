@@ -10,9 +10,13 @@ import org.jetbrains.annotations.ApiStatus;
 public final class ChestCloseReasons {
     private ChestCloseReasons() { /* Static mapping. */ }
 
-    /** A close not caused by the runtime is a viewer-side close, except for disconnect. */
+    /** Maps a settled close; CANT_USE must first allow a same-tick quit to select DISCONNECTED. */
     public static CloseReason map(InventoryCloseEvent.Reason reason) {
         Objects.requireNonNull(reason, "reason");
-        return reason == InventoryCloseEvent.Reason.DISCONNECT ? CloseReason.DISCONNECTED : CloseReason.PLAYER;
+        return switch (reason) {
+            case PLAYER -> CloseReason.PLAYER;
+            case DISCONNECT -> CloseReason.DISCONNECTED;
+            default -> CloseReason.INTERRUPTED;
+        };
     }
 }

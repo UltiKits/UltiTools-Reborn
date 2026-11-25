@@ -107,7 +107,11 @@ public final class ChestListener implements Listener {
     public void onClose(InventoryCloseEvent event) {
         if (event.getView().getTopInventory().getHolder(false) instanceof ChestScreen screen
                 && accepts(screen, event.getView()) && !screen.reopening()) {
-            screen.callbacks().closed(ChestCloseReasons.map(event.getReason()));
+            if (event.getReason() == InventoryCloseEvent.Reason.CANT_USE) {
+                runtime.deferInterruptedClose(screen.session());
+            } else {
+                screen.callbacks().closed(ChestCloseReasons.map(event.getReason()));
+            }
         }
     }
 

@@ -20,6 +20,8 @@ import java.util.logging.Logger;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.inventory.InventoryView;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -51,6 +53,9 @@ class DialogEscapePolicyTest {
     @BeforeEach
     void setUp() {
         when(viewer.getUniqueId()).thenReturn(UUID.randomUUID());
+        InventoryView current = mock(InventoryView.class);
+        when(current.getType()).thenReturn(InventoryType.CHEST);
+        when(viewer.getOpenInventory()).thenReturn(current);
         when(messages.render(any(Text.class), any(Audience.class))).thenAnswer(invocation -> {
             Text text = invocation.getArgument(0);
             return text instanceof Text.Literal literal ? literal.component() : Component.text(((Text.Translated) text).key().translationKey());

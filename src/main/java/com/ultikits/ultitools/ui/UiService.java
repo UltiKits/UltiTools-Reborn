@@ -19,6 +19,11 @@ import org.jetbrains.annotations.ApiStatus;
  * {@code Closed(DISCONNECTED)} chosen; its result completes in a task of the global context. A viewer who
  * quits ends the session with {@link CloseReason#DISCONNECTED}.
  *
+ * <p>Both backends first close the player's own backpack menu if its cursor or crafting inputs are nonempty,
+ * letting vanilla return items to storage or drop overflow. Empty backpacks receive no extra close.
+ * A rejected first chest open or title reopen ends with {@link CloseReason#INTERRUPTED}; its container
+ * bindings are released through the normal close/commit path. A quit still selects DISCONNECTED.
+ *
  * <p>A shown Dialog ends with {@link CloseReason#INTERRUPTED} if the player dies, changes worlds, or another
  * inventory opens. Other plugins' dialogs have no server-side replacement signal, so undetectable interruptions
  * still rely on {@link ShowOptions#timeout()}; give long-lived dialogs a suitable timeout.

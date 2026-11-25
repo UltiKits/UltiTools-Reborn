@@ -168,6 +168,18 @@ public final class UiRuntime implements AutoCloseable {
         sessions.remove(session);
     }
 
+    /**
+     * Defers CANT_USE's reason to the original close continuation, allowing a same-tick quit to win.
+     * Cleanup is not queued a second tick later. The viewer lane hands off to the global pump on retirement.
+     */
+    public void deferInterruptedClose(GridSession session) {
+        RuntimeGridSession grid = ownGrid(session);
+        grid.dispatch(() -> {
+            grid.choose(new UiResult.Closed<>(CloseReason.INTERRUPTED));
+            grid.closeAndComplete();
+        });
+    }
+
     /** Handles a viewer quitting; continuations move to the global pump. */
     public void quit(Player player) {
         Objects.requireNonNull(player, "player");

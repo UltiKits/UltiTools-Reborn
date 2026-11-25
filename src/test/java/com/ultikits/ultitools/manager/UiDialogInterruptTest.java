@@ -175,7 +175,7 @@ class UiDialogInterruptTest {
     @ParameterizedTest
     @CsvSource({"DEATH,DEATH,false", "WORLD,TELEPORT,false", "INVENTORY,OPEN_NEW,false",
             "DEATH,DEATH,true", "WORLD,TELEPORT,true", "INVENTORY,OPEN_NEW,true"})
-    void gridAndBoundContainerKeepTheirExistingPlayerCloseReason(String event, InventoryCloseEvent.Reason reason,
+    void gridAndBoundContainerReportGameInterruption(String event, InventoryCloseEvent.Reason reason,
                                                                 boolean bound) {
         Grid.Builder grid = Grid.builder(Text.plain("Chest"), 1);
         if (bound) {
@@ -189,7 +189,7 @@ class UiDialogInterruptTest {
         fire(viewer, event);
         server.getPluginManager().callEvent(closed);
         tick();
-        assertClosed(session, CloseReason.PLAYER.name());
+        assertClosed(session, CloseReason.INTERRUPTED.name());
         assertThat(dismissals).hasValue(0);
     }
 

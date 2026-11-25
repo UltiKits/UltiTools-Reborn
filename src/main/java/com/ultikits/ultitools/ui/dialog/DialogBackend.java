@@ -11,6 +11,7 @@ import com.ultikits.ultitools.ui.SliderInput;
 import com.ultikits.ultitools.ui.UiBackend;
 import com.ultikits.ultitools.ui.UiIntent;
 import com.ultikits.ultitools.ui.UiSession;
+import com.ultikits.ultitools.ui.runtime.PlayerInventoryPreparation;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -89,6 +90,7 @@ public final class DialogBackend implements UiBackend {
         DialogModel model = mapper.map(session.intent(), session.viewer(), ESCAPE_CLOSES);
         DialogTicket ticket = new DialogTicket(session, callbacks, answers, logger, ownerNames.apply(session));
         tickets.put(session, ticket);
+        PlayerInventoryPreparation.beforeShow(session.viewer());
         presenter.show(session.viewer(), model, ticket);
         ticket.shown();
     }
