@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.item.ItemRenderer;
+import com.ultikits.ultitools.listeners.UiDialogInterruptListener;
 import com.ultikits.ultitools.listeners.UiQuitListener;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.text.Messages;
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.logging.Logger;
 import org.bukkit.Bukkit;
+import org.bukkit.event.HandlerList;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -29,13 +31,15 @@ public final class UiManager implements AutoCloseable {
     private final UiRuntime runtime;
     private final ChestListener chestListener;
     private final UiQuitListener quitListener;
+    private final UiDialogInterruptListener interruptListener;
     private final Map<UltiToolsPlugin, UiService> services = new IdentityHashMap<>();
 
     /** Retains the runtime and the listeners that belong to it. */
-    public UiManager(UiRuntime runtime) {
+    public UiManager(UiRuntime runtime, DialogBackend dialogs) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         chestListener = new ChestListener(runtime);
         quitListener = new UiQuitListener(runtime);
+        interruptListener = new UiDialogInterruptListener(dialogs);
     }
 
     /** Assembles both backends on the framework scheduler, never on a module's scheduler. */
@@ -44,9 +48,10 @@ public final class UiManager implements AutoCloseable {
         FrameworkContainerRuntime containers = new FrameworkContainerRuntime(
                 () -> serverThread.equals(Thread.currentThread()), frameworkMessages::send);
         UiRuntime runtime = new UiRuntime(frameworkScheduler, containers, logger, serverThread);
-        runtime.register(new DialogBackend(frameworkMessages, presenter, logger, runtime::ownerName));
+        DialogBackend dialogs = new DialogBackend(frameworkMessages, presenter, logger, runtime::ownerName);
+        runtime.register(dialogs);
         runtime.register(new ChestBackend(runtime, items, frameworkMessages, frameworkScheduler));
-        return new UiManager(runtime);
+        return new UiManager(runtime, dialogs);
     }
 
     /** Issues exactly one service per module instance; names do not identify a module copy. */
@@ -65,6 +70,7 @@ public final class UiManager implements AutoCloseable {
     public void registerListeners(Plugin bukkitPlugin) {
         Bukkit.getPluginManager().registerEvents(chestListener, bukkitPlugin);
         Bukkit.getPluginManager().registerEvents(quitListener, bukkitPlugin);
+        Bukkit.getPluginManager().registerEvents(interruptListener, bukkitPlugin);
     }
 
     UiRuntime runtime() { return runtime; }
@@ -75,6 +81,11 @@ public final class UiManager implements AutoCloseable {
     /** Explicitly closed before root-container destruction retires the framework scheduler. */
     @Override
     public void close() {
-        try { runtime.close(); } finally { services.clear(); }
+        try { runtime.close(); } finally {
+            HandlerList.unregisterAll(chestListener);
+            HandlerList.unregisterAll(quitListener);
+            HandlerList.unregisterAll(interruptListener);
+            services.clear();
+        }
     }
 }

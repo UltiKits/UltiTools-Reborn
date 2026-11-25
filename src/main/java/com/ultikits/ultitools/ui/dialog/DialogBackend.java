@@ -93,6 +93,13 @@ public final class DialogBackend implements UiBackend {
         ticket.shown();
     }
 
+    /** Reports game-driven dismissal only for this backend's shown dialogs, on the server thread. */
+    public void interrupt(Player player) {
+        tickets.forEach((session, ticket) -> {
+            if (session.viewer().getUniqueId().equals(player.getUniqueId())) { ticket.interrupt(); }
+        });
+    }
+
     @Override public void update(GridSession session, Grid previous, Grid next) {
         throw new IllegalStateException("Dialogs do not support grids");
     }

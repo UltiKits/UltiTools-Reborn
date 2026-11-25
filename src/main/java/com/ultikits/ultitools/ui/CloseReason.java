@@ -3,6 +3,7 @@ package com.ultikits.ultitools.ui;
 /** Why an intent ended without an answer. Constants may be added in a 7.x minor release. */
 public enum CloseReason {
     /** The player closed or dismissed it. */ PLAYER,
+    /** The game closed the screen because the player died, changed worlds, or another screen opened. */ INTERRUPTED,
     /** The player left the server. */ DISCONNECTED,
     /** Another intent was shown to the same player. */ REPLACED,
     /** {@link ShowOptions#timeout()} elapsed. */ TIMED_OUT,

@@ -12,7 +12,11 @@ public final class ShowOptions {
     private final boolean noTimeout;
 
     private ShowOptions(Builder builder) { timeout = builder.timeout; noTimeout = builder.noTimeout; }
-    /** Intent-dependent defaults: 10 minutes for Notice, Confirm, Form and Choice; none for Grid. */
+    /**
+     * Intent-dependent defaults: 10 minutes for Notice, Confirm, Form and Choice; none for Grid.
+     * Detectable game interruptions end Dialogs with {@link CloseReason#INTERRUPTED}; other interruptions
+     * still need this timeout. Select a suitable explicit timeout for long-lived Dialogs.
+     */
     public static ShowOptions defaults() { return DEFAULTS; }
     /** Starts with intent-dependent defaults. */
     public static Builder builder() { return new Builder(); }

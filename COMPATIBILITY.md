@@ -241,6 +241,24 @@ All modules share one approximately 10-second UI-storage wait budget at server s
 
 中文补充：停服时所有模块的界面存储等待共用约 10 秒预算，只扣除界面存储卸载等待本身的耗时，不扣其他模块卸载钩子的耗时；存储等待耗尽预算后，后面的模块没有剩余等待时间，按 `UNKNOWN_KEPT_BY_STORE` 结束且不退还物品；非停服的单模块卸载仍各有约 10 秒上限。
 
+## Game-interrupted dialogs (as of 7.0.0)
+
+A shown Dialog (notice, confirmation, choice or form) ends with `Closed(INTERRUPTED)` when its player dies,
+changes worlds, or another inventory opens. Cancelled death and inventory-open events do not interrupt it.
+The result follows the existing viewer-context delivery path; the framework does not close the newly opened
+inventory. Showing the next framework screen still ends the old session with `REPLACED`. Chest grids and
+bound-container screens keep their existing close reasons (`PLAYER` for death, teleport and opening another
+inventory). Paper has no notification for other ways a Dialog can be displaced, such as another plugin
+showing its own Dialog, so those still rely on `TIMED_OUT` as a fallback. Module authors should give
+long-lived Dialogs a suitable explicit `ShowOptions` timeout instead of relying on the ten-minute default.
+
+中文补充：已显示的 Dialog（通知、确认、选择或表单）在玩家死亡、换世界或另一个物品栏打开时，
+以 `Closed(INTERRUPTED)` 结束；已取消的死亡与物品栏打开事件不打断它。结果沿现有玩家上下文路径
+投递，框架不会关掉刚打开的新物品栏。框架自己显示下一个界面时，旧会话仍是 `REPLACED`。箱子 Grid
+与绑定容器界面保留原有关闭原因（死亡、传送、另开物品栏均为 `PLAYER`）。其他打断方式（例如别的
+插件显示它自己的 Dialog）没有 Paper 通知，仍靠 `TIMED_OUT` 兜底。模块作者应给长时间挂着的 Dialog
+设置合理的显式 `ShowOptions` 超时，不要只依赖默认十分钟。
+
 ## Declarative screens use the UI service (as of 7.0.0)
 
 The declarative engine no longer inherits obliviate's `Gui`. It emits immutable `Grid` snapshots;

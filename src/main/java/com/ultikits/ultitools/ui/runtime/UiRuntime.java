@@ -243,7 +243,11 @@ public final class UiRuntime implements AutoCloseable {
             if (!grid.isOpenLocked()) { return false; }
             rendered = grid.renderedLocked();
         }
-        return containers.engine().apply(rendered, grid.viewer(), side, gesture);
+        boolean applied = containers.engine().apply(rendered, grid.viewer(), side, gesture);
+        // Paper corrects the clicking client as soon as its event returns: refresh this display copy now.
+        // Other viewers retain their queued redraw; deferred drags use this same exit on their execution tick.
+        if (applied) { grid.redraw(); }
+        return applied;
     }
 
     /** Returns the immutable grid snapshot used for gestures and the last backend notification. */

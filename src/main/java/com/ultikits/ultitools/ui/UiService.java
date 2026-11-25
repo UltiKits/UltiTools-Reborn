@@ -19,6 +19,10 @@ import org.jetbrains.annotations.ApiStatus;
  * {@code Closed(DISCONNECTED)} chosen; its result completes in a task of the global context. A viewer who
  * quits ends the session with {@link CloseReason#DISCONNECTED}.
  *
+ * <p>A shown Dialog ends with {@link CloseReason#INTERRUPTED} if the player dies, changes worlds, or another
+ * inventory opens. Other plugins' dialogs have no server-side replacement signal, so undetectable interruptions
+ * still rely on {@link ShowOptions#timeout()}; give long-lived dialogs a suitable timeout.
+ *
  * <p>Unloading the owning module ends every session of that owner that has not completed: before the unload
  * returns, on the unloading thread, each screen is closed and each result completed, with
  * {@code Closed(OWNER_UNLOADED)} or with the outcome already chosen if there was one. Stopping the server
