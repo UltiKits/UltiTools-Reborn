@@ -3,7 +3,15 @@ package com.ultikits.ultitools.text.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.ultikits.ultitools.UltiToolsKeys;
+import com.ultikits.ultitools.abstracts.command.CommandKeys;
+import com.ultikits.ultitools.commands.CoreCommandKeys;
+import com.ultikits.ultitools.handler.HandlerKeys;
+import com.ultikits.ultitools.interfaces.impl.data.DataKeys;
+import com.ultikits.ultitools.manager.ManagerKeys;
+import com.ultikits.ultitools.services.impl.ServiceKeys;
 import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.utils.UtilsKeys;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -14,7 +22,11 @@ import org.junit.jupiter.api.Test;
 class FrameworkKeysCatalogueTest {
     @Test
     void everyFrameworkConstant_existsInBothShippedCatalogues() throws Exception {
-        assertKeysPresent(constants(FrameworkKeys.class));
+        for (Class<?> type : List.of(FrameworkKeys.class, CommandKeys.class, UltiToolsKeys.class,
+                ManagerKeys.class, HandlerKeys.class, ServiceKeys.class, DataKeys.class,
+                UtilsKeys.class, CoreCommandKeys.class)) {
+            assertKeysPresent(constants(type));
+        }
     }
 
     @Test
