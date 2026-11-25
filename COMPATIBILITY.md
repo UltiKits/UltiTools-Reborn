@@ -495,18 +495,55 @@ one-shot task may finish. This guarantee applies to the module-owned scheduler, 
 副本可能使动作变成 `NOTHING` 或其他不支持的动作，本次输入因此不生效。请等重绘完成后重试，
 不要反复强制动作，也不要直接修改展示物品栏。
 
-## Adventure chat confirmation callbacks (as of 7.0.0)
+## Legacy chest pages and confirmation widgets removed (as of 7.0.0)
 
-`ChatCallbackManager` and its hidden `/ultitools_callback` command are removed. Module authors
-who used that manager directly must migrate to Adventure's `ClickEvent.callback` with
-`ClickCallback.Options.builder().uses(1).build()` for a one-use callback.
-`ChatConfirm` uses this API for both buttons and runs a button's action only when the clicking
-audience is a player whose UUID matches the target player's UUID. Each button has its own
-one-use callback; the text, colours and message delivery are unchanged.
+7.0 removes `abstracts.gui.BaseInventoryPage`, `abstracts.gui.BasePaginationPage`,
+`abstracts.gui.BaseConfirmationPage`, `widgets.Confirm`, `widgets.impl.ChatConfirm`,
+`widgets.impl.InventoryConfirm`, `entities.Buttons`, `entities.ViewType` (all under
+`com.ultikits.ultitools`), the old `abstracts.gui` package documentation, and
+`DependenceManagers#initInventoryAPI`. Rebuild modules against 7.0. The framework no longer bundles
+obliviate-invs or UniversalScheduler. Modules using `mc.obliviate.*` or `com.github.Anon8281.*`
+directly must package those libraries themselves or rewrite that code; 6.x did not relocate them,
+so such modules were using the framework's copies.
+
+| 6.x | 7.0 |
+|---|---|
+| Extend `BaseInventoryPage`, implement `setupContent`, use `createActionButton` / `addToBottomRow` | Extend `DeclarativeGui`, call `super(ui, scheduler, player, id, Text.plain("Title"), rows)`, return a tree of `Container`, `TextButton` and `ItemDisplay` from `build(BuildContext)`, then call `open()`; see "Declarative screens use the UI service" above |
+| Extend `BasePaginationPage`, implement `provideItems()`, call `goToPage(n)` | Keep the current page in a `StatefulWidget`'s `State`; build its data slice with `GridView.builder().startSlot(...).columns(...).items(pageItems, itemBuilder).build()`. Use a `TextButton`'s `onClick(Runnable)` to call `setState(...)` and rebuild the slice. `GridView` has no page-number API. For route navigation, `Navigator.of(context)` may return null; otherwise its state offers `push(route)`, `pop()`, `pushReplacement(route)` and `canPop()` |
+| `BaseConfirmationPage`, `BaseConfirmationPage.builder(player)...open()`, or `Confirm.gui(player, title, desc, onConfirm, onCancel)` | `ui.show(player, Confirm.builder(Text.plain(title)).addBody(Text.plain(desc)).build()).result()` using `com.ultikits.ultitools.ui.Confirm`; observe `UiResult.Completed` (`true` = yes, `false` = no) or `UiResult.Closed(reason)`. Labels default to framework keys `ui.yes` / `ui.no`; override with `.yes(Text)` / `.no(Text)` |
+| `Confirm.chat(player, title, desc, onConfirm, onCancel)` | Send two clickable Adventure components from the module; see the example below |
+| `ViewType`, `Buttons` | No replacement enum; use a `TextButton`'s own label or framework keys `ui.ok` / `ui.cancel` |
+
+### Module-owned clickable chat prompts
+
+Import `java.util.UUID`, `org.bukkit.entity.Player`, `net.kyori.adventure.text.Component`,
+`net.kyori.adventure.text.format.NamedTextColor`, and
+`net.kyori.adventure.text.event.ClickCallback` / `ClickEvent`. Given a target `Player player` and
+`Runnable onConfirm` / `onCancel`, the module can send:
+
+```java
+UUID target = player.getUniqueId();
+ClickCallback.Options once = ClickCallback.Options.builder().uses(1).build();
+Component yes = Component.text("[Confirm]", NamedTextColor.GREEN).clickEvent(ClickEvent.callback(audience -> {
+    if (audience instanceof Player clicker && clicker.getUniqueId().equals(target)) {
+        onConfirm.run();
+    }
+}, once));
+Component no = Component.text("[Cancel]", NamedTextColor.RED).clickEvent(ClickEvent.callback(audience -> {
+    if (audience instanceof Player clicker && clicker.getUniqueId().equals(target)) {
+        onCancel.run();
+    }
+}, once));
+player.sendMessage(Component.text("Delete this home?").appendNewline().append(yes).append(Component.space()).append(no));
+```
+
+When writing callbacks in a module, account for these properties. Where a bullet mentions 6.x, it
+compares with the removed framework chat confirmation (`widgets.impl.ChatConfirm`, which ran its
+buttons through the `/ultitools_callback` command), not with callbacks a module wrote itself:
 
 - **Lifetime:** prompts expire on the server after Paper's default callback lifetime (about 12 hours).
   Clicking an expired button does nothing. In 6.x, pending callbacks did not expire.
-- **Command pipeline:** clicks no longer fire `PlayerCommandPreprocessEvent`, produce the console's
+- **Command pipeline:** clicks do not fire `PlayerCommandPreprocessEvent`, produce the console's
   `issued server command: /ultitools_callback ...` log line, or pass through other plugins' command blockers.
 - **Action exceptions:** Paper logs exceptions thrown by a button's action without disconnecting the player;
   the 6.x callback command silently swallowed exceptions.
@@ -517,9 +554,28 @@ one-use callback; the text, colours and message delivery are unchanged.
   (by default about 12 hours after registration), clicking an unused old button can still run action code
   from the unloaded module. In 6.x, these callbacks were retained without an expiry.
 
+中文补充：7.0 删除三个旧箱子页面基类、旧 `widgets.Confirm` 及其聊天／箱子实现、`Buttons`、
+`ViewType` 与 `DependenceManagers#initInventoryAPI`，不保留废弃桥接；模块须按 7.0 重新构建。
+表中通用页面改为 `DeclarativeGui` 的组件树；分页在 `State` 中维护页码，用
+`GridView.items(列表, 构建函数)` 放入当前页切片，由 `TextButton` 通过 `setState(...)` 翻页
+（`GridView` 没有页码 API）；路线切换可用非空 `Navigator.of(context)`
+返回的状态的 `push`、`pop`、`pushReplacement`、`canPop`。确认改用 `ui.Confirm`，结果区分
+`Completed(true/false)` 与 `Closed(reason)`，默认按钮键为 `ui.yes` / `ui.no`，可用 `yes` / `no`
+覆盖；旧按钮枚举无替代类型，文字改用组件标签或 `ui.ok` / `ui.cancel`。框架不再打包
+obliviate-invs、UniversalScheduler，6.x 没有重定位，直接用这些库的模块需自行打包或改写。
+需要“聊天里点一下”时由模块自己发送上述 Adventure 回调，按 UUID 限定目标，两个按钮各限一次：
+默认约 12 小时过期、不经命令管线、动作异常由 Paper 记录、两按钮互相独立（互斥须模块自己保证）、
+卸载模块不会撤销待点回调；模块必须据此安排动作生命周期。
+
+## Adventure chat confirmation callbacks (as of 7.0.0)
+
+`ChatCallbackManager` and its hidden `/ultitools_callback` command are removed. Module authors
+who used that manager directly must migrate to Adventure's `ClickEvent.callback` with
+`ClickCallback.Options.builder().uses(1).build()` for a one-use callback.
+The framework's own chat confirmation (`Confirm.chat`/`ChatConfirm`) is removed as well; see the section above.
+
 中文补充：7.0 删除 `ChatCallbackManager` 与隐藏命令 `/ultitools_callback`，直接使用过它的模块
-须改用 `ClickEvent.callback`。聊天确认按钮仅接受目标玩家（比较 UUID）点击，确认、取消各自一次；
-文字、颜色与发送方式不变。
+须改用 `ClickEvent.callback`；框架自己的 `Confirm.chat` / `ChatConfirm` 也已删除，替代写法见上节。
 
 ## Native item and sound APIs (as of 7.0.0)
 
@@ -5803,8 +5859,8 @@ The modules, not the framework, choose and document these remaining differences:
 
 ### Where runtime dependencies come from
 
-The framework JAR bundles exactly two libraries: obliviate-invs (GUI) and UniversalScheduler
-(scheduling). Everything else is not in the JAR and arrives by one of two routes:
+As of 7.0.0 the framework JAR bundles no third-party library (6.x bundled obliviate-invs and UniversalScheduler).
+Every runtime dependency arrives by one of two routes:
 
 | Delivery route | Version decided by | Examples |
 |---|---|---|

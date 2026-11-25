@@ -3,9 +3,6 @@ package com.ultikits.ultitools.utils;
 import static com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState;
 import static com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.CALLS_REAL_METHODS;
-import static org.mockito.Mockito.mockStatic;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,13 +16,8 @@ import org.junit.jupiter.api.Timeout;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
-import org.mockito.MockedStatic;
 
-import com.ultikits.ultitools.widgets.impl.ChatConfirm;
-
-import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -94,35 +86,6 @@ class MessageUtilsComponentDeliveryTest {
         assertThat(player.nextComponentMessage())
                 .as("one component is one chat message; a newline inside it must not split it")
                 .isNull();
-    }
-
-    @Test
-    @DisplayName("ChatConfirm.show delivers both button click events to the player")
-    void chatConfirm_buttonsKeepClickEvents() {
-        ClickEvent<?> confirmClick = ClickEvent.custom(Key.key("test", "confirm"));
-        ClickEvent<?> cancelClick = ClickEvent.custom(Key.key("test", "cancel"));
-        // MockBukkit has no callback provider. Only the factory is stubbed; message delivery is real.
-        try (MockedStatic<ClickEvent> callbacks = mockStatic(ClickEvent.class, CALLS_REAL_METHODS)) {
-            callbacks.when(() -> ClickEvent.callback(any(), any(ClickCallback.Options.class)))
-                    .thenReturn(confirmClick, cancelClick);
-
-            new ChatConfirm(player, "Title", "Description", "Yes", "No",
-                    () -> { /* Delivery test does not execute the confirm action. */ },
-                    () -> { /* Delivery test does not execute the cancel action. */ }).show();
-        }
-
-        Component title = player.nextComponentMessage();
-        Component description = player.nextComponentMessage();
-        Component buttons = player.nextComponentMessage();
-        assertThat(title).isNotNull();
-        assertThat(description).isNotNull();
-        assertThat(buttons).isNotNull();
-        assertThat(buttons.children()).hasSize(3);
-        assertThat(buttons.children().get(0).clickEvent())
-                .as("the confirm callback event must survive delivery").isEqualTo(confirmClick);
-        assertThat(buttons.children().get(2).clickEvent())
-                .as("the cancel callback event must survive delivery").isEqualTo(cancelClick);
-        assertThat(player.nextComponentMessage()).isNull();
     }
 
     /**
