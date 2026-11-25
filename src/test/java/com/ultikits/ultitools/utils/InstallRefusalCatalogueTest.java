@@ -80,11 +80,11 @@ class InstallRefusalCatalogueTest {
     void integrityFailureIsRefusedWithItsReason(StubCatalogue.Mode mode) {
         catalogue.mode(mode);
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", StubCatalogue.VERSION);
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", StubCatalogue.VERSION);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", StubCatalogue.VERSION);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_INTEGRITY_FAILED);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("demo", StubCatalogue.VERSION);
     }
 
     @Test
@@ -92,12 +92,12 @@ class InstallRefusalCatalogueTest {
     void licensedVersionIsRefusedWithItsReason() {
         ultiTools.when(UltiTools::getPluginVersion).thenReturn(StubCatalogue.LICENSED_API_LEVEL);
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo",
                 StubCatalogue.LICENSED_VERSION);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_LICENCE_REQUIRED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", StubCatalogue.LICENSED_VERSION);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_LICENCE_REQUIRED);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("demo", StubCatalogue.LICENSED_VERSION);
         for (StubCatalogue.Request request : catalogue.requests()) {
             assertThat(request.path()).as("nothing downloaded").doesNotEndWith("/download");
         }
@@ -108,8 +108,9 @@ class InstallRefusalCatalogueTest {
     void bothReasonsAreTranslated() throws IOException {
         JsonObject english = catalogue("en");
         JsonObject chinese = catalogue("zh");
-        for (String key : new String[] {PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED,
-                PluginInstallUtils.InstallResult.Keys.REASON_LICENCE_REQUIRED}) {
+        for (String key : new String[] {
+                "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。",
+                "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。"}) {
             assertThat(english.has(key)).as(key).isTrue();
             assertThat(chinese.has(key)).as(key).isTrue();
             String en = String.format(english.get(key).getAsString(), "demo", "1.1");

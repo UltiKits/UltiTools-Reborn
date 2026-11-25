@@ -55,6 +55,7 @@ import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
 import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
+import com.ultikits.ultitools.listeners.PendingChangesJoinListener;
 import com.ultikits.ultitools.listeners.PlayerJoinListener;
 import com.ultikits.ultitools.manager.CommandExecutionManager;
 import com.ultikits.ultitools.manager.CommandManager;
@@ -85,6 +86,7 @@ import com.ultikits.ultitools.utils.CloudFeatures;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.OfficialLanguageFiles;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
+import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks;
 import com.ultikits.ultitools.websocket.PanelResponderRegistry;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
@@ -145,6 +147,12 @@ public final class UltiTools extends JavaPlugin implements Localized {
      * class loader is built, decided after the modules load.
      */
     private ModuleFileTransactions moduleFileTransactions;
+
+    /** @return the journal that also recorded the decisions of this start */
+    @org.jetbrains.annotations.ApiStatus.Internal
+    public ModuleFileTransactions getModuleFileTransactions() {
+        return moduleFileTransactions;
+    }
     /** Metadata and minimum-API decisions shared by this start's class path and discovery. */
     private ModuleJarAdmission moduleJarAdmission;
     /**
@@ -390,11 +398,11 @@ public final class UltiTools extends JavaPlugin implements Localized {
         this.eventBus = new EventBus();
 
         if (!initDependencies()) {
-            moduleFileTransactions.flushReports(getLogger(), text -> text);
+            moduleFileTransactions.flushReports(getLogger(), text -> text, null);
             return;
         }
         initLanguage();
-        moduleFileTransactions.flushReports(getLogger(), this::i18n);
+        moduleFileTransactions.flushReports(getLogger(), this::i18n, CommandRuntime.messages());
         initDataStore();
         // The panel responder registry must exist before any module loads, because a module
         // may claim a responder while it loads. Created after the dependency check, so an early
@@ -421,6 +429,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
         registerCommands();
         commandManager.registerInternalListeners();
         Bukkit.getServer().getPluginManager().registerEvents(new PlayerJoinListener(), this);
+        Bukkit.getServer().getPluginManager().registerEvents(new PendingChangesJoinListener(moduleFileTransactions), this);
+        PluginInstallUtils.initializeCatalogueUrl();
         // Plan 22-07 (S-16): registered once for the plugin's whole enabled lifetime, beside the
         // join listener above; whether an event is captured is decided per event, on the current
         // session, so an unlinked server writes no state file.
@@ -609,7 +619,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
                     "Failed to initialize plugin module loading", e);
         } finally {
-            moduleFileTransactions.flushReports(getLogger(), this::i18n);
+            moduleFileTransactions.flushReports(getLogger(), this::i18n, CommandRuntime.messages());
         }
     }
 

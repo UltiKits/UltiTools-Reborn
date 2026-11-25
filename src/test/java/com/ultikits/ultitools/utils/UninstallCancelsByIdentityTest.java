@@ -7,19 +7,16 @@ import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.moduleJar;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.namesIn;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.treeOf;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -107,6 +104,8 @@ class UninstallCancelsByIdentityTest {
         return plugin;
     }
 
+    private PendingChanges pending() { return new PendingChanges(new ModuleFileTransactions(dataFolder)); }
+
     private void stage() {
         ModuleFileTransactions.StageResult result = new ModuleFileTransactions(dataFolder).stageUpdate("demo",
                 Collections.singletonList(demo), codeSources, catalogue("demo", "1.1"),
@@ -139,34 +138,23 @@ class UninstallCancelsByIdentityTest {
 
     @Test
     @DisplayName("round 10: by the declared name with an unlistable modules folder, the staged update is cancelled and the next start does not revive the module")
-    void unlistableFolderByDeclaredName_cancelsTheStagedUpdate() throws IOException {
+    void unlistableFolderByDeclaredName_keepsTheStagedUpdate() throws IOException {
         stage();
         makeModulesFolderUnlistable();
-        List<String> cancelled = new ArrayList<>();
-
-        Throwable thrown = catchThrowable(() ->
-                PluginInstallUtils.uninstallPluginReporting("UltiTools-Demo", codeSources, cancelled));
-
-        assertThat(thrown).isInstanceOf(AccessDeniedException.class);
-        assertThat(pluginManager.getPluginList()).doesNotContain(demo);
-        assertThat(cancelled).containsExactly("1.1");
-        assertThat(treeOf(transactions)).isEmpty();
-        assertThat(nextStart()).as("the update is not applied: the module stays at the JAR the operator will remove")
-                .containsExactly("demo-1.0.jar");
+        var request = PluginInstallUtils.requestUninstall("UltiTools-Demo", null, codeSources);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_FOLDER_UNREADABLE);
+        assertThat(pluginManager.getPluginList()).contains(demo);
+        assertThat(pending().list()).singleElement().satisfies(item -> assertThat(item.kind()).isEqualTo(PendingChanges.Kind.UPDATE));
     }
 
     @Test
     @DisplayName("round 10: by the declared name with the JAR deleted, the staged update is cancelled")
     void deletedByDeclaredName_cancelsTheStagedUpdate() throws IOException {
         stage();
-        List<String> cancelled = new ArrayList<>();
-
-        PluginInstallUtils.UninstallReport report =
-                PluginInstallUtils.uninstallPluginReporting("UltiTools-Demo", codeSources, cancelled);
-
-        assertThat(report.jarsDeleted()).isTrue();
-        assertThat(cancelled).containsExactly("1.1");
-        assertThat(treeOf(transactions)).isEmpty();
+        var request = PluginInstallUtils.requestUninstall("UltiTools-Demo", null, codeSources);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_QUEUED, UpmKeys.UNINSTALL_ALSO_CANCELLED_UPDATE);
+        assertThat(pluginManager.getPluginList()).contains(demo);
+        assertThat(treeOf(transactions)).singleElement().asString().startsWith("remove-");
         assertThat(nextStart()).isEmpty();
     }
 
@@ -178,20 +166,16 @@ class UninstallCancelsByIdentityTest {
                 "needs POSIX permissions");
         permissions(modules, "r-x------");
         Assumptions.assumeFalse(Files.isWritable(modules.toPath()), "permissions are not enforced for this user");
-        List<String> cancelled = new ArrayList<>();
-
-        Throwable thrown = catchThrowable(() ->
-                PluginInstallUtils.uninstallPluginReporting("UltiTools-Demo", codeSources, cancelled));
-
-        assertThat(thrown).isInstanceOf(PluginInstallUtils.RemovalDeferredException.class);
-        assertThat(cancelled).containsExactly("1.1");
-        assertThat(treeOf(transactions)).allMatch(p -> p.startsWith("remove-"));
-        assertThat(nextStart()).as("the recorded removal runs; no update is applied").isEmpty();
+        var request = PluginInstallUtils.requestUninstall("UltiTools-Demo", null, codeSources);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_QUEUED, UpmKeys.UNINSTALL_ALSO_CANCELLED_UPDATE);
+        assertThat(pluginManager.getPluginList()).contains(demo);
+        assertThat(treeOf(transactions)).singleElement().asString().startsWith("remove-");
+        assertThat(nextStart()).isEmpty();
     }
 
     @Test
     @DisplayName("round 10: a download running when the module is uninstalled by the declared name, folder unlistable, is cancelled")
-    void runningDownloadByDeclaredNameUnlistableFolder_isCancelled() throws Exception {
+    void runningDownloadByDeclaredNameUnlistableFolder_isNotCancelled() throws Exception {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ExecutorService pool = Executors.newSingleThreadExecutor();
@@ -211,15 +195,12 @@ class UninstallCancelsByIdentityTest {
             assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
             makeModulesFolderUnlistable();
 
-            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting("UltiTools-Demo",
-                    codeSources, new ArrayList<>()));
+            var request = PluginInstallUtils.requestUninstall("UltiTools-Demo", null, codeSources);
+            assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_FOLDER_UNREADABLE);
+            permissions(modules, "rwx------");
             release.countDown();
-            ModuleFileTransactions.StageResult result = staging.get(20, TimeUnit.SECONDS);
-
-            assertThat(thrown).isInstanceOf(AccessDeniedException.class);
-            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
-            assertThat(treeOf(transactions)).isEmpty();
-            assertThat(nextStart()).containsExactly("demo-1.0.jar");
+            assertThat(staging.get(20, TimeUnit.SECONDS).getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
+            assertThat(pending().list()).singleElement().satisfies(item -> assertThat(item.kind()).isEqualTo(PendingChanges.Kind.UPDATE));
         } finally {
             release.countDown();
             pool.shutdownNow();
@@ -236,14 +217,11 @@ class UninstallCancelsByIdentityTest {
         UltiToolsPlugin twin = loaded("Twin", "demo");
         codeSources.with(twin, twinJar);
         stage();
-        List<String> cancelled = new ArrayList<>();
-
-        PluginInstallUtils.uninstallPluginReporting("Twin", codeSources, cancelled);
-
-        assertThat(twinJar).doesNotExist();
-        assertThat(cancelled).isEmpty();
-        assertThat(treeOf(transactions)).isNotEmpty();
-        assertThat(pluginManager.getPluginList()).containsExactly(demo);
+        var request = PluginInstallUtils.requestUninstall("Twin", null, codeSources);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_QUEUED);
+        assertThat(twinJar).exists();
+        assertThat(pending().list()).extracting(PendingChanges.PendingChange::kind)
+                .containsExactlyInAnyOrder(PendingChanges.Kind.UPDATE, PendingChanges.Kind.UNINSTALL);
     }
 
     @Test
@@ -262,14 +240,11 @@ class UninstallCancelsByIdentityTest {
                 Collections.singletonList(other), codeSources, catalogue("other", "1.1"),
                 downloading("OtherDeclared", "1.1", "other"));
         assertThat(staged.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
-        List<String> cancelled = new ArrayList<>();
-
-        PluginInstallUtils.uninstallPluginReporting("TargetDeclared", codeSources, cancelled);
-
-        assertThat(targetJar).doesNotExist();
-        assertThat(pluginManager.getPluginList()).contains(other).doesNotContain(target);
-        assertThat(cancelled).isEmpty();
-        assertThat(treeOf(transactions)).isNotEmpty();
+        var request = PluginInstallUtils.requestUninstall("TargetDeclared", null, codeSources);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_QUEUED);
+        assertThat(targetJar).exists();
+        assertThat(pending().list()).extracting(PendingChanges.PendingChange::kind)
+                .containsExactlyInAnyOrder(PendingChanges.Kind.UPDATE, PendingChanges.Kind.UNINSTALL);
     }
 
     @Test
@@ -282,17 +257,10 @@ class UninstallCancelsByIdentityTest {
         UltiToolsPlugin outside = loaded("External", "external");
         codeSources.with(outside, external);
         stage();
-        List<String> cancelled = new ArrayList<>();
-
-        // No JAR of External is in the modules folder, so the uninstall reports that -- and still
-        // runs its cancellation, in its finally, which is what is checked here.
-        Throwable outcome = catchThrowable(
-                () -> PluginInstallUtils.uninstallPluginReporting("External", codeSources, cancelled));
-
-        assertThat(outcome).isInstanceOf(java.nio.file.NoSuchFileException.class);
-        assertThat(cancelled).isEmpty();
-        assertThat(treeOf(transactions)).as("Demo's staged update is still there").isNotEmpty();
-        assertThat(pluginManager.getPluginList()).contains(demo).doesNotContain(outside);
+        var request = PluginInstallUtils.requestUninstall("External", null, codeSources);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_NO_JAR);
+        assertThat(pending().list()).singleElement().satisfies(item -> assertThat(item.kind()).isEqualTo(PendingChanges.Kind.UPDATE));
+        assertThat(pluginManager.getPluginList()).contains(demo, outside);
     }
 
     @Test
@@ -305,15 +273,11 @@ class UninstallCancelsByIdentityTest {
                 .replace("\"state\": \"PENDING\"", "\"state\": \"NEEDS_OPERATOR\"");
         Files.write(records[0].toPath(), text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         List<String> tree = treeOf(transactions);
-        List<String> cancelled = new ArrayList<>();
-
-        Throwable outcome = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting("Demo", codeSources, cancelled));
-
-        assertThat(outcome).isInstanceOf(PluginInstallUtils.UninstallRefusedException.class)
-                .hasMessageContaining(records[0].getAbsolutePath());
+        var request = PluginInstallUtils.requestUninstall("Demo", null, codeSources);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_REFUSED_HELD_FOR_OPERATOR);
+        assertThat(PendingTestValues.values(request.replies().getFirst().args())).contains(records[0].getAbsolutePath());
         assertThat(pluginManager.getPluginList()).contains(demo);
         assertThat(new File(modules, "demo-1.0.jar")).exists();
-        assertThat(cancelled).isEmpty();
         assertThat(treeOf(transactions)).isEqualTo(tree);
     }
 
@@ -324,13 +288,10 @@ class UninstallCancelsByIdentityTest {
         UltiToolsPlugin other = loaded("Other", "other");
         codeSources.with(other, otherJar);
         stage();
-        List<String> cancelled = new ArrayList<>();
-
-        PluginInstallUtils.uninstallPluginReporting("Other", codeSources, cancelled);
-
-        assertThat(otherJar).doesNotExist();
-        assertThat(cancelled).isEmpty();
-        assertThat(treeOf(transactions)).isNotEmpty();
-        assertThat(pluginManager.getPluginList()).containsExactly(demo);
+        var request = PluginInstallUtils.requestUninstall("Other", null, codeSources);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_QUEUED);
+        assertThat(otherJar).exists();
+        assertThat(pending().list()).extracting(PendingChanges.PendingChange::kind)
+                .containsExactlyInAnyOrder(PendingChanges.Kind.UPDATE, PendingChanges.Kind.UNINSTALL);
     }
 }

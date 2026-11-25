@@ -125,15 +125,15 @@ class ModuleJarIndexUninstallTest {
         UltiToolsPlugin plugin = loaded(IndexFixtureModule.class, "Fixture");
         loaderRead(MAIN, a, b);
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting("Fixture",
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply("Fixture",
                 module -> module == plugin ? a : null);
 
         assertThat(a).doesNotExist();
         assertThat(b).as("it declares the loaded module's main class: after a restart it loads that module again")
                 .doesNotExist();
-        assertThat(report.jarsDeleted()).isTrue();
-        assertThat(report.deletedFiles()).containsExactly(a.getAbsolutePath(), b.getAbsolutePath());
-        assertThat(report.undeterminedEntries()).isEmpty();
+        assertThat(report.queued()).isTrue();
+        assertThat(report.files()).containsExactly(a.getAbsolutePath(), b.getAbsolutePath());
+        assertThat(report.undetermined()).isEmpty();
     }
 
     @Test
@@ -144,12 +144,12 @@ class ModuleJarIndexUninstallTest {
         UltiToolsPlugin plugin = loaded(IndexFixtureModule.class, "Fixture");
         loaderRead(MAIN, a, b);
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting("Fixture",
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply("Fixture",
                 module -> module == plugin ? a : null);
 
         assertThat(b).doesNotExist();
-        assertThat(report.deletedFiles()).containsExactly(a.getAbsolutePath(), b.getAbsolutePath());
-        assertThat(report.undeterminedEntries()).isEmpty();
+        assertThat(report.files()).containsExactly(a.getAbsolutePath(), b.getAbsolutePath());
+        assertThat(report.undetermined()).isEmpty();
     }
 
     @Test
@@ -161,12 +161,12 @@ class ModuleJarIndexUninstallTest {
         loaderRead(MAIN, a);
         loaderRead("com.example.FixtureExtra", prefixed);
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting("Fixture",
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply("Fixture",
                 module -> module == plugin ? a : null);
 
         assertThat(a).doesNotExist();
         assertThat(prefixed).exists();
-        assertThat(report.deletedFiles()).containsExactly(a.getAbsolutePath());
+        assertThat(report.files()).containsExactly(a.getAbsolutePath());
     }
 
     @Test
@@ -179,12 +179,12 @@ class ModuleJarIndexUninstallTest {
         loaderRead(MAIN, a);
         loaderRead(OTHER_MAIN, other);
 
-        PluginInstallUtils.uninstallPluginReporting("Fixture",
+        PendingTestValues.queueAndApply("Fixture",
                 module -> module == plugin ? a : module == bystander ? other : null);
 
         assertThat(a).doesNotExist();
         assertThat(other).exists();
-        assertThat(pluginManager.getPluginList()).containsExactly(bystander);
+        assertThat(pluginManager.getPluginList()).containsExactly(plugin, bystander);
     }
 
     @Test
@@ -197,10 +197,10 @@ class ModuleJarIndexUninstallTest {
         // Replaced after the start with a JAR of an unrelated module under the same name.
         jar("B.jar", "name: Unrelated\nmain: com.example.Unrelated\n");
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting("Fixture",
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply("Fixture",
                 module -> module == plugin ? a : null);
 
         assertThat(b).exists();
-        assertThat(report.deletedFiles()).containsExactly(a.getAbsolutePath());
+        assertThat(report.files()).containsExactly(a.getAbsolutePath());
     }
 }

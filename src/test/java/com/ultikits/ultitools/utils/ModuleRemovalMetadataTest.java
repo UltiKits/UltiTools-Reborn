@@ -42,16 +42,16 @@ class ModuleRemovalMetadataTest {
         assertThat(jar).exists();
         assertThat(Files.readAllBytes(record.toPath())).isEqualTo(original);
         assertThat(start.pendingReports()).hasSize(1);
-        assertThat(start.pendingReports().get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVAL_UNREADABLE);
+        assertThat(start.pendingReports().get(0).getKey()).isEqualTo(UpmKeys.START_REMOVAL_UNREADABLE.translationKey());
         assertThat(start.pendingReports().get(0).getLevel()).isEqualTo(Level.SEVERE);
-        assertThat(start.pendingReports().get(0).getArgs()[1].toString()).contains(attribute + " failed");
+        assertThat(start.pendingReports().get(0).getArgs()[2].toString()).contains(attribute + " failed");
 
         ModuleFileTransactions retry = new ModuleFileTransactions(data);
         retry.applyBeforeLoad();
         assertThat(jar).doesNotExist();
         assertThat(record).doesNotExist();
         assertThat(retry.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
-                .containsExactly(ModuleFileTransactions.Keys.REMOVED);
+                .containsExactly(UpmKeys.START_REMOVAL_REMOVED.translationKey());
     }
 
     @ParameterizedTest

@@ -101,7 +101,7 @@ class ModuleUpdateUninstallTest {
         start.applyBeforeLoad();
 
         assertThat(namesIn(modules)).containsExactly("demo-1.0.jar");
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVAL_FAILED,
+        assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_FAILED.translationKey(),
                 ModuleFileTransactions.Keys.UPDATE_ABANDONED);
         assertThat(treeOf(transactions)).hasSize(1).allMatch(p -> p.startsWith("remove-"));
     }
@@ -175,7 +175,7 @@ class ModuleUpdateUninstallTest {
 
         assertThat(warningsNaming(records, malformed)).hasSize(1);
         assertThat(oldJar).exists();
-        assertThat(keys(start)).doesNotContain(ModuleFileTransactions.Keys.REMOVED);
+        assertThat(keys(start)).doesNotContain(UpmKeys.START_REMOVAL_REMOVED.translationKey());
         assertThat(treeOf(transactions)).noneMatch(p -> p.startsWith("remove-"));
     }
 
@@ -225,7 +225,7 @@ class ModuleUpdateUninstallTest {
 
         assertThat(warningsNaming(records, invalid)).hasSize(1);
         assertThat(oldJar).doesNotExist();
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVED);
+        assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_REMOVED.translationKey());
     }
 
     @Test
@@ -243,7 +243,7 @@ class ModuleUpdateUninstallTest {
 
         assertThat(warningsNaming(records, existing[0])).hasSize(1);
         assertThat(oldJar).doesNotExist();
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVED);
+        assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_REMOVED.translationKey());
     }
 
     @Test
@@ -256,7 +256,7 @@ class ModuleUpdateUninstallTest {
         start.applyBeforeLoad();
 
         assertThat(oldJar).exists();
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVAL_SKIPPED);
+        assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_SKIPPED.translationKey());
     }
 
     @Test
@@ -269,7 +269,7 @@ class ModuleUpdateUninstallTest {
         start.applyBeforeLoad();
 
         assertThat(namesIn(modules)).isEmpty();
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVED,
+        assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_REMOVED.translationKey(),
                 ModuleFileTransactions.Keys.UPDATE_ABANDONED);
     }
 }

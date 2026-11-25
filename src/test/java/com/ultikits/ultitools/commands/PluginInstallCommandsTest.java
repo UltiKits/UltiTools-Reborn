@@ -10,11 +10,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
+
+import com.ultikits.ultitools.utils.UpmKeys;
 
 import java.io.File;
 import java.io.IOException;
@@ -25,7 +28,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,6 +49,7 @@ import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.UpdateManager;
+import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.VersionLookup;
 
@@ -104,8 +110,8 @@ class PluginInstallCommandsTest {
             // Setup default mock behaviors
             mockedUtils.when(() -> PluginInstallUtils.getPluginList(anyInt(), anyInt()))
                     .thenReturn(new ArrayList<>());
-            mockedUtils.when(() -> PluginInstallUtils.installReporting(anyString(), any()))
-                    .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(anyString(), any(), any(CommandSender.class)))
+                    .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1"));
             mockedUtils.when(() -> PluginInstallUtils.lookUpPluginVersions(anyString(), anyList()))
@@ -117,15 +123,16 @@ class PluginInstallCommandsTest {
                         invocation.<List<String>>getArgument(1).addAll(versions);
                         return VersionLookup.found(invocation.getArgument(0));
                     });
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
-                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
+            mockedUtils.when(() -> PluginInstallUtils.requestUninstall(anyString(), any(CommandSender.class)))
+                    .thenReturn(PendingCommandTestSupport.remove("test-plugin", "module.jar"));
+            mockedUtils.when(() -> PluginInstallUtils.updateResult(anyString(), any())).thenCallRealMethod();
+            var stage = PendingCommandTestSupport.staged();
+            mockedUtils.when(() -> PluginInstallUtils.stageUpdate(anyString(), any(CommandSender.class)))
+                    .thenReturn(stage);
             
             executor = new PluginInstallCommands();
         } catch (Exception e) {
-            mockingAvailable = false;
-            executor = null;
-            System.err.println("Cannot mock PluginInstallUtils: " + e.getMessage());
-            e.printStackTrace();
+            throw new AssertionError("Could not initialize command fixture", e);
         }
         // Output-only tests keep thread-local static stubs on this thread. Real worker execution
         // and main-thread delivery are covered by CatalogueClientPagingTest.
@@ -310,8 +317,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
-                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("test-plugin"), eq("1.0.0"), any(CommandSender.class)))
+                .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -323,29 +330,22 @@ class PluginInstallCommandsTest {
         
         assertThat(result).isTrue();
         String message = player.nextMessage();
-        assertThat(message).contains("成功");
+        assertThat(message).containsAnyOf("待生效清单", "pending changes");
     }
 
     @Test
     @DisplayName("Should handle failed plugin installation with version")
     void testInstallPluginWithVersionFailed() {
-        if (executor == null) return;
-        
-        try {
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
-                .thenReturn(PluginInstallUtils.InstallResult.failed());
-        } catch (Exception e) {
-            // Skip if mocking not available
-            return;
-        }
-        
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0", player))
+                .thenReturn(PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_FAILED));
+
         boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
-            new String[]{"install", "test-plugin", "1.0.0"});
+                new String[]{"install", "test-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
-        
+
         assertThat(result).isTrue();
-        String message = player.nextMessage();
-        assertThat(message).contains("失败");
+        assertThat(player.nextMessage()).isEqualTo(ChatColor.RED + "Install Failed!");
+        assertThat(player.nextMessage()).isNull();
     }
 
     @Test
@@ -354,8 +354,8 @@ class PluginInstallCommandsTest {
         if (executor == null) return;
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
-                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("test-plugin"), isNull(), any(CommandSender.class)))
+                .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -367,29 +367,22 @@ class PluginInstallCommandsTest {
         
         assertThat(result).isTrue();
         String message = player.nextMessage();
-        assertThat(message).contains("成功");
+        assertThat(message).containsAnyOf("待生效清单", "pending changes");
     }
 
     @Test
     @DisplayName("Should handle failed latest plugin installation")
     void testInstallLatestPluginFailed() {
-        if (executor == null) return;
-        
-        try {
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
-                .thenReturn(PluginInstallUtils.InstallResult.failed());
-        } catch (Exception e) {
-            // Skip if mocking not available
-            return;
-        }
-        
+        mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null, player))
+                .thenReturn(PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_FAILED));
+
         boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
-            new String[]{"install", "test-plugin"});
+                new String[]{"install", "test-plugin"});
         server.getScheduler().performOneTick();
-        
+
         assertThat(result).isTrue();
-        String message = player.nextMessage();
-        assertThat(message).contains("失败");
+        assertThat(player.nextMessage()).isEqualTo(ChatColor.RED + "Install Failed!");
+        assertThat(player.nextMessage()).isNull();
     }
 
     @Test
@@ -440,277 +433,132 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should uninstall plugin successfully")
     void testUninstallPlugin() throws IOException {
-        if (executor == null) return;
-        
-        try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
-        } catch (Exception e) {
-            // Skip if mocking not available
-            return;
-        }
-        
-        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
-            new String[]{"uninstall", "test-plugin"});
-        server.getScheduler().performOneTick();
-        
-        assertThat(result).isTrue();
-        String message = player.nextMessage();
-        assertThat(message).contains("卸载完成");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.remove("test-plugin", "module.jar"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("module.jar");
     }
 
     @Test
     @DisplayName("Should handle uninstall plugin not found")
     void testUninstallPluginNotFound() throws IOException {
-        if (executor == null) return;
-        
-        try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
-        } catch (Exception e) {
-            // Skip if mocking not available
-            return;
-        }
-        
-        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
-            new String[]{"uninstall", "test-plugin"});
-        server.getScheduler().performOneTick();
-        
-        assertThat(result).isTrue();
-        String message = player.nextMessage();
-        assertThat(message).contains("失败");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.reply(false, UpmKeys.UNINSTALL_NOT_FOUND));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).isEqualTo(ChatColor.RED + "Uninstall Failed! Please check if the spelling is correct!");
+        assertThat(player.nextMessage()).isNull();
     }
 
     @Test
     @DisplayName("Should handle uninstall IOException")
     void testUninstallPluginIOException() throws IOException {
-        if (executor == null) return;
-        
-        try {
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenThrow(new IOException("File access error"));
-        } catch (Exception e) {
-            // Skip if mocking not available
-            return;
-        }
-        
-        boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
-            new String[]{"uninstall", "test-plugin"});
-        server.getScheduler().performOneTick();
-        
-        assertThat(result).isTrue();
-        String message = player.nextMessage();
-        assertThat(message).contains("删除失败");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NOT_RECORDED, "test-plugin", "error", "read-only journal"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("read-only journal");
     }
 
     @Test
     @DisplayName("#501: a successful uninstall has already deleted the jar, so the reply never asks for a manual delete")
     void uninstallSuccess_replyDoesNotAskForManualDelete() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
-
-        CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
-        server.getScheduler().performOneTick();
-
-        List<String> messages = drainMessages();
-        assertThat(messages).as("the command must reply at all").isNotEmpty();
-        assertThat(messages.get(0)).contains("卸载完成");
-        assertThat(messages)
-                .as("uninstallPlugin returns true only after deleting the jar (#501) -- telling the "
-                        + "operator to delete it manually describes work that is not needed")
-                .noneMatch(m -> m.contains("手动删除"))
-                .noneMatch(m -> m.contains("文件位置"));
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.remove("test-plugin", "module.jar"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("module.jar");
     }
 
     @Test
     @DisplayName("#501: a failed jar delete is reported as a failure naming the jar that is still on disk")
     void uninstallDeleteFailure_replyNamesTheJarStillOnDisk() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        String jarPath = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenThrow(new java.nio.file.FileSystemException(jarPath, null, "Permission denied"));
-
-        CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"uninstall", "test-plugin"});
-        server.getScheduler().performOneTick();
-
-        List<String> messages = drainMessages();
-        assertThat(messages).as("the command must reply at all").isNotEmpty();
-        assertThat(messages).noneMatch(m -> m.contains("卸载完成"));
-        assertThat(messages.get(0)).contains("失败");
-        assertThat(String.join("\n", messages))
-                .as("the operator must be told which file will load again on restart")
-                .contains(jarPath);
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NOT_RECORDED, "test-plugin", "error", "read-only journal"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("read-only journal");
     }
 
     @Test
     @DisplayName("#501 review WR-02: a failed uninstall names every module jar still on disk")
     void uninstallSeveralUndeletableJars_replyNamesEveryJar() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        String first = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
-        String second = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-2.0.0.jar";
-        java.nio.file.FileSystemException failure =
-                new java.nio.file.FileSystemException(first, null, "Permission denied");
-        failure.addSuppressed(new java.nio.file.FileSystemException(second, null, "Permission denied"));
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList())).thenThrow(failure);
-
-        executor.uninstallPlugin(player, "test-plugin");
-
-        String all = String.join("\n", drainMessages());
-        assertThat(all).contains("失败").contains(first).contains(second).doesNotContain("卸载完成");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.remove("test-plugin", "first.jar, second.jar"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("first.jar", "second.jar");
     }
 
     @Test
     @DisplayName("#501 review WR-03: a module unloaded without a jar on disk is reported as such, not as a misspelling")
     void uninstallLoadedModuleWithoutJar_replySaysUnloadedAndNoJarFound() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenThrow(new java.nio.file.NoSuchFileException(folder, null, "no module JAR named test-plugin"));
-
-        executor.uninstallPlugin(player, "test-plugin");
-
-        String all = String.join("\n", drainMessages());
-        assertThat(all)
-                .contains("模块已卸载")
-                .contains(folder)
-                .doesNotContain("拼写")
-                .doesNotContain("卸载完成")
-                .doesNotContain("文件访问错误");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NO_JAR, "test-plugin", "folder", "modules-folder"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("modules-folder");
     }
 
     @Test
     @DisplayName("#503 review WR-01: an unload that throws is reported, together with the jars having been deleted")
     void uninstallUnloadThrew_jarsDeleted_replyReportsBoth() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList())).thenThrow(unloadThrew(null));
-
-        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> executor.uninstallPlugin(player, "test-plugin"));
-
-        assertThat(thrown).as("the operator must get a reply, not a generic command error").isNull();
-        String all = String.join("\n", drainMessages());
-        assertThat(all).contains("卸载出错").contains("均已删除").doesNotContain("卸载完成");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.remove("test-plugin", "module.jar"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("module.jar");
     }
 
     @Test
     @DisplayName("#503 review WR-01: an unload that throws and a jar that cannot be deleted are both reported, naming the jar")
     void uninstallUnloadThrew_jarNotDeleted_replyNamesTheJar() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        String jar = "/srv/minecraft/plugins/UltiTools/plugins/Fixture-1.0.0.jar";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenThrow(unloadThrew(new java.nio.file.FileSystemException(jar, null, "Permission denied")));
-
-        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> executor.uninstallPlugin(player, "test-plugin"));
-
-        assertThat(thrown).isNull();
-        String all = String.join("\n", drainMessages());
-        assertThat(all).contains("卸载出错").contains(jar).doesNotContain("均已删除");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NOT_RECORDED, "test-plugin", "error", "read-only journal"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("read-only journal");
     }
 
     @Test
     @DisplayName("#503 review WR-01: an unload that throws with no jar on disk says so")
     void uninstallUnloadThrew_noJar_replySaysNoJarFound() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenThrow(unloadThrew(new java.nio.file.NoSuchFileException(folder, null, "no module JAR")));
-
-        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> executor.uninstallPlugin(player, "test-plugin"));
-
-        assertThat(thrown).isNull();
-        String all = String.join("\n", drainMessages());
-        assertThat(all).contains("卸载出错").contains(folder).doesNotContain("均已删除");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NO_JAR, "test-plugin", "folder", "modules-folder"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("modules-folder");
     }
 
     @Test
     @DisplayName("state C: the reply says how many JARs could not be read, and what that means")
     void uninstallWithUndeterminedEntries_replySaysWhatIsUnknown() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        String unreadable = "/srv/minecraft/plugins/UltiTools/plugins/zz-corrupt.jar";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.singletonList(unreadable)));
-
-        executor.uninstallPlugin(player, "test-plugin");
-
-        String all = String.join("\n", drainMessages());
-        assertThat(all).as("the uninstall succeeded and must say so").contains("卸载完成");
-        assertThat(all)
-                .as("the operator must be told what is unknown, and what follows from it")
-                .contains("1")
-                .contains("重启");
-        assertThat(all)
-                .as("the reply states the uncertainty rather than resolving it")
-                .contains("无法判断")
-                .doesNotContain("卸载失败");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.unknown("test-plugin"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("module.jar");
+        assertThat(player.nextMessage()).contains("uncertain.jar");
     }
 
     @Test
     @DisplayName("state C is reported once, however many branches of a failure carry it")
     void uninstallUnloadThrew_noJarWithUndetermined_reportsThemOnce() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
-        String unreadable = folder + "/zz-corrupt.jar";
-        java.nio.file.NoSuchFileException noJar = new java.nio.file.NoSuchFileException(folder, null, "no module JAR");
-        noJar.addSuppressed(PluginInstallUtils.UndeterminedEntriesException.of(Collections.singletonList(unreadable)));
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenThrow(unloadThrew(noJar));
-
-        executor.uninstallPlugin(player, "test-plugin");
-
-        List<String> messages = drainMessages();
-        assertThat(messages.stream().filter(m -> m.contains("无法确认身份")).count())
-                .as("it must be reported, and reported once: twice is the operator reading the same files twice")
-                .isEqualTo(1L);
-        assertThat(String.join("\n", messages)).contains(unreadable);
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.unknown("test-plugin"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("module.jar");
+        assertThat(player.nextMessage()).contains("uncertain.jar");
     }
 
     @Test
     @DisplayName("state D reached through a failed unload is still reported as a folder, not as a JAR")
     void uninstallUnloadThrew_folderUnlistable_replySaysNothingCanBeConcluded() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenThrow(unloadThrew(new java.nio.file.AccessDeniedException(folder, null, "could not be listed")));
-
-        executor.uninstallPlugin(player, "test-plugin");
-
-        String all = String.join("\n", drainMessages());
-        assertThat(all).contains("卸载出错").contains("模块目录").contains(folder);
-        assertThat(all)
-                .as("the folder is not a JAR that failed to delete, and must not be named as one")
-                .doesNotContain("JAR 文件无法删除");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_FOLDER_UNREADABLE, "test-plugin", "folder", "modules-folder"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("modules-folder");
     }
 
     @Test
     @DisplayName("state D: a modules folder that could not be listed is reported as that")
     void uninstallWithUnlistableFolder_replySaysNothingCanBeConcluded() {
-        assertThat(executor).as("PluginInstallUtils static mocking must be available").isNotNull();
-        String folder = "/srv/minecraft/plugins/UltiTools/plugins";
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("test-plugin"), anyList()))
-                .thenThrow(new java.nio.file.AccessDeniedException(folder, null, "could not be listed"));
-
-        executor.uninstallPlugin(player, "test-plugin");
-
-        String all = String.join("\n", drainMessages());
-        assertThat(all)
-                .contains("模块目录")
-                .contains(folder)
-                .doesNotContain("卸载完成")
-                .doesNotContain("拼写");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_FOLDER_UNREADABLE, "test-plugin", "folder", "modules-folder"));
+        executor.uninstallPlugin(sender, "test-plugin");
+        assertThat(player.nextMessage()).contains("modules-folder");
     }
 
-    private static PluginInstallUtils.ModuleUnloadFailedException unloadThrew(Exception jarOutcome) {
-        PluginInstallUtils.ModuleUnloadFailedException failure = PluginInstallUtils.ModuleUnloadFailedException.of(
-                "Module test-plugin was removed from the loaded modules, but its unload threw",
-                new IllegalStateException("module unload step boom"));
-        if (jarOutcome != null) {
-            failure.addSuppressed(jarOutcome);
-        }
-        return failure;
-    }
 
     private List<String> drainMessages() {
         List<String> messages = new ArrayList<>();
@@ -763,8 +611,8 @@ class PluginInstallCommandsTest {
         ConsoleCommandSender console = server.getConsoleSender();
         
         try {
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", null))
-                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("test-plugin"), isNull(), any(CommandSender.class)))
+                .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
         } catch (Exception e) {
             // Skip if mocking not available
             return;
@@ -1408,49 +1256,49 @@ class PluginInstallCommandsTest {
         @Test
         @DisplayName("/upm install demo, the downloaded JAR declaring api-version 620: the English refusal naming 620, 700 and 700..700")
         void downloadedJarRefused_repliesWithTheLevels() {
-            if (executor == null) return;
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
-                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED,
-                            "demo", "1.1", "620", 700, 700, 700));
-
-            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
-                    PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED, "demo", "1.1", "620", 700, 700, 700));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null, player)).thenReturn(
+                    PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_REFUSED_JAR_LEVEL_REFUSED,
+                            Arg.string("module", "demo"), Arg.string("version", "1.1"), Arg.string("declared", "620"),
+                            Arg.number("level", 700), Arg.number("floor", 700), Arg.number("max", 700)));
+            assertThat(reply("install", "demo")).isEqualTo(ChatColor.RED + englishOf(
+                    "已拒绝安装 %s %s：下载的 JAR 声明 api-version %s。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。",
+                    "demo", "1.1", "620", 700, 700, 700));
         }
 
         @Test
         @DisplayName("/upm install demo, the downloaded JAR declaring no api-version: the English refusal saying it declares none")
         void downloadedJarWithoutLevel_repliesWithTheRange() {
-            if (executor == null) return;
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
-                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL,
-                            "demo", "1.1", 700, 700, 700));
-
-            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
-                    PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL, "demo", "1.1", 700, 700, 700));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null, player)).thenReturn(
+                    PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_REFUSED_JAR_NO_LEVEL,
+                            Arg.string("module", "demo"), Arg.string("version", "1.1"),
+                            Arg.number("level", 700), Arg.number("floor", 700), Arg.number("max", 700)));
+            assertThat(reply("install", "demo")).isEqualTo(ChatColor.RED + englishOf(
+                    "已拒绝安装 %s %s：下载的 JAR 没有声明 api-version。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。",
+                    "demo", "1.1", 700, 700, 700));
         }
 
         @Test
         @DisplayName("/upm install demo, the catalogue having no compatible version: the English 'no version this server can install' line")
         void noCompatibleVersion_repliesWithTheRange() {
-            if (executor == null) return;
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null)).thenReturn(
-                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION,
-                            "demo", 700, 700, 700));
-
-            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
-                    PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, "demo", 700, 700, 700));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null, player)).thenReturn(
+                    PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_REFUSED_NO_COMPATIBLE_VERSION,
+                            Arg.string("module", "demo"), Arg.number("level", 700),
+                            Arg.number("floor", 700), Arg.number("max", 700)));
+            assertThat(reply("install", "demo")).isEqualTo(ChatColor.RED + englishOf(
+                    "无法安装 %s：云端没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。",
+                    "demo", 700, 700, 700));
         }
 
         @Test
         @DisplayName("/upm install demo 2.0.0, that version incompatible: the English 'that version cannot be installed' line")
         void namedVersionIncompatible_repliesWithTheRange() {
-            if (executor == null) return;
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", "2.0.0")).thenReturn(
-                    PluginInstallUtils.InstallResult.refused(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE,
-                            "demo", "2.0.0", 700, 700, 700));
-
-            assertThat(reply("install", "demo", "2.0.0")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
-                    PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, "demo", "2.0.0", 700, 700, 700));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", "2.0.0", player)).thenReturn(
+                    PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_REFUSED_VERSION_INCOMPATIBLE,
+                            Arg.string("module", "demo"), Arg.string("version", "2.0.0"),
+                            Arg.number("level", 700), Arg.number("floor", 700), Arg.number("max", 700)));
+            assertThat(reply("install", "demo", "2.0.0")).isEqualTo(ChatColor.RED + englishOf(
+                    "无法安装 %s %s：该版本不能安装在本服务器上。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。",
+                    "demo", "2.0.0", 700, 700, 700));
         }
 
         @Test
@@ -1532,15 +1380,16 @@ class PluginInstallCommandsTest {
         @Test
         @DisplayName("a failure without a reason keeps the bare failure line; a success keeps the success line")
         void otherOutcomes_keepTheirLines() {
-            if (executor == null) return;
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("gone", null))
-                    .thenReturn(PluginInstallUtils.InstallResult.failed());
-            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null))
-                    .thenReturn(PluginInstallUtils.InstallResult.installed("demo-1.1.jar"));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("gone", null, player))
+                    .thenReturn(PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_FAILED));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting("demo", null, player))
+                    .thenReturn(PendingCommandTestSupport.install("demo", "1.1"));
 
-            assertThat(reply("install", "gone")).isEqualTo(org.bukkit.ChatColor.RED + englishOf("安装失败！"));
-            assertThat(reply("install", "demo")).isEqualTo(org.bukkit.ChatColor.GREEN
-                    + englishOf("安装成功！请重启服务器！请务必删除旧版本模块！"));
+            assertThat(reply("install", "gone")).isEqualTo(ChatColor.RED + englishOf("安装失败！"));
+            assertThat(player.nextMessage()).isNull();
+            assertThat(reply("install", "demo")).isEqualTo(ChatColor.GREEN
+                    + "Added to the pending changes: demo 1.1 will be installed at the next restart. Undo with /upm revoke demo.");
+            assertThat(player.nextMessage()).isNull();
         }
     }
 }

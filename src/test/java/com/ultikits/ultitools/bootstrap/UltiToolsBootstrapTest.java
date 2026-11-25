@@ -149,7 +149,7 @@ class UltiToolsBootstrapTest {
             @Override public void close() { /* No owned resource. */ }
         });
         try (ModuleClassLoader loader = result.classLoader()) {
-            result.transactions().flushReports(logger, text -> text);
+            result.transactions().flushReports(logger, text -> text, null);
             assertThat(loader.getURLs()).contains(module.toUri().toURL());
             assertThat(result.classPathFailure()).isNull();
             assertThat(reports).anySatisfy(record -> assertThat(record.getMessage())

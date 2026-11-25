@@ -30,6 +30,11 @@ class FrameworkKeysCatalogueTest {
     }
 
     @Test
+    void everyUpmConstant_existsInBothShippedCatalogues() throws Exception {
+        assertKeysPresent(constants(com.ultikits.ultitools.utils.UpmKeys.class));
+    }
+
+    @Test
     void positiveControl_detectsAMissingFixtureKey() throws Exception {
         assertThatThrownBy(() -> assertKeysPresent(constants(MissingFixture.class)))
                 .isInstanceOf(AssertionError.class).hasMessageContaining("ultitools:test.missing");

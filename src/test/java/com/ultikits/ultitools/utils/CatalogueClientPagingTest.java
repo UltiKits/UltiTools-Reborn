@@ -179,6 +179,11 @@ class CatalogueClientPagingTest {
             messages.add(invocation.getArgument(0));
             return null;
         }).when(sender).sendMessage(anyString());
+        doAnswer(invocation -> {
+            messageThreads.add(Thread.currentThread());
+            messages.add(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(invocation.getArgument(0)));
+            return null;
+        }).when(sender).sendMessage(any(net.kyori.adventure.text.Component.class));
         entries.get(10).addProperty("isLatest", true);
         UpdateManager updates = mock(UpdateManager.class);
         when(updates.isCheckComplete()).thenReturn(true);
@@ -260,7 +265,7 @@ class CatalogueClientPagingTest {
 
     private void assertCommandOutput(String action, List<String> messages) {
         assertThat(messages).anySatisfy(message -> assertThat(message).contains(
-                "versions".equals(action) ? "版本列表" : action.startsWith("install") ? "安装成功" : "未能暂存"));
+                "versions".equals(action) ? "版本列表" : action.startsWith("install") ? "已加入待生效清单" : "未能把 Demo 的更新加入待生效清单"));
         if ("versions".equals(action)) {
             for (String version : names()) {
                 assertThat(String.join("\n", messages)).contains(version);
@@ -279,12 +284,14 @@ class CatalogueClientPagingTest {
 
     private static MockedStatic<PluginInstallUtils> stagingThroughRealCatalogue() {
         MockedStatic<PluginInstallUtils> utils = mockStatic(PluginInstallUtils.class, CALLS_REAL_METHODS);
-        utils.when(() -> PluginInstallUtils.stageUpdate(MODULE)).thenAnswer(invocation -> {
+        utils.when(() -> PluginInstallUtils.stageUpdate(org.mockito.ArgumentMatchers.eq(MODULE),
+                org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
             assertThat(CatalogueClient.latestVersion(MODULE, LEVEL).getVersion()).isEqualTo("1.0.11");
             ModuleFileTransactions.StageResult result = mock(ModuleFileTransactions.StageResult.class);
             when(result.getOutcome()).thenReturn(ModuleFileTransactions.StageResult.Outcome.FAILED);
-            when(result.getReasonKey()).thenReturn("test failure");
-            when(result.getReasonArgs()).thenReturn(new Object[0]);
+            when(result.getReasonKey()).thenReturn(UpmKeys.REASON_DOWNLOAD_FAILED);
+            when(result.getReasonArgs()).thenReturn(new com.ultikits.ultitools.text.Arg[]{
+                    com.ultikits.ultitools.text.Arg.string("error", "test failure")});
             return result;
         });
         return utils;
@@ -306,11 +313,10 @@ class CatalogueClientPagingTest {
         assertThat(PluginInstallUtils.getPluginLatestDownloadLink(MODULE)).isEqualTo(downloadUrl(selected));
         assertQueries(3);
         queries.clear();
-        PluginInstallUtils.InstallResult installed = PluginInstallUtils.installReporting(MODULE, null);
-        assertThat(installed.isInstalled()).isTrue();
-        assertThat(installed.getFileName()).isEqualTo("demo-" + selected + ".jar");
-        java.nio.file.Path installedPath = modules.toPath().resolve(
-                markedLatest ? "demo-1.0.11.jar" : "demo-9.0.0.jar");
+        PluginInstallUtils.PendingResult installed = PluginInstallUtils.installReporting(MODULE, null);
+        assertThat(installed.queued()).isTrue();
+        assertThat(modules.toPath().resolve("demo-" + selected + ".jar")).doesNotExist();
+        var installedPath = PendingTestValues.stagedJar(modules, "demo-" + selected + ".jar").toPath();
         assertThat(Files.readAllBytes(installedPath)).isEqualTo(jar);
         assertThat(downloads.get()).isEqualTo(1);
         assertQueries(3);

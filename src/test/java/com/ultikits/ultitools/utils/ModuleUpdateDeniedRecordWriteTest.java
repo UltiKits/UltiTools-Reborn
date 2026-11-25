@@ -76,8 +76,8 @@ class ModuleUpdateDeniedRecordWriteTest {
 
         assertThat(thrown).as("the command gets a result, not an exception").isNull();
         assertThat(result[0].getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result[0].getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_RECORD_FAILED);
-        assertThat(String.valueOf(result[0].getReasonArgs()[0])).contains("injected: access denied");
+        assertThat(result[0].getReasonKey()).isEqualTo(UpmKeys.REASON_RECORD_FAILED);
+        assertThat(String.valueOf(PendingTestValues.values(java.util.List.of(result[0].getReasonArgs())).getFirst())).contains("injected: access denied");
         assertThat(treeOf(transactions)).as("no record, no staged JAR, no temporary file").isEmpty();
         assertThat(namesIn(modules)).containsExactly("demo-1.0.jar");
     }
@@ -96,8 +96,8 @@ class ModuleUpdateDeniedRecordWriteTest {
                 downloading("Demo", "1.1", "demo"));
 
         assertThat(denied.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(denied.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_ACCESS_DENIED);
-        assertThat(String.valueOf(denied.getReasonArgs()[0])).contains("injected: access denied");
+        assertThat(denied.getReasonKey()).isEqualTo(UpmKeys.REASON_ACCESS_DENIED);
+        assertThat(String.valueOf(PendingTestValues.values(java.util.List.of(denied.getReasonArgs())).getFirst())).contains("injected: access denied");
         assertThat(retried.getOutcome()).as("the denied attempt left no download reserved")
                 .isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
     }
@@ -114,7 +114,7 @@ class ModuleUpdateDeniedRecordWriteTest {
                 });
 
         assertThat(denied.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(denied.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_ACCESS_DENIED);
+        assertThat(denied.getReasonKey()).isEqualTo(UpmKeys.REASON_ACCESS_DENIED);
         assertThat(downloads).isEmpty();
         assertThat(treeOf(transactions)).isEmpty();
         assertThat(namesIn(modules)).containsExactly("demo-1.0.jar");

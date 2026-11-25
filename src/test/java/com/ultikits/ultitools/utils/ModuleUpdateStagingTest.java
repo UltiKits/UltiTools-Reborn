@@ -84,8 +84,8 @@ class ModuleUpdateStagingTest {
         ModuleFileTransactions.StageResult result = stage(failingDownload("connection reset"));
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_DOWNLOAD_FAILED);
-        assertThat(String.valueOf(result.getReasonArgs()[0])).contains("connection reset");
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_DOWNLOAD_FAILED);
+        assertThat(String.valueOf(PendingTestValues.values(List.of(result.getReasonArgs())).getFirst())).contains("connection reset");
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -97,7 +97,7 @@ class ModuleUpdateStagingTest {
         ModuleFileTransactions.StageResult result = stage(downloading("Other", "1.1", "other"));
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_WRONG_IDENTITY);
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_WRONG_IDENTITY);
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -118,8 +118,8 @@ class ModuleUpdateStagingTest {
             result = stage(downloading("Demo", "1.1", "demo"));
         }
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE);
-        assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "IOException: hash read failed");
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_STAGED_UNREADABLE);
+        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "IOException: hash read failed");
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -134,8 +134,8 @@ class ModuleUpdateStagingTest {
             result = stage(downloading("Demo", "1.1", "demo"));
         }
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE);
-        assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "IOException: metadata read failed");
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_STAGED_UNREADABLE);
+        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "IOException: metadata read failed");
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -148,8 +148,8 @@ class ModuleUpdateStagingTest {
         ModuleFileTransactions.StageResult result = stage(downloading("Demo", "1.0", "demo"));
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_WRONG_VERSION);
-        assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "1.0", "1.1");
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_WRONG_VERSION);
+        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "1.0", "1.1");
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -165,7 +165,7 @@ class ModuleUpdateStagingTest {
                 catalogue("demo", "1.1"), (link, name, folder) -> downloads.add(name));
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_NOT_IN_MODULES_FOLDER);
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_NOT_IN_MODULES_FOLDER);
         assertThat(downloads).isEmpty();
         assertThat(snapshot()).isEqualTo(before);
     }
@@ -183,8 +183,8 @@ class ModuleUpdateStagingTest {
                 catalogue("demo", "1.1"), (link, name, folder) -> downloads.add(name));
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_SHARED_JAR);
-        assertThat(result.getReasonArgs()).containsExactly(oldJar.getAbsolutePath(), "Companion");
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_SHARED_JAR);
+        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath(), "Companion");
         assertThat(downloads).isEmpty();
         assertThat(snapshot()).isEqualTo(before);
     }
@@ -208,10 +208,10 @@ class ModuleUpdateStagingTest {
                 (link, name, folder) -> downloads.add(name));
 
         assertThat(selectedFirst.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(selectedFirst.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_SHARED_JAR);
-        assertThat(selectedFirst.getReasonArgs()).containsExactly(oldJar.getAbsolutePath(), "DemoCompanion");
+        assertThat(selectedFirst.getReasonKey()).isEqualTo(UpmKeys.REASON_SHARED_JAR);
+        assertThat(PendingTestValues.values(java.util.List.of(selectedFirst.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath(), "DemoCompanion");
         assertThat(companionFirst.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(companionFirst.getReasonArgs()).containsExactly(oldJar.getAbsolutePath(), "Demo");
+        assertThat(PendingTestValues.values(java.util.List.of(companionFirst.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath(), "Demo");
         assertThat(downloads).isEmpty();
         assertThat(snapshot()).isEqualTo(before);
     }
@@ -237,10 +237,10 @@ class ModuleUpdateStagingTest {
                 (link, name, folder) -> downloads.add(name));
 
         assertThat(demoFirst.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(demoFirst.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_AMBIGUOUS_IDENTIFY_STRING);
-        assertThat(demoFirst.getReasonArgs()).containsExactly("demo", "Demo, Twin");
-        assertThat(twinFirst.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_AMBIGUOUS_IDENTIFY_STRING);
-        assertThat(twinFirst.getReasonArgs()).containsExactly("demo", "Twin, Demo");
+        assertThat(demoFirst.getReasonKey()).isEqualTo(UpmKeys.REASON_AMBIGUOUS_IDENTIFY_STRING);
+        assertThat(PendingTestValues.values(java.util.List.of(demoFirst.getReasonArgs()))).containsExactly("demo", "Demo, Twin");
+        assertThat(twinFirst.getReasonKey()).isEqualTo(UpmKeys.REASON_AMBIGUOUS_IDENTIFY_STRING);
+        assertThat(PendingTestValues.values(java.util.List.of(twinFirst.getReasonArgs()))).containsExactly("demo", "Twin, Demo");
         assertThat(downloads).isEmpty();
         assertThat(snapshot()).isEqualTo(before);
     }
@@ -285,7 +285,7 @@ class ModuleUpdateStagingTest {
             cancelled.countDown();
 
             ModuleFileTransactions.StageResult result = staging.get(20, TimeUnit.SECONDS);
-            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
+            assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING);
             assertThat(treeOf(transactions)).as("no record is written for the uninstalled module").isEmpty();
         } finally {
             command.shutdownNow();
@@ -307,8 +307,8 @@ class ModuleUpdateStagingTest {
         ModuleFileTransactions.StageResult result = stage(downloading("Demo", "1.1", "demo"));
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_NEEDS_OPERATOR);
-        assertThat(result.getReasonArgs()).containsExactly("a foreign file", records[0].getAbsolutePath());
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_NEEDS_OPERATOR);
+        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("a foreign file", records[0].getAbsolutePath());
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -329,8 +329,8 @@ class ModuleUpdateStagingTest {
                     catalogue("demo", "1.1"), (link, name, folder) -> downloads.add(name));
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_OLD_JAR_UNREADABLE);
-            assertThat(result.getReasonArgs()).containsExactly(oldJar.getAbsolutePath());
+            assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_OLD_JAR_UNREADABLE);
+            assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath());
             assertThat(downloads).isEmpty();
         } finally {
             Files.setPosixFilePermissions(oldJar.toPath(), original);
@@ -376,8 +376,8 @@ class ModuleUpdateStagingTest {
         ModuleFileTransactions.StageResult again = stage((link, name, folder) -> downloads.add(name));
 
         assertThat(again.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(again.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_RECORD_UNREADABLE);
-        assertThat(again.getReasonArgs()).containsExactly(records[0].getAbsolutePath(), "missing field newVersion");
+        assertThat(again.getReasonKey()).isEqualTo(UpmKeys.REASON_RECORD_UNREADABLE);
+        assertThat(PendingTestValues.values(java.util.List.of(again.getReasonArgs()))).containsExactly(records[0].getAbsolutePath(), "missing field newVersion");
         assertThat(downloads).isEmpty();
     }
 
@@ -473,7 +473,7 @@ class ModuleUpdateStagingTest {
                 () -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Demo"));
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING);
         assertThat(treeOf(transactions)).isEmpty();
         ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
         start.applyBeforeLoad();
@@ -489,7 +489,7 @@ class ModuleUpdateStagingTest {
                         new ModuleFileTransactions.RemovedModule(Collections.<String>emptyList(),
                                 Collections.singletonList("demo-module"), Collections.singletonList(oldJar.getName()))));
 
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING);
         assertThat(treeOf(transactions)).isEmpty();
     }
 

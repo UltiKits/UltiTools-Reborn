@@ -103,6 +103,7 @@ class BootstrapEnableHandoffTest {
     }
 
     @Test
+    @org.junit.jupiter.api.extension.ExtendWith(com.ultikits.ultitools.abstracts.command.CommandTestExtension.class)
     void moduleLoadingObservesTheSameTransactionsThatBootstrapApplied() throws Exception {
         BootstrapResult prepared = mock(BootstrapResult.class);
         ModuleFileTransactions transactions = mock(ModuleFileTransactions.class);
@@ -119,7 +120,7 @@ class BootstrapEnableHandoffTest {
             framework.initPluginModules();
             verify(managers.constructed().get(0)).init(loader);
             verify(transactions).observeAfterLoad(eq(Collections.emptyList()), any());
-            verify(transactions).flushReports(any(), any());
+            verify(transactions).flushReports(any(), any(), any(com.ultikits.ultitools.text.Messages.class));
             assertThat(field(framework, "moduleFileTransactions")).isSameAs(transactions);
         }
     }

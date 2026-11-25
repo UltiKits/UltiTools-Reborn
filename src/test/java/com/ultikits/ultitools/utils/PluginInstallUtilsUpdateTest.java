@@ -188,8 +188,8 @@ class PluginInstallUtilsUpdateTest {
                     ModuleUpdateFixtures.downloading("Demo", "1.1", "demo", "620"));
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_INCOMPATIBLE_API_LEVEL);
-            assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "620", 700, 700, 700);
+            assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_INCOMPATIBLE_API_LEVEL);
+            assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "620", 700, 700, 700);
             assertThat(snapshot()).isEqualTo(before);
         }
 
@@ -202,8 +202,8 @@ class PluginInstallUtilsUpdateTest {
                     ModuleUpdateFixtures.downloading("Demo", "1.1", "demo", "710"));
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_INCOMPATIBLE_API_LEVEL);
-            assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "710", 700, 700, 700);
+            assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_INCOMPATIBLE_API_LEVEL);
+            assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "710", 700, 700, 700);
             assertThat(snapshot()).isEqualTo(before);
         }
 
@@ -216,8 +216,8 @@ class PluginInstallUtilsUpdateTest {
                     ModuleUpdateFixtures.downloading("Demo", "1.1", "demo", null));
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_NO_API_LEVEL);
-            assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", 700, 700, 700);
+            assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_NO_API_LEVEL);
+            assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", 700, 700, 700);
             assertThat(snapshot()).isEqualTo(before);
         }
 
@@ -244,8 +244,8 @@ class PluginInstallUtilsUpdateTest {
                         (link, name, folder) -> downloads.add(name));
 
                 assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-                assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_NO_COMPATIBLE_UPDATE);
-                assertThat(result.getReasonArgs()).containsExactly("demo", 700, 700, 700);
+                assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_NO_COMPATIBLE_UPDATE);
+                assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo", 700, 700, 700);
                 assertThat(downloads).isEmpty();
                 assertThat(snapshot()).isEqualTo(before);
             } finally {
@@ -327,14 +327,15 @@ class PluginInstallUtilsUpdateTest {
                          org.mockito.Mockito.mockStatic(com.ultikits.ultitools.UltiTools.class);
                  org.mockito.MockedConstruction<ModuleFileTransactions> transactions =
                          org.mockito.Mockito.mockConstruction(ModuleFileTransactions.class,
-                                 (mock, context) -> org.mockito.Mockito.when(mock.stageUpdate(
-                                         org.mockito.ArgumentMatchers.anyString(),
-                                         org.mockito.ArgumentMatchers.any(java.util.function.Supplier.class),
-                                         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                                         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                                 (mock, context) -> org.mockito.Mockito.when(mock.stageChange(
+                                          org.mockito.ArgumentMatchers.anyString(),
+                                          org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+                                          org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                                          org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                                          org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                                          .thenAnswer(invocation -> {
-                                             boundCatalogue.set(invocation.getArgument(3));
-                                             bound.set(invocation.getArgument(4));
+                                             boundCatalogue.set(invocation.getArgument(6));
+                                             bound.set(invocation.getArgument(7));
                                              return ModuleFileTransactions.StageResult.of(
                                                      ModuleFileTransactions.StageResult.Outcome.FAILED,
                                                      null, null, null, null);
