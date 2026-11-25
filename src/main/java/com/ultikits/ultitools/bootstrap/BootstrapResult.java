@@ -80,4 +80,18 @@ public final class BootstrapResult {
     ContributionRegistry contributions() { return contributions; }
 
     ContributionLedger ledger() { return ledger; }
+
+    /** Marks the start of enable, after which failed reload callbacks cannot refuse a running module. */
+    public void beginEnable() {
+        contributions().beginEnable();
+    }
+
+    /**
+     * Emits the enable-time custom content report after the server language is initialized.
+     *
+     * @param logger the runtime console logger
+     */
+    public void reportContent(Logger logger) {
+        BootstrapContentReport.enabled(contributions(), ledger(), logger);
+    }
 }

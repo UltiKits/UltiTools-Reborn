@@ -190,3 +190,15 @@ ulticloud:
     logout: "<white>/ulticloud logout<gray> - Unlink this server and revoke its credential"
     status: "<white>/ulticloud status<gray> - Show link and connection status"
     reconnect: "<white>/ulticloud reconnect<gray> - Retry the UltiCloud connection now"
+
+bootstrap_content:
+  summary: "模块 '<module>' 本次启动往游戏里加入了自定义内容：附魔 <enchantments> 个，标签改动 <tags> 处，数据包 <datapacks> 个。"
+  removed: "<yellow>模块 '<module>' 已不在，但它曾往游戏里加过自定义内容（<content>）。"
+  dropped: "<yellow>模块 '<module>' 不再提供：<content>。"
+  unknown: "无法读取「哪些模块加过自定义内容」的记录；在每个模块都成功启动过一次之前，卸载这类模块时的警告可能不完整。"
+  list: "附魔 <enchantments> 个、标签 <tags> 个、数据包 <datapacks> 个"
+  consequence:
+    enchantment: "<red>  物品上的这条附魔会永久丢失（物品所在区块被加载并保存时）。"
+    datapack: "<red>  它带的配方与进度已消失。"
+    tag: "  它加的物品分类已失效。"
+  worldgen_refused: "<red>模块 '<module>' 没有加载：它的数据包 '<pack>' 带有世界生成内容（<path>），UltiTools 7.0.0 不允许。"

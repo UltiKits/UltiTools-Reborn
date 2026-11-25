@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.ultikits.ultitools.UltiToolsKeys;
 import com.ultikits.ultitools.abstracts.command.CommandKeys;
+import com.ultikits.ultitools.bootstrap.BootstrapContentKeys;
 import com.ultikits.ultitools.commands.CoreCommandKeys;
 import com.ultikits.ultitools.handler.HandlerKeys;
 import com.ultikits.ultitools.interfaces.impl.data.DataKeys;
@@ -24,7 +25,7 @@ class FrameworkKeysCatalogueTest {
     void everyFrameworkConstant_existsInBothShippedCatalogues() throws Exception {
         for (Class<?> type : List.of(FrameworkKeys.class, CommandKeys.class, UltiToolsKeys.class,
                 ManagerKeys.class, HandlerKeys.class, ServiceKeys.class, DataKeys.class,
-                UtilsKeys.class, CoreCommandKeys.class)) {
+                UtilsKeys.class, CoreCommandKeys.class, BootstrapContentKeys.class)) {
             assertKeysPresent(constants(type));
         }
     }

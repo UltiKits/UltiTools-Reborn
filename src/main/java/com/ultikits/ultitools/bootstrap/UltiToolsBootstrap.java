@@ -73,6 +73,7 @@ public final class UltiToolsBootstrap implements PluginBootstrap {
             if (classPathFailure == null) {
                 EmbeddedDatapacks.prepare(dataFolder.toPath(), contributions, logger);
                 ledger = ContributionLedger.update(dataFolder.toPath(), admission, contributions, logger);
+                BootstrapContentReport.declared(contributions, logger);
                 channelInstaller(context, contributions, logger);
             }
             return new BootstrapResult(transactions, admission, loader, classPathFailure, run.failures, run.attempted, contributions, ledger);

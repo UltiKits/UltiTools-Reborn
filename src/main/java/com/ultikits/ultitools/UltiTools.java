@@ -394,6 +394,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             return;
         }
         initLanguage();
+        bootstrap.reportContent(getLogger());
         moduleFileTransactions.flushReports(getLogger(), this::i18n);
         initDataStore();
         // The panel responder registry must exist before any module loads, because a module
@@ -452,6 +453,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         moduleFileTransactions = prepared.transactions();
         moduleJarAdmission = prepared.admission();
         ultiToolsClassLoader = prepared.classLoader();
+        prepared.beginEnable();
     }
 
     private boolean initDependencies() {
