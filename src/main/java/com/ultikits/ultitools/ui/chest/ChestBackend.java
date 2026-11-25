@@ -52,9 +52,7 @@ public final class ChestBackend implements UiBackend, BoundSlotRenderer {
                 messages.render(grid.title(), session.viewer()));
         screens.put(session, screen);
         render(screen, grid);
-        if (session.viewer().openInventory(screen.getInventory()) == null) {
-            throw new IllegalStateException("Opening the chest inventory was cancelled");
-        }
+        screen.open();
     }
 
     @Override public void update(GridSession session, Grid previous, Grid next) {

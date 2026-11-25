@@ -10,6 +10,7 @@ import com.ultikits.ultitools.ui.SlotContainer;
 import com.ultikits.ultitools.ui.UiBackend;
 import com.ultikits.ultitools.ui.UiResult;
 import com.ultikits.ultitools.ui.UiService;
+import com.ultikits.ultitools.ui.UiSession;
 import com.ultikits.ultitools.ui.ViewerItems;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -21,6 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.LongSupplier;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
@@ -44,9 +46,23 @@ public final class UiRuntime implements AutoCloseable {
     private final Map<UUID, RuntimeSession<?>> active = new HashMap<>();
     private final Map<UUID, ViewerLane> lanes = new HashMap<>();
     private boolean closed;
+    private final long unloadWaitNanos;
+    private final LongSupplier nanoTime;
+    private @Nullable Long shutdownBudgetNanos;
 
     /** Creates the runtime with framework-owned scheduling and the server thread. */
     public UiRuntime(Scheduler scheduler, ContainerRuntime containers, Logger logger, Thread serverThread) {
+        this(scheduler, containers, logger, serverThread, Duration.ofSeconds(10));
+    }
+
+    UiRuntime(Scheduler scheduler, ContainerRuntime containers, Logger logger, Thread serverThread, Duration unloadWait) {
+        this(scheduler, containers, logger, serverThread, unloadWait, System::nanoTime);
+    }
+
+    UiRuntime(Scheduler scheduler, ContainerRuntime containers, Logger logger, Thread serverThread, Duration unloadWait,
+              LongSupplier nanoTime) {
+        unloadWaitNanos = unloadWait.toNanos();
+        this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
         this.containers = Objects.requireNonNull(containers, "containers");
         this.logger = Objects.requireNonNull(logger, "logger");
@@ -65,6 +81,15 @@ public final class UiRuntime implements AutoCloseable {
             if (!closed) { owners.add(service); }
             return service;
         }
+    }
+
+    /** Returns a diagnostic name for backend logging, read once when opening a session. */
+    public String ownerName(UiSession<?> session) {
+        Objects.requireNonNull(session, "session");
+        if (!(session instanceof RuntimeSession<?> own) || !own.runtime.equals(this)) {
+            throw new IllegalArgumentException("Session belongs to another UI runtime");
+        }
+        return own.service.owner();
     }
 
     /** Registers a backend, rejecting an equal priority independently of the supported intent types. */
@@ -143,6 +168,18 @@ public final class UiRuntime implements AutoCloseable {
         sessions.remove(session);
     }
 
+    /**
+     * Defers CANT_USE's reason to the original close continuation, allowing a same-tick quit to win.
+     * Cleanup is not queued a second tick later. The viewer lane hands off to the global pump on retirement.
+     */
+    public void deferInterruptedClose(GridSession session) {
+        RuntimeGridSession grid = ownGrid(session);
+        grid.dispatch(() -> {
+            grid.choose(new UiResult.Closed<>(CloseReason.INTERRUPTED));
+            grid.closeAndComplete();
+        });
+    }
+
     /** Handles a viewer quitting; continuations move to the global pump. */
     public void quit(Player player) {
         Objects.requireNonNull(player, "player");
@@ -178,7 +215,8 @@ public final class UiRuntime implements AutoCloseable {
             service.unloadingThread = Thread.currentThread();
             closing = sessions.stream().filter(session -> session.service.equals(service)).toList();
         }
-        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        long started = nanoTime.getAsLong();
+        long deadline = started + (shutdownBudgetNanos == null ? unloadWaitNanos : shutdownBudgetNanos);
         RuntimeCleanup cleanup = new RuntimeCleanup(this, service.owner());
         try {
             cleanup.run("Container prepare unload failed", () -> containers.prepareUnload(service.ownerIdentity, deadline));
@@ -192,6 +230,11 @@ public final class UiRuntime implements AutoCloseable {
             }
             cleanup.run("Container finish unload failed", () -> containers.finishUnload(service.ownerIdentity, deadline));
         } finally {
+            if (shutdownBudgetNanos != null) {
+                // Subtract elapsed monotonic time, not absolute deadlines, so clock wrap cannot replenish the budget.
+                long elapsed = Math.max(0, nanoTime.getAsLong() - started);
+                shutdownBudgetNanos = Math.max(0, shutdownBudgetNanos - elapsed);
+            }
             synchronized (lock) {
                 service.unloaded = true;
                 service.unloading = false;
@@ -212,7 +255,11 @@ public final class UiRuntime implements AutoCloseable {
             if (!grid.isOpenLocked()) { return false; }
             rendered = grid.renderedLocked();
         }
-        return containers.engine().apply(rendered, grid.viewer(), side, gesture);
+        boolean applied = containers.engine().apply(rendered, grid.viewer(), side, gesture);
+        // Paper corrects the clicking client as soon as its event returns: refresh this display copy now.
+        // Other viewers retain their queued redraw; deferred drags use this same exit on their execution tick.
+        if (applied) { grid.redraw(); }
+        return applied;
     }
 
     /** Returns the immutable grid snapshot used for gestures and the last backend notification. */
@@ -256,8 +303,14 @@ public final class UiRuntime implements AutoCloseable {
         if (failure instanceof VirtualMachineError fatal) { throw fatal; }
     }
 
-    @Override public void close() {
+    /** Starts one shared storage-wait budget for the complete server stop; repeated calls never extend it. */
+    public void beginShutdown() {
         checkThread();
+        if (shutdownBudgetNanos == null) { shutdownBudgetNanos = unloadWaitNanos; }
+    }
+
+    @Override public void close() {
+        beginShutdown();
         List<RuntimeUiService> services;
         synchronized (lock) {
             if (closed) { return; }

@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.scheduling.Scheduler;
+import com.ultikits.ultitools.ui.UiService;
 
 import java.io.File;
 import java.io.IOException;
@@ -264,6 +265,7 @@ public class PluginManager {
     private ClassLoader classLoader;
     @Getter
     private TaskManager taskManager;
+    private UiManager uiManager;
     @Getter
     private PlayerCacheManager playerCacheManager;
 
@@ -359,6 +361,8 @@ public class PluginManager {
     public void init(ClassLoader classLoader) throws IOException {
         this.classLoader = classLoader;
         this.taskManager = new TaskManager(UltiTools.getInstance());
+        DependenceManagers dependencies = UltiTools.getInstance().getDependenceManagers();
+        if (dependencies != null) { this.uiManager = dependencies.getUiManager(); }
         this.playerCacheManager = new PlayerCacheManager();
         registerFrameworkScheduledOwners();
         registerPlayerQuitListener();
@@ -576,6 +580,7 @@ public class PluginManager {
             releaseSupersededRegistrations(plugin);
             assemblePluginContainer(pluginContext, plugin, plugin.getClass(), classLoader);
         } catch (Exception | Error e) {
+            if (uiManager != null) { uiManager.unload(plugin); }
             if (taskManager != null) { taskManager.cancelAll(plugin); }
             restoreSupersededRegistrations(plugin);
             releaseConfigEntities(plugin);
@@ -875,6 +880,9 @@ public class PluginManager {
                 CommandRuntime.awaitAsyncCommands(plugin.getContext().getSingletonValues());
             }
         });
+        runUnregisterStep(plugin, "end UI sessions", () -> {
+            if (uiManager != null) { uiManager.unload(plugin); }
+        });
         runUnregisterStep(plugin, "cancel @Scheduled tasks", () -> {
             if (taskManager != null) {
                 taskManager.cancelAll(plugin);
@@ -1086,6 +1094,7 @@ public class PluginManager {
      * Unregister all plugins.
      */
     public void close() {
+        if (uiManager != null) { uiManager.beginShutdown(); }
         // No configuration is written at server stop (maintainer decision 2026-10-04): each module's never-saved
         // configuration changes are named once during its unload below, just before its entities are released.
         // Disconnect all external plugins first
@@ -2732,6 +2741,7 @@ public class PluginManager {
                 onPluginRegistered(plugin);
                 registerBukkit(plugin);
             } else {
+                if (uiManager != null) { uiManager.unload(plugin); }
                 if (taskManager != null) { taskManager.cancelAll(plugin); }
                 try { plugin.getContext().close(); }
                 finally {
@@ -2744,6 +2754,7 @@ public class PluginManager {
             return registerSelf;
         } catch (Exception | Error e) {
             if (!pluginList.contains(plugin)) {
+                if (uiManager != null) { uiManager.unload(plugin); }
                 if (taskManager != null) { taskManager.cancelAll(plugin); }
                 // #562: registerSelf() (or the close after it returned false) threw; the superseded
                 // copies keep running and get their registrations back. A listed copy failed after
@@ -3166,6 +3177,7 @@ public class PluginManager {
             assemblePluginContainer(pluginContext, plugin, pluginClass, classLoader);
             return plugin;
         } catch (Exception | Error failure) {
+            if (uiManager != null) { uiManager.unload(plugin); }
             if (taskManager != null) { taskManager.cancelAll(plugin); }
             restoreSupersededRegistrations(plugin);
             releaseConfigEntities(plugin);
@@ -3237,6 +3249,9 @@ public class PluginManager {
         pluginContext.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
         if (taskManager != null) {
             pluginContext.registerType(Scheduler.class, taskManager.schedulerFor(plugin));
+        }
+        if (uiManager != null) {
+            pluginContext.registerType(UiService.class, uiManager.serviceFor(plugin));
         }
         pluginContext.registerShutdownHook();
         pluginContext.setClassLoader(loader);

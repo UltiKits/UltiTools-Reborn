@@ -104,13 +104,22 @@ class RuntimeSession<R> implements UiSession<R> {
 
     /**
      * No supporting backend leaves the previous session untouched. Once a supporting backend is selected,
-     * replacement is committed before calling open: an open failure intentionally leaves the old session
-     * REPLACED and closes this one as UNSUPPORTED; it does not restore the previous screen.
+     * replacement is committed before calling open: an open failure leaves the old session REPLACED and
+     * never restores its screen. Backends may select an outcome first (chests use INTERRUPTED for rejected
+     * opens); an otherwise unhandled open exception selects UNSUPPORTED.
      */
     final void openTask(ShowOptions options) {
         if (!isOpen()) { return; }
         try {
-            if (!viewer.isOnline()) { requestClose(CloseReason.DISCONNECTED); return; }
+            if (!viewer.isOnline()) {
+                if (intent instanceof Grid) {
+                    takeBindings();
+                    requestClose(CloseReason.INTERRUPTED);
+                } else {
+                    requestClose(CloseReason.DISCONNECTED);
+                }
+                return;
+            }
             UiBackend selected = runtime.select(this);
             if (!isOpen()) { return; }
             if (selected == null) { requestClose(CloseReason.UNSUPPORTED); return; }

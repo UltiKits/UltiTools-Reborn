@@ -6,8 +6,10 @@ import java.util.concurrent.CompletionStage;
  * Where a container's contents are written. Module code.
  *
  * <p>During the owner's unload (a module reload or the server stopping) the framework calls {@code write} on the
- * unloading thread and then waits on that same thread for the answer, for at most the spec's commit timeout or
- * 10 seconds after the unload began, whichever comes first. Complete the stage without needing the server
+ * unloading thread and then waits on that same thread for the answer, for at most the spec's remaining commit
+ * timeout or the remaining unload wait, whichever comes first. An ordinary module unload has its own approximately
+ * 10-second wait; at server stop all modules share approximately 10 seconds, charged only while unloading UI
+ * storage, not while running other module shutdown hooks. Complete the stage without needing the server
  * thread: during an unload the server thread is the one waiting, and tasks scheduled for it no longer run. Keep
  * the resources {@code write} needs (connections, executors) open until the owner's containers have ended; the
  * framework ends them before the module's own shutdown code and before its data sources close.

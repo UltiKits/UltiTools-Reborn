@@ -10,6 +10,7 @@ import com.ultikits.ultitools.ui.GridSession;
 import com.ultikits.ultitools.ui.GridSlot;
 import com.ultikits.ultitools.ui.SlotBinding;
 import com.ultikits.ultitools.ui.UiBackend.BackendCallbacks;
+import com.ultikits.ultitools.ui.runtime.PlayerInventoryPreparation;
 import java.util.HashMap;
 import java.util.Map;
 import org.bukkit.Bukkit;
@@ -54,6 +55,28 @@ public final class ChestScreen implements InventoryHolder {
     void grid(Grid next) { grid = next; }
 
     boolean showing(InventoryView view) { return inventory.equals(view.getTopInventory()); }
+
+    void open() { openInventory(inventory); }
+
+    private boolean openInventory(Inventory next) {
+        try {
+            if (!session.viewer().isOnline() || session.viewer().isDead()) {
+                callbacks.closed(CloseReason.INTERRUPTED);
+                return false;
+            }
+            PlayerInventoryPreparation.beforeShow(session.viewer());
+            InventoryView opened = session.viewer().openInventory(next);
+            if (opened == null || !session.viewer().isOnline() || session.viewer().isDead()
+                    || !next.equals(session.viewer().getOpenInventory().getTopInventory())) {
+                callbacks.closed(CloseReason.INTERRUPTED);
+                return false;
+            }
+            return true;
+        } catch (Throwable failure) {
+            callbacks.closed(CloseReason.INTERRUPTED);
+            throw failure;
+        }
+    }
 
     SlotKind kind(int rawSlot) {
         if (rawSlot < 0) { return SlotKind.OUTSIDE; }
@@ -102,7 +125,12 @@ public final class ChestScreen implements InventoryHolder {
         if (closed || pendingTitle == null || reopenTask != null) { return; }
         reopenTask = scheduler.entity(session.viewer()).run(() -> {
             reopenTask = null;
-            if (pendingTitle == null || !session.isOpen() || !session.viewer().isOnline()) { return; }
+            if (pendingTitle == null || !session.isOpen()) { return; }
+            if (!session.viewer().isOnline() || session.viewer().isDead()) {
+                pendingTitle = null;
+                callbacks.closed(CloseReason.INTERRUPTED);
+                return;
+            }
             if (!showing(session.viewer().getOpenInventory()) || !session.viewer().getItemOnCursor().isEmpty()) { return; }
             reopen();
         });
@@ -110,17 +138,18 @@ public final class ChestScreen implements InventoryHolder {
 
     private void reopen() {
         Component nextTitle = pendingTitle;
-        Inventory next = Bukkit.createInventory(this, grid.rows() * Grid.COLUMNS, nextTitle);
-        next.setContents(inventory.getContents());
+        pendingTitle = null;
         reopening = true;
         try {
-            if (session.viewer().openInventory(next) != null) {
+            Inventory next = Bukkit.createInventory(this, grid.rows() * Grid.COLUMNS, nextTitle);
+            next.setContents(inventory.getContents());
+            if (openInventory(next)) {
                 inventory = next;
                 title = nextTitle;
-                pendingTitle = null;
-            } else {
-                callbacks.closed(CloseReason.PLAYER);
             }
+        } catch (Throwable failure) {
+            callbacks.closed(CloseReason.INTERRUPTED);
+            throw failure;
         } finally { reopening = false; }
     }
 
