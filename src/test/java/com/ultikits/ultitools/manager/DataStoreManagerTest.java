@@ -2,7 +2,6 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -865,29 +864,31 @@ class DataStoreManagerTest {
         }
 
         @Test
-        @DisplayName("新目录不依赖旧 i18n 查询")
-        void nullTranslationShouldFallBackToRawText() {
-            // Arrange - 打桩必须在发布到静态字段之前完成，见 TestHelper 的注释与 issue #250
-
+        @DisplayName("目录返回 null 时诊断回落到稳定键")
+        void nullTranslationShouldFallBackToKey() throws Exception {
+            var messages = mock(com.ultikits.ultitools.text.Messages.class);
             Logger logger = mock(Logger.class);
-
-            // Act
-            DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json");
-
-            // Assert
-            assertThat(severeMessages(logger)).anyMatch(msg -> msg.contains("datasource.type"));
+            try (var scope = com.ultikits.ultitools.text.internal.FrameworkMessages.overrideForTests(
+                    messages, java.util.Locale.ENGLISH)) {
+                DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json");
+                assertThat(severeMessages(logger)).containsExactly(
+                        "ultitools:datastore.downgraded", "ultitools:datastore.player_data_store");
+            }
         }
 
         @Test
-        @DisplayName("诊断在旧文字服务不可用时仍可渲染")
-        void throwingTranslationShouldNotBreakDiagnostics() {
-            // Arrange
-
+        @DisplayName("目录抛异常时诊断仍回落到稳定键")
+        void throwingTranslationShouldNotBreakDiagnostics() throws Exception {
+            var messages = mock(com.ultikits.ultitools.text.Messages.class);
+            when(messages.render(org.mockito.ArgumentMatchers.any(com.ultikits.ultitools.text.Text.class),
+                    org.mockito.ArgumentMatchers.any(java.util.Locale.class))).thenThrow(new IllegalStateException("boom"));
             Logger logger = mock(Logger.class);
-
-            // Act & Assert - 诊断跑在「已经出问题」的路径上，它自己不能再炸一次
-            assertDoesNotThrow(() -> DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json"));
-            assertThat(severeMessages(logger)).anyMatch(msg -> msg.contains("datasource.type"));
+            try (var scope = com.ultikits.ultitools.text.internal.FrameworkMessages.overrideForTests(
+                    messages, java.util.Locale.ENGLISH)) {
+                assertDoesNotThrow(() -> DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json"));
+                assertThat(severeMessages(logger)).containsExactly(
+                        "ultitools:datastore.downgraded", "ultitools:datastore.player_data_store");
+            }
         }
     }
 

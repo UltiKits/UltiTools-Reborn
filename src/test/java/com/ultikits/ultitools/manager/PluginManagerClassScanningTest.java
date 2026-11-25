@@ -46,6 +46,8 @@ import com.ultikits.ultitools.interfaces.IPlugin;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
 class PluginManagerClassScanningTest {
+    @org.junit.jupiter.api.extension.RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages = new FrameworkMessagesExtension("zh");
 
     /** The duplicate-copy warning's catalogue key (UltiTools-Dev-Doc#96); its English text is in en.json. */
     private static final String DUPLICATE_MAIN_CLASS =

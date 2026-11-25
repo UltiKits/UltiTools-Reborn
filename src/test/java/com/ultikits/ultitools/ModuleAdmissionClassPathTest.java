@@ -43,6 +43,9 @@ import java.util.logging.Logger;
 
 /** Admission must isolate bytes, not merely skip a module's registration. */
 class ModuleAdmissionClassPathTest {
+    @org.junit.jupiter.api.extension.RegisterExtension
+    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
+            new com.ultikits.ultitools.manager.FrameworkMessagesExtension();
     private static final String MAIN = "fixture.admission.Main";
     @TempDir Path modules;
 

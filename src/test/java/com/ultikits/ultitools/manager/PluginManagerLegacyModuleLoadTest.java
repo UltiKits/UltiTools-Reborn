@@ -52,6 +52,8 @@ import net.bytebuddy.jar.asm.Opcodes;
 @DisplayName("PluginManager: modules built against a different UltiTools-API are refused with an upgrade hint")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginManagerLegacyModuleLoadTest {
+    @org.junit.jupiter.api.extension.RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages = new FrameworkMessagesExtension();
 
     private static final String LEGACY_MAIN = "com.ultikits.testfixtures.legacymodule.LegacyModule";
     private static final String OLDER_API = "built against an older UltiTools-API version";

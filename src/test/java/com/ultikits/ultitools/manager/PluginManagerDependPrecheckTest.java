@@ -52,6 +52,8 @@ import com.ultikits.ultitools.utils.TestHelper;
 @DisplayName("#554: a module whose required plugin is not installed is refused before construction")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginManagerDependPrecheckTest {
+    @org.junit.jupiter.api.extension.RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages = new FrameworkMessagesExtension();
 
     private static final String REQUIRED_PLUGIN = "FakeVault";
     private static final String MODULE_NAME = "PrecheckDependent";

@@ -7,7 +7,7 @@ import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 
-/** Real English framework catalogue for existing manager regression fixtures. */
+/** Real framework catalogue in the selected language for regression fixtures. */
 public final class FrameworkMessagesExtension implements BeforeEachCallback, AfterEachCallback {
     private final String language;
 

@@ -647,9 +647,9 @@ class MysqlDataStoreTest {
         }
 
         @Test
-        @DisplayName("应该使用 i18n 转换错误消息")
+        @DisplayName("应该使用新目录渲染错误消息且不调用旧 i18n")
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
-        void shouldUseI18nForErrorMessage() {
+        void shouldUseCatalogueForErrorMessage() {
             // Arrange
             setupMysqlConfig();
 
@@ -662,7 +662,7 @@ class MysqlDataStoreTest {
                 // Act
                 MysqlDataStore store = new MysqlDataStore();
 
-                // Assert - MockedConstruction 包装异常消息，所以只验证 i18n 被调用
+                // MockedConstruction wraps the cause; verify catalogue wording and absence of legacy lookups.
                 verify(mockUltiTools, org.mockito.Mockito.never()).i18n(anyString());
                 verify(mockLogger).log(eq(Level.SEVERE), contains("MySQL connection failed:"));
             }
