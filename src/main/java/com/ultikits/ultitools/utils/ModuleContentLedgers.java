@@ -40,14 +40,16 @@ public final class ModuleContentLedgers {
     }
 
     /**
-     * Asks the installed ledger, never failing: a ledger that throws a runtime exception or returns
-     * {@code null} is answered with {@link ModuleContent#unknown()} so that a removal still warns.
+     * Asks the installed ledger. A runtime exception or {@code null} result is answered with
+     * {@link ModuleContent#unknown()} so that a removal still warns. Errors propagate.
      *
      * @param identifyString the module's normalised identify string, or {@code null} when unknown
      * @param moduleName the {@code name} from the module's {@code plugin.yml}; the primary lookup key
      * @return the content, or unknown content if the ledger fails
+     * @throws NullPointerException if {@code moduleName} is {@code null}
      */
     public static ModuleContent contentOf(@Nullable String identifyString, String moduleName) {
+        Objects.requireNonNull(moduleName, "moduleName");
         try {
             var content = ledger.contentOf(identifyString, moduleName);
             return content == null ? ModuleContent.unknown() : content;

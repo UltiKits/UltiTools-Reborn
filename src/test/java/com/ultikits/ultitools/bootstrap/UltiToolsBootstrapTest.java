@@ -21,12 +21,15 @@ import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedConstruction;
 
 import com.ultikits.ultitools.ModuleClassLoader;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.ModuleContentLedger;
+import com.ultikits.ultitools.utils.ModuleContentLedgers;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 
 import io.papermc.paper.plugin.bootstrap.BootstrapContext;
@@ -35,6 +38,11 @@ import net.kyori.adventure.text.logger.slf4j.ComponentLogger;
 
 class UltiToolsBootstrapTest {
     @TempDir Path server;
+
+    @AfterEach
+    void restoreContentLedger() {
+        ModuleContentLedgers.install(ModuleContentLedger.NONE);
+    }
 
     private Path dataFolder() throws IOException {
         return Files.createDirectories(server.resolve("plugins/UltiTools"));

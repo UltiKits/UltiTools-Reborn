@@ -104,4 +104,10 @@ class ModuleContentLedgersTest {
         assertThatThrownBy(() -> ModuleContentLedgers.contentOf(null, "ModuleName"))
                 .isSameAs(failure);
     }
+    @Test
+    void nullModuleNameIsRejectedBeforeCallingTheLedger() {
+        ModuleContentLedgers.install((identify, name) -> { throw new AssertionError("ledger must not be called"); });
+        assertThatThrownBy(() -> ModuleContentLedgers.contentOf("identify", null))
+                .isInstanceOf(NullPointerException.class).hasMessage("moduleName");
+    }
 }

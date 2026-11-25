@@ -12,6 +12,8 @@ import org.jetbrains.annotations.Nullable;
 import com.ultikits.ultitools.ModuleClassLoader;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.manager.ModuleJarAdmission;
+import com.ultikits.ultitools.utils.ModuleContentLedger;
+import com.ultikits.ultitools.utils.ModuleContentLedgers;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 
 import io.papermc.paper.plugin.bootstrap.BootstrapContext;
@@ -75,6 +77,8 @@ public final class UltiToolsBootstrap implements PluginBootstrap {
                 ledger = ContributionLedger.update(dataFolder.toPath(), admission, contributions, logger);
                 BootstrapContentReport.declared(contributions, logger);
                 channelInstaller(context, contributions, logger);
+                ModuleContentLedgers.install(ledger.rows().isEmpty() && !ledger.unreadable()
+                        ? ModuleContentLedger.NONE : ledger);
             }
             return new BootstrapResult(transactions, admission, loader, classPathFailure, run.failures, run.attempted, contributions, ledger);
         } catch (RuntimeException | Error failure) {

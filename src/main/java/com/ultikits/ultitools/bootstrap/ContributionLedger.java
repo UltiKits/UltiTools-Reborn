@@ -12,7 +12,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -33,33 +32,37 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.manager.ModuleJarAdmission;
 import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.utils.ModuleContent;
+import com.ultikits.ultitools.utils.ModuleContentLedger;
 
 /**
  * The framework-owned {@code bootstrap/contributions.json} record, read once and atomically replaced
  * before Paper's write events. It describes declarations, not a snapshot of world data. This is a
  * derived record, not operator configuration; neither the write nor quarantine targets other files.
  */
-final class ContributionLedger {
+final class ContributionLedger implements ModuleContentLedger {
     private static final String NAME = "contributions.json";
     private static final String UNREADABLE = NAME + ".unreadable-";
     private static final int SCHEMA = 1;
     private static final int KEEP_UNREADABLE = 3;
     private static final Gson GSON = new GsonBuilder().serializeNulls().setPrettyPrinting().create();
-    static final ContributionLedger EMPTY = new ContributionLedger(Map.of(), Map.of(), Map.of(), Set.of(), false);
+    static final ContributionLedger EMPTY = new ContributionLedger(Map.of(), Map.of(), Map.of(), Set.of(), false, Logger.getLogger("UltiTools"));
 
     private final Map<String, Row> rows;
     private final Map<String, List<ContentEntry>> dropped;
     private final Map<String, List<ContentEntry>> removed;
     private final Set<String> successful;
     private final boolean unreadable;
+    private final LedgerContentAnswers answers;
 
     private ContributionLedger(Map<String, Row> rows, Map<String, List<ContentEntry>> dropped,
-                               Map<String, List<ContentEntry>> removed, Set<String> successful, boolean unreadable) {
+                               Map<String, List<ContentEntry>> removed, Set<String> successful, boolean unreadable, Logger logger) {
         this.rows = Collections.unmodifiableMap(new LinkedHashMap<>(rows));
         this.dropped = Collections.unmodifiableMap(new LinkedHashMap<>(dropped));
         this.removed = Collections.unmodifiableMap(new LinkedHashMap<>(removed));
         this.successful = Set.copyOf(successful);
         this.unreadable = unreadable;
+        this.answers = LedgerContentAnswers.build(this.rows, this.successful, unreadable, logger);
     }
 
     Map<String, Row> rows() { return rows; }
@@ -67,6 +70,11 @@ final class ContributionLedger {
     Map<String, List<ContentEntry>> removed() { return removed; }
     Set<String> successful() { return successful; }
     boolean unreadable() { return unreadable; }
+
+    @Override
+    public ModuleContent contentOf(@Nullable String identifyString, String moduleName) {
+        return answers.contentOf(identifyString, moduleName);
+    }
 
     static ContributionLedger update(Path dataFolder, ModuleJarAdmission admission, ContributionRegistry registry,
                                      Logger logger) {
@@ -96,7 +104,7 @@ final class ContributionLedger {
         Path root = BootstrapFiles.root(dataFolder);
         Path file = root.resolve(NAME);
         ReadResult previous = read(file, now, logger);
-        ContributionLedger merged = merge(previous, start, now);
+        ContributionLedger merged = merge(previous, start, now, logger);
         if (!merged.rows.equals(previous.rows())) {
             try {
                 Files.createDirectories(dataFolder);
@@ -110,7 +118,7 @@ final class ContributionLedger {
         return merged;
     }
 
-    private static ContributionLedger merge(ReadResult previous, Start start, Instant instant) {
+    private static ContributionLedger merge(ReadResult previous, Start start, Instant instant, Logger logger) {
         String now = instant.toString();
         Map<String, Row> rows = new LinkedHashMap<>(previous.rows());
         Map<String, List<ContentEntry>> missing = new LinkedHashMap<>();
@@ -130,7 +138,7 @@ final class ContributionLedger {
             }
         });
         start.declared().forEach((name, entries) -> replaceRow(rows, dropped, name, entries, now));
-        return new ContributionLedger(rows, dropped, missing, start.declared().keySet(), previous.unreadable());
+        return new ContributionLedger(rows, dropped, missing, start.declared().keySet(), previous.unreadable(), logger);
     }
 
     private static void replaceRow(Map<String, Row> rows, Map<String, List<ContentEntry>> dropped,

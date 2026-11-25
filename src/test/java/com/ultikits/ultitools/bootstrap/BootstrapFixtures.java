@@ -14,6 +14,8 @@ import net.bytebuddy.jar.asm.ClassWriter;
 import net.bytebuddy.jar.asm.MethodVisitor;
 import net.bytebuddy.jar.asm.Opcodes;
 import net.kyori.adventure.key.Key;
+import io.papermc.paper.registry.RegistryKey;
+import java.util.List;
 
 /** Real archive/class fixtures, with no server or parent-classpath fixture classes. */
 public final class BootstrapFixtures {
@@ -101,6 +103,18 @@ public final class BootstrapFixtures {
         } catch (IllegalArgumentException ignored) {
             // The module deliberately tries to proceed after a refused declaration.
         }
+    }
+
+    static byte[] allChannelsHook(String name) {
+        return hook(name, null, false, "declareAllChannels");
+    }
+
+    public static void declareAllChannels(ModuleBootstrapContext context) {
+        declareContent(context);
+        context.tags().setTag(RegistryKey.ITEM, Key.key("boot2content:probe_tools"), List.of(Key.key("minecraft:stick")));
+        context.tags().addToTag(RegistryKey.ENCHANTMENT, Key.key("minecraft:in_enchanting_table"),
+                List.of(Key.key("boot2content:edge")));
+        context.datapacks().embedded("probe");
     }
 
     public static byte[] initializerFailureHook(String name) {

@@ -2,13 +2,13 @@ package com.ultikits.ultitools.bootstrap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
@@ -33,7 +33,7 @@ class EmbeddedDatapacksTest {
         EmbeddedDatapacks.prepare(data, registry, logger);
         Path target = data.resolve("bootstrap/datapacks/demo.one.zip");
         try (var zip = new ZipFile(target.toFile()); var original = new ZipFile(jar.toFile())) {
-            assertThat(zip.stream().map(java.util.zip.ZipEntry::getName).toList())
+            assertThat(zip.stream().map(ZipEntry::getName).toList())
                     .isEqualTo(List.of("data/demo/recipe/a.json", "pack.mcmeta"));
             for (var entry : zip.stream().toList()) {
                 assertThat(entry.getTime()).isZero();
