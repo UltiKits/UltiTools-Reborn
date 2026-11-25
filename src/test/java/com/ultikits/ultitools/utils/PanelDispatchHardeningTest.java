@@ -1,6 +1,9 @@
 package com.ultikits.ultitools.utils;
 
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import java.util.Locale;
 import org.junit.jupiter.api.extension.ExtendWith;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
@@ -41,7 +44,6 @@ import org.mockbukkit.mockbukkit.ServerMock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.endsWith;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
@@ -236,17 +238,20 @@ class PanelDispatchHardeningTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"ul help", "ulti help", "ultitools help", "ultitools:ul help"})
-    void siblingAliasEntryBlocksEveryOuterSpelling(String line) {
-        UlCommand executor = registerUl();
-        manager.setBlockedCommands(Collections.singleton("ultitools"));
+    void siblingAliasEntryBlocksEveryOuterSpelling(String line) throws Exception {
+        try (var support = new CommandMessageTestSupport("en");
+                var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.ENGLISH)) {
+            UlCommand executor = registerUl();
+            manager.setBlockedCommands(Collections.singleton("ultitools"));
 
-        accept(line);
-        if (!mainThread.isEmpty()) {
-            mainThread.remove().run();
+            accept(line);
+            if (!mainThread.isEmpty()) {
+                mainThread.remove().run();
+            }
+
+            assertSiblingRefusal(executor);
+            verify(UltiTools.getInstance().getLogger()).log(eq(Level.WARNING), eq("[Remote command] Blocked: " + line));
         }
-
-        assertSiblingRefusal(executor);
-        verify(UltiTools.getInstance().getLogger()).log(eq(Level.WARNING), endsWith(": " + line));
     }
 
     @ParameterizedTest
