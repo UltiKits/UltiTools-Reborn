@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.commands;
 
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -212,7 +213,7 @@ class UltiToolsCommandsTest {
         CommandTestSupport.dispatch(executor, player, mockCommand, "ul", new String[]{"reload", "GoodModule"});
         server.getScheduler().performOneTick();
 
-        assertThat(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(player.nextComponentMessage()))
+        assertThat(CommandMessageTestSupport.plain(player.nextComponentMessage()))
                 .isEqualTo("模块 GoodModule 已重载");
     }
 

@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.utils;
 
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.commands.CoreCommandMessageTestSupport;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 
@@ -198,14 +201,17 @@ class CloudConnectionLifecycleTest {
 
         List<String> lines = new CopyOnWriteArrayList<>();
         org.bukkit.command.ConsoleCommandSender sender = org.mockito.Mockito.mock(org.bukkit.command.ConsoleCommandSender.class);
-        org.mockito.Mockito.doAnswer(call -> { lines.add(call.getArgument(0)); return null; })
-                .when(sender).sendMessage(org.mockito.ArgumentMatchers.anyString());
+        org.mockito.Mockito.doAnswer(call -> { lines.add(CommandMessageTestSupport.plain(call.getArgument(0))); return null; })
+                .when(sender).sendMessage(org.mockito.ArgumentMatchers.any(Component.class));
         com.ultikits.ultitools.commands.CloudLoginCommand command = new com.ultikits.ultitools.commands.CloudLoginCommand();
-        command.status(sender);
-        assertThat(lines).anyMatch(line -> line.contains("Connection: stopped — UltiCloud answered with a different server ID"));
-        command.reconnect(sender);
-        assertThat(lines.get(lines.size() - 1)).contains(
-                "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to.");
+        try (var commandMessages = CoreCommandMessageTestSupport.bind(
+                UltiTools.getInstance(), "en")) {
+            command.status(sender);
+            assertThat(lines).anyMatch(line -> line.contains("Connection: stopped — UltiCloud answered with a different server ID"));
+            command.reconnect(sender);
+            assertThat(lines.get(lines.size() - 1)).contains(
+                    "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to.");
+        }
         advanceAgentTime(200);
         assertThat(gateway.headers).as("reconnect does not leave the mismatch").hasSize(1);
         assertNoSecrets();

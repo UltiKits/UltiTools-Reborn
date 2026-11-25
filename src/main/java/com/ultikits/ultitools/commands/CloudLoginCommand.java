@@ -11,7 +11,6 @@ import com.ultikits.ultitools.text.Text;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 
-import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.command.RemoteConsoleCommandSender;
@@ -201,13 +200,6 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         }
     }
 
-    private static void sendLine(CommandSender sender, String line) {
-        sender.sendMessage(line);
-        if (isRemoteSender(sender)) {
-            UltiTools.getInstance().getLogger().log(Level.INFO, ChatColor.stripColor(line));
-        }
-    }
-
     /**
      * Renders the device login's outcomes to the sender that ran {@code /ulticloud login}. For a
      * remote sender every line is also logged to the server console, colour codes stripped, because
@@ -215,13 +207,6 @@ public class CloudLoginCommand extends BaseCommandExecutor {
      * session's executor; the console and players see each line once.
      */
     private static final class LoginOutput implements CloudAuthManager.DeviceLoginListener {
-
-        private static final String REQUESTING = ChatColor.AQUA + "Requesting a device code from UltiCloud...";
-        private static final String REQUESTING_REMOTE = ChatColor.AQUA
-            + "Requesting a device code from UltiCloud. The code and the link will be printed in the server console.";
-        private static final String REDEEMING = ChatColor.AQUA + "Redeeming the re-pair code with UltiCloud...";
-        private static final String REDEEMING_REMOTE = ChatColor.AQUA
-            + "Redeeming the re-pair code with UltiCloud. The result will be printed in the server console.";
 
         private final CommandSender sender;
         private final boolean remote;
@@ -234,57 +219,52 @@ public class CloudLoginCommand extends BaseCommandExecutor {
             this.withCode = withCode;
         }
 
-        /** Sends {@code line}; for a remote sender also logs it to the console at INFO. */
-        private void say(String line) {
-            sendLine(sender, line);
-        }
-
-        private static void logToConsole(String line) {
-            UltiTools.getInstance().getLogger().log(Level.INFO, ChatColor.stripColor(line));
+        /** Sends a catalogue message; remote replies are also logged as plain text. */
+        private void say(MessageKey key, Arg... args) {
+            CloudLoginCommand.say(sender, key, args);
         }
 
         @Override
         public void onAlreadyLinked(String serverName) {
-            say(ChatColor.YELLOW + "This server is already linked to UltiCloud as " + serverName
-                + ". Use /ulticloud logout first to link it again.");
+            say(ULTICLOUD_LOGIN_ALREADY_LINKED, Arg.string("server", String.valueOf(serverName)));
         }
 
         @Override
         public void onRateLimited(long seconds) {
-            say(ChatColor.RED + "Please wait " + seconds + " seconds before trying again.");
+            say(ULTICLOUD_RATE_LIMITED, Arg.number("seconds", seconds));
         }
 
         @Override
         public void onRequesting() {
-            // Reached only after the already-linked and rate-limit decisions, so a remote sender is
-            // told the code goes to the console only when a code is really being requested.
-            String line = withCode ? REDEEMING : REQUESTING;
+            // Only actual requests tell remote senders to look for the result in the console.
+            MessageKey local = withCode ? ULTICLOUD_LOGIN_REDEEMING : ULTICLOUD_LOGIN_REQUESTING;
             if (remote) {
-                sender.sendMessage(withCode ? REDEEMING_REMOTE : REQUESTING_REMOTE);
-                logToConsole(line);
+                CommandRuntime.messages().send(sender,
+                        withCode ? ULTICLOUD_LOGIN_REDEEMING_REMOTE : ULTICLOUD_LOGIN_REQUESTING_REMOTE);
+                UltiTools.getInstance().getLogger().log(Level.INFO,
+                        PlainTextComponentSerializer.plainText().serialize(CommandRuntime.messages().render(local, sender)));
             } else {
-                sender.sendMessage(line);
+                CommandRuntime.messages().send(sender, local);
             }
         }
 
         @Override
         public void onCode(String verificationUri, String userCode, String verificationUriComplete,
                 long expiresInSeconds) {
-            say(ChatColor.GREEN + "========================================");
-            say(ChatColor.GREEN + " To link this server to UltiCloud, open:");
-            say(ChatColor.AQUA + " " + verificationUri);
-            say(ChatColor.GREEN + " and enter the code:");
-            say(ChatColor.AQUA + " " + userCode);
-            say(ChatColor.GRAY + " Or open this link directly: " + verificationUriComplete);
-            say(ChatColor.GREEN + "========================================");
-            say(ChatColor.GRAY + "The code expires in " + minutes(expiresInSeconds)
-                + " minutes. Waiting for confirmation...");
+            say(ULTICLOUD_LOGIN_SEPARATOR);
+            say(ULTICLOUD_LOGIN_OPEN);
+            say(ULTICLOUD_LOGIN_URI, Arg.string("uri", String.valueOf(verificationUri)));
+            say(ULTICLOUD_LOGIN_ENTER_CODE);
+            say(ULTICLOUD_LOGIN_CODE, Arg.string("code", String.valueOf(userCode)));
+            say(ULTICLOUD_LOGIN_DIRECT_LINK, Arg.string("uri", String.valueOf(verificationUriComplete)));
+            say(ULTICLOUD_LOGIN_SEPARATOR);
+            say(ULTICLOUD_LOGIN_EXPIRES, Arg.number("minutes", minutes(expiresInSeconds)));
         }
 
         @Override
         public void onRequestFailed(String reason) {
-            say(ChatColor.RED + (withCode ? "Could not use the re-pair code: " : "Failed to get a device code: ")
-                + reason);
+            say(withCode ? ULTICLOUD_LOGIN_CODE_FAILED : ULTICLOUD_LOGIN_REQUEST_FAILED,
+                    Arg.string("reason", String.valueOf(reason)));
         }
 
         private static long minutes(long seconds) {

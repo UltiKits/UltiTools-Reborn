@@ -22,22 +22,28 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
 /** Real catalogues reached through the same root-container lookup as production commands. */
-final class CoreCommandMessageTestSupport implements AutoCloseable {
+public final class CoreCommandMessageTestSupport implements AutoCloseable {
     final UltiTools plugin = mock(UltiTools.class);
     final Logger logger = mock(Logger.class);
     private final CommandMessageTestSupport support;
     private final MockedStatic<UltiTools> singleton;
 
     CoreCommandMessageTestSupport(String language) {
-        support = new CommandMessageTestSupport(language);
+        support = bind(plugin, language);
+        when(plugin.getLogger()).thenReturn(logger);
+        singleton = mockStatic(UltiTools.class);
+        singleton.when(UltiTools::getInstance).thenReturn(plugin);
+    }
+
+    /** Binds real messages to a process-wide plugin mock, including callbacks from worker threads. */
+    public static CommandMessageTestSupport bind(UltiTools plugin, String language) {
+        var support = new CommandMessageTestSupport(language);
         var dependencies = mock(DependenceManagers.class);
         var context = mock(SimpleContainer.class);
         when(plugin.getDependenceManagers()).thenReturn(dependencies);
         when(dependencies.getContext()).thenReturn(context);
         when(context.getBean(Messages.class)).thenReturn(support.messages());
-        when(plugin.getLogger()).thenReturn(logger);
-        singleton = mockStatic(UltiTools.class);
-        singleton.when(UltiTools::getInstance).thenReturn(plugin);
+        return support;
     }
 
     static List<Component> components(CommandSender sender, int count) {

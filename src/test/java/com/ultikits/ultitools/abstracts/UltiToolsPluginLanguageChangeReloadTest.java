@@ -1,11 +1,14 @@
 package com.ultikits.ultitools.abstracts;
 
+import com.ultikits.ultitools.UltiTools;
+import org.mockito.ArgumentCaptor;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.commands.CoreCommandMessageTestSupport;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -156,10 +159,14 @@ class UltiToolsPluginLanguageChangeReloadTest {
         when(pluginManager.getPluginList()).thenReturn(Collections.singletonList(plugin));
         CommandSender sender = mock(CommandSender.class);
 
-        new UltiToolsCommands().reloadPlugin(sender, "LangModule");
-
-        verify(sender).sendMessage(argThat((String message) -> message.contains("LangModule")
-                && message.contains("/ul reload") && message.contains("en")));
-        verify(sender, never()).sendMessage("模块 LangModule 已重载");
+        try (var messages = CoreCommandMessageTestSupport.bind(
+                UltiTools.getInstance(), "zh")) {
+            new UltiToolsCommands().reloadPlugin(sender, "LangModule");
+            var reply = ArgumentCaptor.forClass(Component.class);
+            verify(sender).sendMessage(reply.capture());
+            assertThat(CommandMessageTestSupport.plain(reply.getValue()))
+                    .contains("LangModule", "/ul reload", "en")
+                    .doesNotContain("模块 LangModule 已重载");
+        }
     }
 }

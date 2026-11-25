@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.manager;
 
+import org.mockito.ArgumentCaptor;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -298,9 +301,9 @@ class ConfigBindingReloadReportTest {
         }).when(independent).sendMessage(org.mockito.ArgumentMatchers.anyString());
 
         doAnswer(invocation -> {
-            replies.add(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(invocation.getArgument(0)));
+            replies.add(CommandMessageTestSupport.plain(invocation.getArgument(0)));
             return null;
-        }).when(independent).sendMessage(org.mockito.ArgumentMatchers.any(net.kyori.adventure.text.Component.class));
+        }).when(independent).sendMessage(org.mockito.ArgumentMatchers.any(Component.class));
 
         runReloadCommand(independent, all);
 
@@ -356,9 +359,9 @@ class ConfigBindingReloadReportTest {
                 commands.reloadAll(sender);
             } else {
                 commands.reloadPlugin(sender, "TimingModule");
-                var reply = org.mockito.ArgumentCaptor.forClass(net.kyori.adventure.text.Component.class);
+                var reply = ArgumentCaptor.forClass(Component.class);
                 verify(sender).sendMessage(reply.capture());
-                assertThat(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(reply.getValue()))
+                assertThat(CommandMessageTestSupport.plain(reply.getValue()))
                         .isEqualTo("模块 TimingModule 只重载了一部分；未重载：" + report.getPartialReasons().get(0));
             }
             if (all) {

@@ -50,7 +50,7 @@ class CloudLogoutCommandTest {
                     if (lines.size() > 2) {
                         assertColour(lines.getLast(), NamedTextColor.GRAY);
                     }
-                    if (type == ConsoleCommandSender.class) {
+                    if (ConsoleCommandSender.class.equals(type)) {
                         verifyNoInteractions(fixture.logger);
                     } else {
                         var logged = inOrder(fixture.logger);
