@@ -239,7 +239,11 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 
 All modules share one approximately 10-second UI-storage wait budget at server stop; only time spent unloading UI storage is charged, not time spent in other module shutdown hooks. Once storage waits exhaust that budget, later modules receive no remaining wait and finish with `UNKNOWN_KEPT_BY_STORE` without returning items, while an ordinary single-module unload retains its own approximately 10-second limit.
 
+When a module is unloaded, reloaded or updated while the server is running, this wait happens on the server thread. If a storage-backed screen has unsaved changes and its store does not answer within about 10 seconds, the wait reaches Paper's default `watchdog.early-warning-delay` (10000 milliseconds, `config/paper-global.yml`), and Paper can print `The server has not responded for 10 seconds! Creating thread dump` with a thread dump that shows the framework's waiting call stack. This is not a crash: the server keeps running and the session ends with `OWNER_UNLOADED` and `UNKNOWN_KEPT_BY_STORE`. Look at the store that did not answer, not at the server. Paper does not print these early warnings during server shutdown. The UI storage wait and the wait for asynchronous commands are independent, so a live unload can wait about 20 seconds when both are stuck.
+
 中文补充：停服时所有模块的界面存储等待共用约 10 秒预算，只扣除界面存储卸载等待本身的耗时，不扣其他模块卸载钩子的耗时；存储等待耗尽预算后，后面的模块没有剩余等待时间，按 `UNKNOWN_KEPT_BY_STORE` 结束且不退还物品；非停服的单模块卸载仍各有约 10 秒上限。
+
+中文补充：服务器运行中卸载、重载或更新模块时，这段等待发生在服务器线程上。存储型界面有未保存的改动、而存储约 10 秒没有答复时，等待时间会达到 Paper 默认的 `watchdog.early-warning-delay`（10000 毫秒，`config/paper-global.yml`），Paper 可能打印 `The server has not responded for 10 seconds! Creating thread dump` 和一段线程转储，其中能看到框架正在等待的调用栈。这不是崩溃：服务器继续运行，会话以 `OWNER_UNLOADED` 与 `UNKNOWN_KEPT_BY_STORE` 结束。该排查的是没有答复的存储，而不是服务器本身。停服过程中 Paper 不打印这种预警。界面存储等待与异步命令等待相互独立，两者都卡住时运行中卸载最多约等 20 秒。
 
 ## Game-interrupted screens (as of 7.0.0)
 
