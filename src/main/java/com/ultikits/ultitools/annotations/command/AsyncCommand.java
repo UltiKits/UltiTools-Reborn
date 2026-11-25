@@ -15,9 +15,13 @@ import java.lang.annotation.Target;
  * {@code scheduler.global().run(...)} for global work or {@code scheduler.entity(player).run(...)}
  * for player-owned work. Command bodies themselves use the framework-owned async scheduler.
  * <p>
- * At unload the executor waits up to approximately ten seconds for its accepted async commands,
- * without interrupting them. Do not block awaiting a tick-thread handoff during that wait: the
- * unload thread owns the tick thread, and scheduling is rejected once the relevant owner retires.
+ * At server stop all executors share approximately ten seconds of command waiting, including
+ * completion hooks; core commands are drained before framework services shut down. Only actual
+ * command waiting consumes the allowance, and repeated shutdown starts do not replenish it.
+ * A separate module unload shares a fresh ten-second allowance across that module's executors.
+ * This allowance is independent of UI shutdown waiting (up to about twenty seconds combined).
+ * Bodies are never interrupted. Do not block awaiting a tick-thread handoff during that wait:
+ * the unload thread owns the tick thread, and scheduling is rejected once the relevant owner retires.
  *
  * <p><strong>Example:</strong></p>
  * <pre>{@code

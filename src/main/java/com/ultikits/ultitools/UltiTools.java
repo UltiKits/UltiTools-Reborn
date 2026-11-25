@@ -35,6 +35,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.bootstrap.BootstrapResult;
 import com.ultikits.ultitools.bootstrap.ModuleClassPath;
 import com.ultikits.ultitools.commands.CloudLoginCommand;
@@ -380,6 +381,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
 
     @Override
     public void onEnable() {
+        CommandRuntime.beginEnable();
         // #621: inbound panel work is accepted again (cleared first in onDisable).
         PluginInitiationUtils.startAcceptingPanelMessages();
         // Paper bootstrap already applied file transactions and decided this start's module set.
@@ -962,6 +964,10 @@ public final class UltiTools extends JavaPlugin implements Localized {
         // and every scheduler hand-off from the WebSocket thread is dropped with one FINE line,
         // instead of scheduling a task the scheduler refuses for a disabled plugin.
         PluginInitiationUtils.stopAcceptingPanelMessages();
+        // Core executors are constructed outside the root container. Drain them while every
+        // framework service is still available; module/root drains reuse this remaining allowance.
+        CommandRuntime.beginShutdown();
+        getCommandManager().awaitCoreAsyncCommands();
         // Phase 19 D19-032, the same shape of race: the start-up update check runs on an async task
         // that can still be looking things up now. Stopping it cancels the task if it has not
         // started; a running check makes no further lookup and logs nothing at INFO or above, and
@@ -970,37 +976,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         if (updateManager != null) {
             updateManager.stop();
         }
-        // Plugin shutdown logic
-        EarlyLogCapture.release();
-        ConsoleMirror.uninstall();
-
-        if (eventBus != null) {
-            eventBus.shutdown();
-        }
-
-        // Shut down the error-report collector
-        if (errorReportCollector != null) {
-            errorReportCollector.shutdown();
-        }
-
-        // Shut down the log stream manager
-        if (logStreamManager != null) {
-            logStreamManager.shutdown();
-        }
-
-        // Shut down the remote action log (WR-01, 06-REVIEW.md) -- detaches the FileHandler this
-        // instance attached, otherwise the next onEnable after /reload would attach a second one
-        // to the same static logger, causing every record to be written twice.
-        if (remoteActionLog != null) {
-            remoteActionLog.shutdown();
-        }
-
-        // Shut down the panel responder registry (WR-01, 06-REVIEW.md) -- stops its own
-        // timeout-scheduling thread pool, otherwise every /reload would leak another
-        // UltiTools-PanelResponderRegistry-Timeout thread.
-        if (panelResponderRegistry != null) {
-            panelResponderRegistry.shutdown();
-        }
+        shutdownFrameworkServices();
 
         PluginInitiationUtils.stopCredentialSchedulers();
         stopWebsocket();
@@ -1028,6 +1004,29 @@ public final class UltiTools extends JavaPlugin implements Localized {
             } catch (IOException e) {
                 getLogger().log(Level.WARNING, "Failed to close module classloader", e);
             }
+        }
+    }
+
+    /** Keeps the existing service shutdown order separate from the remaining module teardown. */
+    private void shutdownFrameworkServices() {
+        EarlyLogCapture.release();
+        ConsoleMirror.uninstall();
+        if (eventBus != null) {
+            eventBus.shutdown();
+        }
+        if (errorReportCollector != null) {
+            errorReportCollector.shutdown();
+        }
+        if (logStreamManager != null) {
+            logStreamManager.shutdown();
+        }
+        // Detach this enable's FileHandler before another enable installs its replacement.
+        if (remoteActionLog != null) {
+            remoteActionLog.shutdown();
+        }
+        // Stop the registry's timeout executor rather than leaking it across reloads.
+        if (panelResponderRegistry != null) {
+            panelResponderRegistry.shutdown();
         }
     }
 

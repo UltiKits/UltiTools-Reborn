@@ -1,6 +1,8 @@
 package com.ultikits.ultitools.manager;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
@@ -9,6 +11,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.command.BrigadierCommand;
@@ -23,6 +26,7 @@ import com.ultikits.ultitools.context.SimpleContainer;
 public class CommandManager {
     private static final String CORE_OWNER = "UltiTools";
     private final CommandEngine engine;
+    private final List<BaseCommandExecutor> coreExecutors = new ArrayList<>();
 
     /** Creates the Paper-backed command manager. */
     public CommandManager() { this(new CommandEngine()); }
@@ -90,7 +94,16 @@ public class CommandManager {
     public void registerInternalListeners() { engine.registerInternalListeners(); }
 
     /** Releases all live command bindings. */
-    public void close() { engine.close(); }
+    public void close() {
+        engine.close();
+        coreExecutors.clear();
+    }
+
+    /** Drains explicitly registered core executors before any framework service shuts down. */
+    @ApiStatus.Internal
+    public void awaitCoreAsyncCommands() {
+        CommandRuntime.awaitAsyncCommands(coreExecutors);
+    }
 
     /**
      * Registers a framework-owned command during enable.
@@ -98,8 +111,11 @@ public class CommandManager {
      */
     public void registerCoreCommand(BaseCommandExecutor executor) {
         CmdExecutor annotation = annotation(executor);
-        if (annotation != null) engine.register(CORE_OWNER, CORE_OWNER, executor, annotation.description(),
-                annotation.permission(), annotation.requireOp(), Arrays.asList(annotation.alias()));
+        if (annotation != null) {
+            engine.register(CORE_OWNER, CORE_OWNER, executor, annotation.description(),
+                    annotation.permission(), annotation.requireOp(), Arrays.asList(annotation.alias()));
+            coreExecutors.add(executor);
+        }
     }
 
     /**

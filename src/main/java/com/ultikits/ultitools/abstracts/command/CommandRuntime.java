@@ -4,8 +4,11 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import com.ultikits.ultitools.text.Messages;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.function.Supplier;
 import java.util.Objects;
 import java.util.Set;
 import org.jetbrains.annotations.ApiStatus;
@@ -14,6 +17,35 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 public final class CommandRuntime {
     private static volatile Services testServices;
+    private static CommandWaitBudget shutdownBudget;
+    private static Supplier<CommandWaitBudget> waitBudgets = CommandWaitBudget::new;
+
+    /** Starts the command shutdown allowance once; repeated calls never replenish it. */
+    public static synchronized void beginShutdown() {
+        if (shutdownBudget == null) {
+            shutdownBudget = waitBudgets.get();
+        }
+    }
+
+    /** Starts a new framework enable lifecycle, with no active server-stop allowance. */
+    public static synchronized void beginEnable() {
+        shutdownBudget = null;
+    }
+
+    static synchronized CommandWaitBudget waitBudget() {
+        return shutdownBudget == null ? waitBudgets.get() : shutdownBudget;
+    }
+
+    static AutoCloseable overrideWaitBudgets(Supplier<CommandWaitBudget> factory) {
+        Supplier<CommandWaitBudget> previous = waitBudgets;
+        CommandWaitBudget previousShutdown = shutdownBudget;
+        waitBudgets = factory;
+        shutdownBudget = null;
+        return () -> {
+            waitBudgets = previous;
+            shutdownBudget = previousShutdown;
+        };
+    }
 
     private CommandRuntime() {
         // Static service lookup only; executors retain their public constructors.
@@ -48,14 +80,23 @@ public final class CommandRuntime {
     /**
      * Drains instantiated command executors before their container's other resources are released.
      * Aliases of the same bean are visited only once; no lazy beans are constructed.
+     * All executors stop accepting work before the first wait. A module unload shares one
+     * ten-second allowance; during server stop every drain shares the shutdown's remaining
+     * allowance instead. Only actual command waiting consumes it, not intervening service cleanup.
      * @param beans the container's existing singleton values
      */
     public static void awaitAsyncCommands(Iterable<?> beans) {
+        CommandWaitBudget budget = waitBudget();
         Set<BaseCommandExecutor> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<BaseCommandExecutor> executors = new ArrayList<>();
         for (Object bean : beans) {
             if (bean instanceof BaseCommandExecutor executor && seen.add(executor)) {
-                executor.awaitAsyncCommands();
+                executor.beginAsyncUnload(budget);
+                executors.add(executor);
             }
+        }
+        for (BaseCommandExecutor executor : executors) {
+            executor.awaitAsyncCommands();
         }
     }
 
@@ -65,7 +106,7 @@ public final class CommandRuntime {
      * @param scheduler test scheduler
      * @return a scope restoring the previous services
      */
-    public static AutoCloseable override(Messages messages, Scheduler scheduler) {
+    static AutoCloseable override(Messages messages, Scheduler scheduler) {
         Services previous = testServices;
         testServices = new Services(Objects.requireNonNull(messages, "messages"),
                 Objects.requireNonNull(scheduler, "scheduler"));

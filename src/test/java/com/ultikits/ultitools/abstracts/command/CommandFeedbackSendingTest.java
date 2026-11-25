@@ -2,6 +2,8 @@ package com.ultikits.ultitools.abstracts.command;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -25,10 +27,20 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import org.bukkit.command.CommandSender;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import com.ultikits.ultitools.scheduling.TaskHandle;
 import org.junit.jupiter.api.extension.ExtendWith;
 
 @ExtendWith(CommandTestExtension.class)
 class CommandFeedbackSendingTest {
+    @BeforeEach
+    void executeAsyncBodiesExplicitly() {
+        when(CommandRuntime.scheduler().async().run(any(Runnable.class))).thenAnswer(call -> {
+            call.getArgument(0, Runnable.class).run();
+            return mock(TaskHandle.class);
+        });
+    }
+
     @Test
     void validationAndHelpFailuresUseTheSameDeferredDeliveryMethod() {
         var sender = mock(CommandSender.class);

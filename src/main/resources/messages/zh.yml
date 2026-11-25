@@ -7,7 +7,7 @@ command:
     console_only: "只可以在后台执行这个指令！"
     sender_locked: "<red>请先等待上一条命令执行完毕！"
     server_locked: "<red>请先等待其他玩家发送的命令执行完毕！"
-    cooldown: "<red>操作频繁，请 <seconds> 秒后再试"
+    cooldown: "<red>操作频繁，请 <seconds:'0'> 秒后再试"
     execution_failed: "<red>命令执行出错: <error>"
   async:
     processing: "<yellow>处理中..."

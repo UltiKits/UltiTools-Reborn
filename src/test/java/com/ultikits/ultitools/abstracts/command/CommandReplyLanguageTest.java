@@ -112,6 +112,8 @@ class CommandReplyLanguageTest {
         return Stream.of(
                 Arguments.of(Text.of(CommandKeys.COOLDOWN, Arg.number("seconds", 5L)),
                         "操作频繁，请 5 秒后再试", "Frequent operations, please try again in 5 seconds"),
+                Arguments.of(Text.of(CommandKeys.COOLDOWN, Arg.number("seconds", 1234L)),
+                        "操作频繁，请 1234 秒后再试", "Frequent operations, please try again in 1234 seconds"),
                 Arguments.of(Text.of(CommandKeys.USAGE, Arg.string("label", "cmdprobe"), Arg.string("format", "count <n>")),
                         "正确用法: /cmdprobe count <n>", "Correct Usage: /cmdprobe count <n>"),
                 Arguments.of(Text.of(CommandKeys.UNKNOWN, Arg.string("label", "cmdprobe"), Arg.string("help", "help")),

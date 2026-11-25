@@ -7,7 +7,7 @@ command:
     console_only: "This command can only be performed in CONSOLE!"
     sender_locked: "<red>Please wait for last Command Processing!"
     server_locked: "<red>Please wait for last Command Processing which sent by other players!"
-    cooldown: "<red>Frequent operations, please try again in <seconds> seconds"
+    cooldown: "<red>Frequent operations, please try again in <seconds:'0'> seconds"
     execution_failed: "<red>Command execution failed: <error>"
   async:
     processing: "<yellow>Processing..."

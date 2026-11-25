@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -182,6 +183,8 @@ class DependenceManagersTest {
         var order = inOrder(executor, context);
         order.verify(executor).awaitAsyncCommands();
         order.verify(context).close();
+        assertThat(mockingDetails(context).getInvocations())
+                .filteredOn(call -> call.getMethod().getName().equals("close")).hasSize(1);
     }
 
     @Nested

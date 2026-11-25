@@ -199,14 +199,20 @@ not skip the body and its completion/lock-release hooks. A timeout notice alone 
 `entity(player)` context, or `global()` for other senders. Completion cancels its timeout task.
 Timeout stops waiting and reports once; it never cancels or interrupts the body.
 
-At module unload or shutdown, each executor waits at most about **ten seconds** for accepted async
-invocations, including their completion hooks, before releasing its validators and other resources.
-New async submissions to that unloading executor are refused. If the budget expires, one WARNING
-names the executor and remaining invocation count; work continues in the background without
-interruption. Multiple executors each have their own budget, so simultaneous stuck commands can
-add to shutdown time. Do not block a command waiting for a global/entity callback during unload:
-the unloading tick thread cannot run that callback while waiting, and later framework submissions
-are refused once its scheduler retires. A module's injected scheduler has its own retirement rules.
+At server shutdown, **all command executors share about ten seconds of waiting in total**, including
+accepted async invocations' completion hooks. Framework-owned executors are explicitly registered
+and drained at the start of `onDisable`, before any framework service is shut down; module and root
+container drains use the same remaining allowance. Only time actually waiting for command bodies
+consumes it, not intervening service cleanup; starting shutdown again does not reset it. A single
+module unload outside shutdown gives that module's executors one fresh shared ten-second allowance;
+separate module unloads do not consume each other's allowance. Command waiting is independent of
+the UI shutdown allowance: both can add up to about **twenty seconds**, excluding other cleanup.
+New async submissions to unloading executors are refused. Once the allowance is exhausted, further
+executors do not wait. Each executor still running warns once with its name and remaining invocation
+count; bodies continue in the background without interruption. Do not block a command waiting for a
+global/entity callback during unload: the unloading tick thread cannot run that callback while waiting,
+and later framework submissions are refused once its scheduler retires. A module's injected scheduler
+has its own retirement rules. Cooldown seconds remain plain integers without locale grouping.
 
 中文补充：框架命令反馈已改用 `Messages`；`language: auto` 时按各玩家当前客户端语言渲染，
 控制台、命令方块和面板使用后备语言。上列 13 个键都属于 `ultitools` 命名空间，可在
@@ -219,11 +225,15 @@ are refused once its scheduler retires. A module's injected scheduler has its ow
 
 异步命令体仍归框架调度器所有，同步命令已在 global tick 线程时立即执行，否则交给 global；
 只有超时提示跟随玩家实体，其他发送者走 global。命令按时结束会取消看门狗，超时只停止等待、
-提示一次，不取消或中断命令体。卸载或停服时每个执行器最多等约 10 秒，等待包含完成钩子和
-锁释放；随后拒绝该执行器的新异步提交。到期记一条含执行器类名和剩余数量的 WARNING，任务
-继续在后台运行。多个卡住的执行器会累计等待时间，这是已知限制，不共用截止时间。卸载期间
-不要阻塞等待跳回 global／entity 的回调：等待中的 tick 线程无法执行它，框架调度器收回后
-再提交也会被拒绝；模块注入的调度器另按模块生命周期收回。
+提示一次，不取消或中断命令体。整次停服的全部命令执行器共用约 10 秒的剩余等待预算，包含
+完成钩子与锁释放；框架自带执行器显式登记，在 onDisable 开头、任何框架服务关闭前先等待，
+模块与根容器继续使用同一份预算。只有实际等待命令体的时间才扣，服务清理时间不扣，重复开始
+停服不恢复预算。非停服时单个模块卸载，其全部执行器共用一次新的约 10 秒等待预算，不同模块
+先后单独卸载互不影响。命令预算与界面关停预算互相独立，两者最坏相加约 20 秒，不含其他清理。
+卸载中的执行器拒绝新的异步提交；预算耗尽后其余执行器不再等，仍有运行任务的执行器各警告
+一次（类名、剩余数量），命令体不中断、继续在后台运行。卸载期间不要阻塞等待跳回 global／
+entity 的回调：等待中的 tick 线程无法执行它，框架调度器收回后再提交也会被拒绝；模块注入的
+调度器另按模块生命周期收回。冷却秒数保持无千位分隔符的纯整数。
 
 ## Message catalogues and automatic fallback (as of 7.0.0)
 

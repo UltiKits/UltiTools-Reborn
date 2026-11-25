@@ -18,10 +18,14 @@ import java.lang.annotation.Target;
  * always uses the framework-owned async scheduler, not the module scheduler. A handler consisting
  * only of tick-thread state access should not carry this annotation.
  * <p>
- * At unload each executor waits up to approximately ten seconds for accepted async bodies, including
- * their validator completion hooks, without interrupting them. Do not wait for a tick-thread handoff
- * inside such a body: the unload thread occupies that thread during the wait, and submissions are
- * rejected once the relevant scheduler owner retires. Several blocked executors can add their waits.
+ * At server stop all executors share approximately ten seconds of waiting for accepted async bodies
+ * and their validator completion hooks. Core commands drain before framework services shut down.
+ * Only actual command waiting consumes the allowance; repeated starts do not replenish it. A separate
+ * module unload shares a fresh ten-second allowance across that module's executors, independently of
+ * other module unloads. The UI has a separate allowance (up to about twenty seconds combined).
+ * Bodies are never interrupted. Do not wait for a tick-thread handoff inside such a body: the unload
+ * thread occupies that thread during the wait, and submissions are rejected once the relevant
+ * scheduler owner retires.
  * <p>
  * Use {@link AsyncCommand} when a processing notice or timeout report is also needed.
  *

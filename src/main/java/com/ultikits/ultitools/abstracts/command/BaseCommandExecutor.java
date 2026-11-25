@@ -13,7 +13,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -90,9 +89,7 @@ public abstract class BaseCommandExecutor {
     private int asyncCommands;
     private boolean asyncUnloading;
     private boolean asyncUnloadWaitFinished;
-    private long asyncUnloadDeadline;
-    /** Per-executor test seam; production always starts with the ten-second budget. */
-    Duration asyncUnloadWait = Duration.ofSeconds(10);
+    private CommandWaitBudget asyncUnloadBudget;
     
     @Getter
     private final ValidatorChain validatorChain;
@@ -283,11 +280,21 @@ public abstract class BaseCommandExecutor {
         }
     }
 
+    final void beginAsyncUnload(CommandWaitBudget budget) {
+        synchronized (asyncCommandsMonitor) {
+            if (!asyncUnloading) {
+                asyncUnloading = true;
+                asyncUnloadBudget = budget;
+            }
+        }
+    }
+
     /**
-     * Waits once, for at most ten seconds, for accepted asynchronous invocations and their
-     * completion hooks. Never cancels or interrupts a command body. Managers call this before
-     * releasing module resources or the framework scheduler; the container hook also covers
-     * executors owned by a directly constructed container.
+     * Waits once for accepted asynchronous invocations and their completion hooks, using the
+     * module drain's remaining allowance or the shared server-stop allowance (ten seconds total).
+     * Only actual command waiting consumes that allowance. Never cancels or interrupts a body.
+     * Managers call this before releasing module resources or the framework scheduler; the
+     * container hook also covers executors owned by a directly constructed container.
      *
      * @since 7.0.0
      */
@@ -299,8 +306,7 @@ public abstract class BaseCommandExecutor {
                 return;
             }
             if (!asyncUnloading) {
-                asyncUnloading = true;
-                asyncUnloadDeadline = System.nanoTime() + asyncUnloadWait.toNanos();
+                beginAsyncUnload(CommandRuntime.waitBudget());
             }
             waitForAsyncCommands();
             if (!asyncUnloadWaitFinished && asyncCommands > 0) {
@@ -314,12 +320,10 @@ public abstract class BaseCommandExecutor {
 
     private void waitForAsyncCommands() {
         while (asyncCommands > 0) {
-            long remaining = asyncUnloadDeadline - System.nanoTime();
-            if (remaining <= 0) {
-                return;
-            }
             try {
-                TimeUnit.NANOSECONDS.timedWait(asyncCommandsMonitor, remaining);
+                if (!asyncUnloadBudget.await(asyncCommandsMonitor)) {
+                    return;
+                }
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return;
@@ -451,8 +455,8 @@ public abstract class BaseCommandExecutor {
         joinDispatchedExecutors();
         ValidatorChain.ChainValidationResult validationResult = validatorChain.validate(context);
         if (!validationResult.isValid()) {
-            sendValidationFailure(context.getSender(), validationResult.getErrorText(), validationResult.getErrorMessage());
             notifyRefused(context, validationResult);
+            sendValidationFailure(context.getSender(), validationResult.getErrorText(), validationResult.getErrorMessage());
             return true;
         }
         Object[] methodParams;
@@ -737,8 +741,8 @@ public abstract class BaseCommandExecutor {
     }
 
     /**
-     * Sends the user-facing failure message, logs the exception, and best-effort reports it to
-     * {@link ErrorReportCollector} for a command method that threw. Split out of
+     * Logs the exception and best-effort reports it to {@link ErrorReportCollector}, then attempts
+     * the user-facing failure message for a command method that threw. Split out of
      * {@link #invokeCommandBody} for the same NPathComplexity reason as that extraction.
      *
      * @since 6.3.0
@@ -746,8 +750,6 @@ public abstract class BaseCommandExecutor {
     private void reportCommandExecutionError(CommandContext context, Method method, Exception e,
                                               TriggerContext triggerCtx) {
         Throwable cause = e.getCause() != null ? e.getCause() : e;
-        CommandRuntime.messages().send(context.getSender(), Text.of(CommandKeys.EXECUTION_FAILED,
-                Arg.string("error", describe(cause))));
         Logger.getLogger(BaseCommandExecutor.class.getName())
                 .log(Level.SEVERE, "Command execution failed: " + method.getName(), e);
         // Report to error collector
@@ -758,6 +760,12 @@ public abstract class BaseCommandExecutor {
             }
         } catch (Exception ignored) {
             // Never re-enter logging from error reporting
+        }
+        try {
+            CommandRuntime.messages().send(context.getSender(), Text.of(CommandKeys.EXECUTION_FAILED,
+                    Arg.string("error", describe(cause))));
+        } catch (RuntimeException unavailable) {
+            // The original failure is already logged and reported, even after services retire.
         }
     }
 

@@ -503,7 +503,6 @@ public class DataEntityTest {
 
             try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
                  MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
-                when(mockScheduler.global().isCurrentThread()).thenReturn(false);
                 when(mockScheduler.global().isCurrentThread()).thenReturn(true);
                 UltiTools mockUltiTools = stubUltiTools();
                 ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);

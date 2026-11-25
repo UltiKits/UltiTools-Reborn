@@ -928,6 +928,7 @@ class BaseCommandExecutorTest {
             // The default @AsyncCommand still sends its "processing" message; only the
             // TIMEOUT-specific report must be absent.
             verify(mockPlayer, never()).sendMessage(argThat((Component component) -> CommandMessageTestSupport.plain(component).contains("命令执行超时")));
+            verify(mockPlayer, never()).sendMessage(argThat((String message) -> message != null && message.contains("命令执行超时")));
         }
 
         @Test
