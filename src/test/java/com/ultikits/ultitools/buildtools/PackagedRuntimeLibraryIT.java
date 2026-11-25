@@ -29,11 +29,11 @@ class PackagedRuntimeLibraryIT {
         assertThat(jar).isRegularFile();
         Map<String, byte[]> classes = RuntimeApiGuard.jarClasses(jar);
         assertThat(classes).containsKey("com/ultikits/ultitools/UltiTools.class");
-        assertThat(classes.keySet()).anyMatch(name -> name.startsWith("mc/obliviate/"))
-                .anyMatch(name -> name.startsWith("com/github/Anon8281/universalScheduler/"));
+        assertThat(classes.keySet()).noneMatch(name -> name.startsWith("mc/obliviate/"))
+                .noneMatch(name -> name.startsWith("com/github/Anon8281/"));
         assertThat(RuntimeApiGuard.platformReferences(classes)).isEmpty();
         long bundled = classes.keySet().stream().filter(name -> !name.startsWith("com/ultikits/")).count();
-        assertThat(bundled).isGreaterThan(0);
+        assertThat(bundled).isZero();
         System.out.println("Post-shade platform guard: all classes=" + classes.size()
                 + ", non-framework classes=" + bundled + ", forbidden references=0");
     }
