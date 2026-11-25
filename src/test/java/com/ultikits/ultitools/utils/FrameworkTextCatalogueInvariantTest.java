@@ -95,7 +95,6 @@ class FrameworkTextCatalogueInvariantTest {
 
     /** Literals that reach the catalogue through a variable or a constructor field, not a literal argument. */
     private static final List<String> KEYS_VIA_VARIABLE = Arrays.asList(
-            "上一页", "下一页", "返回", "退出", "确认", "取消",
             "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul reload <模块名> 重载指定模块\n"
                     + "/ul list 查看已加载的模块列表\n================");
 
@@ -278,15 +277,9 @@ class FrameworkTextCatalogueInvariantTest {
         if (!KEYS_VIA_VARIABLE.contains(literal.value) || literal.characterLiteral) {
             return false;
         }
-        if ("com/ultikits/ultitools/commands/UltiToolsCommands.java".equals(literal.file)) {
-            return "UltiToolsCommands".equals(literal.enclosingType) && "help".equals(literal.site)
-                    && literal.value.equals(KEYS_VIA_VARIABLE.get(6));
-        }
-        int button = KEYS_VIA_VARIABLE.indexOf(literal.value);
-        List<String> names = Arrays.asList("PREVIOUS", "NEXT", "BACK", "QUIT", "OK", "CANCEL");
-        return "com/ultikits/ultitools/entities/Buttons.java".equals(literal.file)
-                && "Buttons".equals(literal.enclosingType) && button < names.size()
-                && names.get(button).equals(literal.site) && literal.wholeArgument;
+        return "com/ultikits/ultitools/commands/UltiToolsCommands.java".equals(literal.file)
+                && "UltiToolsCommands".equals(literal.enclosingType) && "help".equals(literal.site)
+                && literal.value.equals(KEYS_VIA_VARIABLE.get(0));
     }
 
     private static boolean isHelperCall(JavaLiteralScanner.Literal literal) {
