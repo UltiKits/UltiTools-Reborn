@@ -1,9 +1,36 @@
 package com.ultikits.ultitools.manager;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.entities.Capability;
-import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import net.kyori.adventure.text.Component;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -17,32 +44,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockito.ArgumentCaptor;
-
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.LogRecord;
-import java.util.logging.Logger;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 /**
  * Covers the v2 result shape produced by {@link CommandExecutionManager#execute}: the 6.3.0 guards,
@@ -117,16 +118,42 @@ class CommandExecutionManagerOutputTest {
         assertThat(entry.getValue().getReason()).contains("ultipanel.commands.blocklist");
     }
 
-    @Test
-    void aBlockedCommandIsAlsoLoggedAsAWarning() {
-        AtomicInteger dispatches = countDispatches("stop");
-
-        execute("/STOP");
-
-        assertThat(dispatches.get()).isZero();
-        // The 6.3.0 interception line, kept as the control that proves the refusal was observed.
-        String expected = FrameworkText.format("[远程命令] 已拦截: %s", "/STOP");
-        verify(logger).log(eq(Level.WARNING), eq(expected));
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void diagnosticRecordsUseServerLanguage(String code) throws Exception {
+        ConsoleCapture capture = new ConsoleCapture();
+        Logger actualLogger = Logger.getAnonymousLogger();
+        actualLogger.setUseParentHandlers(false);
+        actualLogger.addHandler(capture);
+        TestHelper.mockUltiToolsInstance(plugin -> {
+            when(plugin.getConfig()).thenReturn(config);
+            when(plugin.getLogger()).thenReturn(actualLogger);
+            when(plugin.getRemoteActionLog()).thenReturn(actionLog);
+        });
+        IllegalStateException failure = new IllegalStateException("boom");
+        register("crash", (sender, args) -> { throw failure; });
+        server.getCommandMap().register("ulticmd", new Command("wrapped", "", "", List.of("stop")) {
+            @Override public boolean execute(CommandSender sender, String label, String[] args) {
+                throw new AssertionError("Blocked alias must not execute");
+            }
+        });
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(
+                        support.messages(), Locale.forLanguageTag(code))) {
+            assertThat(execute("/STOP").blockedCalls).isEqualTo(1);
+            assertThat(execute("crash private-argument").failedCalls).isEqualTo(1);
+            assertThat(execute("wrapped").blockedCalls).isEqualTo(1);
+            List<LogRecord> records = capture.records();
+            assertThat(records).extracting(LogRecord::getMessage).containsExactly("zh".equals(code)
+                    ? new String[]{"[远程命令] 已拦截: /STOP", "[远程命令] > crash private-argument",
+                        "[远程命令] 命令执行异常: crash", "[远程命令] > wrapped", "[远程命令] 已拦截: wrapped"}
+                    : new String[]{"[Remote command] Blocked: /STOP", "[Remote command] > crash private-argument",
+                        "[Remote command] Command threw an exception: crash", "[Remote command] > wrapped",
+                        "[Remote command] Blocked: wrapped"});
+            assertThat(records).extracting(LogRecord::getLevel).containsExactly(
+                    Level.WARNING, Level.INFO, Level.WARNING, Level.INFO, Level.WARNING);
+            assertThat(records.get(2).getThrown()).isSameAs(failure);
+        }
     }
 
     @Test
@@ -251,19 +278,22 @@ class CommandExecutionManagerOutputTest {
     }
 
     @Test
-    void aDispatchExceptionIsLoggedWithTheCommandNameAndTheStackTrace() {
-        register("crash", (sender, args) -> {
-            throw new IllegalStateException("boom");
-        });
+    void aDispatchExceptionIsLoggedWithTheCommandNameAndTheStackTrace() throws Exception {
+        try (var support = new CommandMessageTestSupport("en");
+                var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.ENGLISH)) {
+            register("crash", (sender, args) -> {
+                throw new IllegalStateException("boom");
+            });
 
-        RecordingSink sink = execute("crash secret-argument");
+            RecordingSink sink = execute("crash secret-argument");
 
-        assertThat(sink.failedCalls).isEqualTo(1);
-        // The command name only — an argument may carry a secret — and with the throwable, so the
-        // operator keeps the stack trace the panel never receives.
-        verify(logger).log(eq(Level.WARNING),
-                argThat(line -> line.contains("crash") && !line.contains("secret-argument")),
-                any(IllegalStateException.class));
+            assertThat(sink.failedCalls).isEqualTo(1);
+            // The command name only — an argument may carry a secret — and with the throwable, so the
+            // operator keeps the stack trace the panel never receives.
+            verify(logger).log(eq(Level.WARNING),
+                    eq("[Remote command] Command threw an exception: crash"),
+                    any(IllegalStateException.class));
+        }
     }
 
     @Test

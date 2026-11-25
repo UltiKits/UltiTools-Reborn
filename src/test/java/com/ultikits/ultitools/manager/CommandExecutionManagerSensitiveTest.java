@@ -1,7 +1,9 @@
 package com.ultikits.ultitools.manager;
 
 import com.ultikits.ultitools.entities.Capability;
-import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import java.util.Locale;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 import com.ultikits.ultitools.websocket.SensitiveCommandRegistry;
@@ -50,6 +52,8 @@ class CommandExecutionManagerSensitiveTest {
 
     private static final String SECRET = "hunter2-zq81";
 
+    private CommandMessageTestSupport messageSupport;
+    private AutoCloseable messageScope;
     private ServerMock server;
     private YamlConfiguration config;
     private RemoteActionLog actionLog;
@@ -74,6 +78,8 @@ class CommandExecutionManagerSensitiveTest {
         config.set(Capability.COMMANDS.getConfigPath(), true);
         actionLog = mock(RemoteActionLog.class);
         logger = mock(Logger.class);
+        messageSupport = new CommandMessageTestSupport("zh");
+        messageScope = FrameworkMessages.overrideForTests(messageSupport.messages(), Locale.CHINESE);
         registry = new SensitiveCommandRegistry();
         registry.register("logadmin", "stop");
         TestHelper.mockUltiToolsInstance(plugin -> {
@@ -85,7 +91,9 @@ class CommandExecutionManagerSensitiveTest {
     }
 
     @AfterEach
-    void tearDown() {
+    void tearDown() throws Exception {
+        messageScope.close();
+        messageSupport.close();
         MockBukkitHelper.safeUnmock();
     }
 
@@ -101,7 +109,7 @@ class CommandExecutionManagerSensitiveTest {
         execute(commandLine);
 
         assertThat(loggedLines()).noneMatch(line -> line.contains(SECRET));
-        assertThat(loggedLines()).contains(FrameworkText.format("[远程命令] > %s", shown));
+        assertThat(loggedLines()).contains("[远程命令] > " + shown);
     }
 
     @Test
@@ -133,7 +141,7 @@ class CommandExecutionManagerSensitiveTest {
         execute("/stop now " + SECRET);
 
         assertThat(loggedLines()).noneMatch(line -> line.contains(SECRET));
-        assertThat(loggedLines()).contains(FrameworkText.format("[远程命令] 已拦截: %s", "stop ***"));
+        assertThat(loggedLines()).contains("[远程命令] 已拦截: stop ***");
         ArgumentCaptor<RemoteActionLog.Entry> entry = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
         verify(actionLog).record(entry.capture());
         assertThat(entry.getValue().getVerdict()).isEqualTo(RemoteActionLog.Verdict.DENIED);
@@ -169,7 +177,7 @@ class CommandExecutionManagerSensitiveTest {
     void anUnregisteredCommandIsLoggedAndRecordedAsReceived() {
         execute("/say hello " + SECRET);
 
-        assertThat(loggedLines()).contains(FrameworkText.format("[远程命令] > %s", "/say hello " + SECRET));
+        assertThat(loggedLines()).contains("[远程命令] > /say hello " + SECRET);
         ArgumentCaptor<RemoteActionLog.Entry> entry = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
         verify(actionLog).record(entry.capture());
         assertThat(entry.getValue().getTarget()).isEqualTo("/say hello " + SECRET);
@@ -185,7 +193,7 @@ class CommandExecutionManagerSensitiveTest {
 
         execute("logadmin reset Steve " + SECRET);
 
-        assertThat(loggedLines()).contains(FrameworkText.format("[远程命令] > %s", "logadmin reset Steve " + SECRET));
+        assertThat(loggedLines()).contains("[远程命令] > logadmin reset Steve " + SECRET);
     }
 
     @Test
@@ -200,8 +208,8 @@ class CommandExecutionManagerSensitiveTest {
         execute("/logadmin reset Steve " + SECRET);
 
         assertThat(loggedLines()).isNotEmpty().noneMatch(line -> line.contains(SECRET));
-        assertThat(loggedLines()).contains(FrameworkText.format("[远程命令] > %s", "logadmin ***"));
-        assertThat(loggedLines()).contains(FrameworkText.format("[远程命令] 命令执行异常: %s", "logadmin"));
+        assertThat(loggedLines()).contains("[远程命令] > logadmin ***");
+        assertThat(loggedLines()).contains("[远程命令] 命令执行异常: logadmin");
         ArgumentCaptor<RemoteActionLog.Entry> entry = ArgumentCaptor.forClass(RemoteActionLog.Entry.class);
         verify(actionLog, atLeastOnce()).record(entry.capture());
         assertThat(entry.getAllValues()).extracting(RemoteActionLog.Entry::getTarget).containsOnly("logadmin ***");

@@ -5,20 +5,27 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.handler.SystemLogHandler;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
-
+import org.bukkit.Bukkit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-
-import com.ultikits.ultitools.handler.SystemLogHandler;
-
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 /**
@@ -72,6 +79,33 @@ class LogStreamManagerTest {
 
     private static long systemLogHandlersOnRoot() {
         return Arrays.stream(Logger.getLogger("").getHandlers()).filter(SystemLogHandler.class::isInstance).count();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void listenerRegistrationFailureUsesServerLanguage(String code) throws Exception {
+        resetSingleton();
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setUseParentHandlers(false);
+        logger.addHandler(new Handler() {
+            @Override public void publish(LogRecord record) { records.add(record); }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        });
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                plugin -> org.mockito.Mockito.when(plugin.getLogger()).thenReturn(logger));
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(
+                        support.messages(), Locale.forLanguageTag(code));
+                var bukkit = org.mockito.Mockito.mockStatic(Bukkit.class)) {
+            bukkit.when(Bukkit::getPluginManager).thenThrow(new IllegalStateException("broken"));
+            assertThat(LogStreamManager.getInstance()).isNotNull();
+            assertThat(records).hasSize(1);
+            assertThat(records.getFirst().getLevel()).isEqualTo(Level.WARNING);
+            assertThat(records.getFirst().getMessage()).isEqualTo("zh".equals(code)
+                    ? "注册事件监听器失败: broken" : "Failed to register the event listener: broken");
+        }
     }
 
     @Test
