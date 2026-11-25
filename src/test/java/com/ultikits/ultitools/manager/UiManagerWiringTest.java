@@ -47,7 +47,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
-import mc.obliviate.inventory.InventoryAPI;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
@@ -319,7 +318,6 @@ class UiManagerWiringTest {
         doThrow(failure).when(partial).registerListeners(plugin);
         try (MockedConstruction<PaperSchedulerEngine> engines = mockConstruction(PaperSchedulerEngine.class,
                      (engine, creation) -> when(engine.newOwner("UltiTools")).thenReturn(scheduler));
-             MockedConstruction<InventoryAPI> inventories = mockConstruction(InventoryAPI.class);
              MockedStatic<UiManager> factory = mockStatic(UiManager.class)) {
             factory.when(() -> UiManager.create(any(Scheduler.class), any(Messages.class), any(ItemRenderer.class),
                     any(Logger.class), any(Thread.class), any(DialogPresenter.class))).thenAnswer(call -> {
@@ -327,7 +325,6 @@ class UiManagerWiringTest {
                         return partial;
                     });
             assertThatThrownBy(() -> new DependenceManagers(plugin, getClass().getClassLoader())).isSameAs(failure);
-            assertThat(inventories.constructed()).hasSize(1);
             assertThat(engines.constructed()).hasSize(1);
             verify(engines.constructed().getFirst()).retire(scheduler);
             verify(partial, times(created ? 1 : 0)).close();

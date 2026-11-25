@@ -373,13 +373,6 @@ class DependenceManagersTest {
     class MethodAccessibilityTests {
 
         @Test
-        @DisplayName("initInventoryAPI 是公开方法")
-        void initInventoryAPIIsPublic() throws Exception {
-            java.lang.reflect.Method method = DependenceManagers.class.getMethod("initInventoryAPI", UltiTools.class);
-            assertThat(java.lang.reflect.Modifier.isPublic(method.getModifiers())).isTrue();
-        }
-
-        @Test
         @DisplayName("closeContext 是公开方法")
         void closeContextIsPublic() throws Exception {
             java.lang.reflect.Method method = DependenceManagers.class.getMethod("closeContext");
