@@ -43,7 +43,7 @@ final class ModuleBootstraps {
             }
             attempted++;
             try {
-                contributions.accept(runOne(module.getKey(), metadata, bootstrapper, loader, logger));
+                contributions.accept(runOne(module.getKey(), metadata, bootstrapper, loader, logger, contributions));
             } catch (VirtualMachineError failure) {
                 throw failure;
             } catch (Throwable cause) { // NOPMD - a module failure must never abort the framework bootstrap
@@ -60,7 +60,7 @@ final class ModuleBootstraps {
     }
 
     private static ModuleContributions runOne(Path jar, PluginYmlReader.PluginYmlInfo metadata, String className,
-                               ClassLoader loader, Logger logger) throws Throwable {
+                               ClassLoader loader, Logger logger, ContributionRegistry registry) throws Throwable {
         Thread thread = Thread.currentThread();
         ClassLoader previous = thread.getContextClassLoader();
         try {
@@ -75,10 +75,18 @@ final class ModuleBootstraps {
             ModuleContributions contributions = new ModuleContributions(moduleName(jar, metadata), jar);
             try {
                 hook.bootstrap(new Context(contributions, logger));
-                return contributions;
             } finally {
                 contributions.seal();
+                var refusal = contributions.worldgenRefusal();
+                if (refusal != null) {
+                    registry.recordWorldgenRefusal(refusal);
+                }
             }
+            var refusal = contributions.worldgenRefusal();
+            if (refusal != null) {
+                throw refusal.failure();
+            }
+            return contributions;
         } finally {
             thread.setContextClassLoader(previous);
         }

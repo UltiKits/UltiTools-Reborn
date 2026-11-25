@@ -17,6 +17,7 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipFile;
 
 import org.bukkit.Keyed;
+import org.jetbrains.annotations.Nullable;
 
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.utils.ModuleContentKind;
@@ -27,6 +28,7 @@ import net.kyori.adventure.key.Key;
 /** Module-local declarations: only a sealed buffer from a successful hook reaches Paper. */
 final class ModuleContributions implements EnchantmentChannel, TagChannel, DatapackChannel {
     static final Pattern PACK_NAME = Pattern.compile("[a-z0-9_-]{1,32}");
+    private static final Pattern WORLDGEN = Pattern.compile("(^|/)data/[^/]+/(worldgen|dimension|dimension_type)/");
 
     private final String name;
     private final Path jar;
@@ -34,6 +36,7 @@ final class ModuleContributions implements EnchantmentChannel, TagChannel, Datap
     private final List<TagChange> tags = new ArrayList<>();
     private final Set<String> packs = new LinkedHashSet<>();
     private boolean sealed;
+    private @Nullable WorldgenRefusal worldgenRefusal;
 
     ModuleContributions(String name, Path jar) {
         this.name = name;
@@ -101,12 +104,42 @@ final class ModuleContributions implements EnchantmentChannel, TagChannel, Datap
         }
         namespace(); // Validate the namespace before using it in the cache file name.
         try (ZipFile archive = new ZipFile(jar.toFile())) {
+            refuseWorldgen(archive, pack);
             validatePack(archive, pack);
         } catch (IOException failure) {
             throw new IllegalArgumentException("Data pack '" + pack + "' in module '" + name + "': "
                     + failure.getMessage(), failure);
         }
         packs.add(pack);
+    }
+
+    @Nullable WorldgenRefusal worldgenRefusal() { return worldgenRefusal; }
+
+    private void refuseWorldgen(ZipFile archive, String pack) {
+        String directory = worldgenDirectory(archive, pack);
+        if (directory != null) {
+            if (worldgenRefusal == null) {
+                worldgenRefusal = new WorldgenRefusal(name, pack, directory);
+            }
+            throw worldgenRefusal.failure();
+        }
+    }
+
+    // Inspect every path, including overlay roots, not just the data directory at the pack root.
+    static @Nullable String worldgenDirectory(ZipFile archive, String pack) {
+        String prefix = "datapacks/" + pack + '/';
+        var entries = archive.entries();
+        while (entries.hasMoreElements()) {
+            String entry = entries.nextElement().getName();
+            if (entry.startsWith(prefix)) {
+                String relative = entry.substring(prefix.length());
+                var match = WORLDGEN.matcher(relative);
+                if (match.find()) {
+                    return relative.substring(0, match.end());
+                }
+            }
+        }
+        return null;
     }
 
     static void validatePack(ZipFile archive, String pack) throws IOException {
@@ -157,6 +190,14 @@ final class ModuleContributions implements EnchantmentChannel, TagChannel, Datap
     record TagChange(RegistryKey<?> registry, Key tag, List<Key> values, boolean replace) {
         ContentEntry entry() {
             return new ContentEntry(ContentEntry.TAG_PREFIX + registry.key().asString(), tag.asString());
+        }
+    }
+
+    record WorldgenRefusal(String module, String pack, String directory) {
+        IllegalArgumentException failure() {
+            return new IllegalArgumentException("Data pack '" + pack + "' in module '" + module
+                    + "' contains world-generation data (" + directory + "); UltiTools 7.0.0 does not load modules "
+                    + "whose data packs add biomes, structures or dimensions.");
         }
     }
 }

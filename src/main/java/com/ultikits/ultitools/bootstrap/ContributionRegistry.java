@@ -25,6 +25,7 @@ final class ContributionRegistry {
     private final List<ModuleContributions> modules = new ArrayList<>();
     private final Set<ContentEntry> reserved = new HashSet<>();
     private final Set<String> withoutHooks = new LinkedHashSet<>();
+    private final List<ModuleContributions.WorldgenRefusal> worldgenRefusals = new ArrayList<>();
     private final Set<Path> failures = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean composed = new AtomicBoolean();
     private List<EmbeddedDatapacks.PreparedPack> packs = List.of();
@@ -57,6 +58,10 @@ final class ContributionRegistry {
     void recordWithoutHook(String module) { withoutHooks.add(module); }
 
     Set<String> withoutHooks() { return Collections.unmodifiableSet(withoutHooks); }
+
+    void recordWorldgenRefusal(ModuleContributions.WorldgenRefusal refusal) { worldgenRefusals.add(refusal); }
+
+    List<ModuleContributions.WorldgenRefusal> worldgenRefusals() { return List.copyOf(worldgenRefusals); }
 
     boolean failed(Path jar) { return failures.contains(jar); }
 

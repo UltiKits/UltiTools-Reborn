@@ -41,6 +41,11 @@ final class BootstrapContentReport {
                         Arg.number("datapacks", count.datapacks())));
             }
         }
+        for (var refusal : registry.worldgenRefusals()) {
+            logger.warning(FrameworkMessages.plain(BootstrapContentKeys.WORLDGEN_REFUSED,
+                    Arg.string("module", refusal.module()), Arg.string("pack", refusal.pack()),
+                    Arg.string("path", refusal.directory())));
+        }
         ledger.removed().forEach((module, entries) -> warn(logger, BootstrapContentKeys.REMOVED, module, entries));
         ledger.dropped().forEach((module, entries) -> warn(logger, BootstrapContentKeys.DROPPED, module, entries));
     }

@@ -90,6 +90,19 @@ public final class BootstrapFixtures {
         return hook(name, failureType, false, "declareContent");
     }
 
+    static byte[] caughtWorldgenHook(String name) {
+        return hook(name, null, false, "declareCaughtWorldgen");
+    }
+
+    public static void declareCaughtWorldgen(ModuleBootstrapContext context) {
+        declareContent(context);
+        try {
+            context.datapacks().embedded("land");
+        } catch (IllegalArgumentException ignored) {
+            // The module deliberately tries to proceed after a refused declaration.
+        }
+    }
+
     public static byte[] initializerFailureHook(String name) {
         return hook(name, null, true, null);
     }

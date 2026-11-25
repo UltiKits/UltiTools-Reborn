@@ -62,6 +62,13 @@ final class EmbeddedDatapacks {
             BootstrapFiles.ensureDirectory(directory);
             for (String name : module.packNames()) {
                 id = module.packId(name);
+                // Recheck the actual archive about to be handed to Paper, even if it was replaced after declaration.
+                String refused = ModuleContributions.worldgenDirectory(archive, name);
+                if (refused != null) {
+                    var rejection = new ModuleContributions.WorldgenRefusal(module.name(), name, refused);
+                    registry.recordWorldgenRefusal(rejection);
+                    throw rejection.failure();
+                }
                 Path zip = directory.resolve(id + ".zip");
                 extract(archive, name, zip);
                 packs.add(new PreparedPack(module, zip, id));
