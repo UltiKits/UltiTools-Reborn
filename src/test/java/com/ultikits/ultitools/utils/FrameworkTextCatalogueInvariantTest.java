@@ -35,8 +35,6 @@ import com.google.gson.JsonParser;
  * <ol>
  *   <li>the direct first argument of an {@code i18n(...)}, {@code localize(...)} or
  *       {@code FrameworkText.text/format(...)} call, with the key present in {@code en.json};</li>
- *   <li>a catalogue key reached through a variable, listed in {@link #KEYS_VIA_VARIABLE} and present in
- *       both catalogues;</li>
  *   <li>a named exemption in {@link #EXEMPTIONS}, each with its reason and its exact literal count,
  *       so a new literal in an exempt file still fails;</li>
  *   <li>the whole initializer of a {@code static final String} declared in a nested class named
@@ -92,10 +90,6 @@ class FrameworkTextCatalogueInvariantTest {
                     "the resource-folder name returned by getResourceFolderName(), kept at its pre-6.3.0 "
                             + "value so an existing install keeps its folder; an identifier, never shown "
                             + "(the display name getName() is English)"));
-
-    /** Literals that reach the catalogue through a variable or a constructor field, not a literal argument. */
-    private static final List<String> KEYS_VIA_VARIABLE = Arrays.asList(
-            "上一页", "下一页", "返回", "退出", "确认", "取消");
 
     /**
      * A named exemption: every CJK literal of {@code file} that is not a translated catalogue key is
@@ -167,8 +161,7 @@ class FrameworkTextCatalogueInvariantTest {
         Map<String, String> misused = holderMisuses(sources, holderConstants);
         List<String> violations = new ArrayList<>();
         for (JavaLiteralScanner.Literal literal : literals) {
-            if (isTranslated(literal) || isVariableKeySite(literal)
-                    || exemptionFor(literal) != null) {
+            if (isTranslated(literal) || exemptionFor(literal) != null) {
                 continue;
             }
             if (!isHolderConstant(literal)) {
@@ -272,17 +265,6 @@ class FrameworkTextCatalogueInvariantTest {
                 && "com/ultikits/ultitools/manager/DataStoreManager.java".equals(literal.file)));
     }
 
-    private static boolean isVariableKeySite(JavaLiteralScanner.Literal literal) {
-        if (!KEYS_VIA_VARIABLE.contains(literal.value) || literal.characterLiteral) {
-            return false;
-        }
-        int button = KEYS_VIA_VARIABLE.indexOf(literal.value);
-        List<String> names = Arrays.asList("PREVIOUS", "NEXT", "BACK", "QUIT", "OK", "CANCEL");
-        return "com/ultikits/ultitools/entities/Buttons.java".equals(literal.file)
-                && "Buttons".equals(literal.enclosingType) && button < names.size()
-                && names.get(button).equals(literal.site) && literal.wholeArgument;
-    }
-
     private static boolean isHelperCall(JavaLiteralScanner.Literal literal) {
         return HELPER.equals(literal.receiver)
                 && ("text".equals(literal.callName) || "format".equals(literal.callName));
@@ -323,20 +305,6 @@ class FrameworkTextCatalogueInvariantTest {
             assertThat(found).as("untranslated CJK literals in exempt file %s", exemption.file)
                     .isEqualTo(exemption.count);
             assertThat(exemption.reason).isNotBlank();
-        }
-    }
-
-    @Test
-    @DisplayName("keys reached through a variable exist in the source and in both catalogues")
-    void variableKeysExistInBothCatalogues() throws IOException {
-        List<JavaLiteralScanner.Literal> literals = cjkLiterals();
-        JsonObject en = catalogue("en");
-        JsonObject zh = catalogue("zh");
-        for (String key : KEYS_VIA_VARIABLE) {
-            assertThat(literals.stream().filter(l -> l.value.equals(key) && isVariableKeySite(l)).count())
-                    .as("exactly one authorized declaration site remains for %s", key).isEqualTo(1);
-            assertThat(en.has(key)).as("en.json has %s", key).isTrue();
-            assertThat(zh.has(key)).as("zh.json has %s", key).isTrue();
         }
     }
 
@@ -571,12 +539,6 @@ class FrameworkTextCatalogueInvariantTest {
         assertThat(plainViolations("player.sendMessage('中');")).hasSize(1);
         assertThat(plainViolations("char c = '\\u4e2d';")).hasSize(1);
         assertThat(plainViolations("char c = 'x';")).isEmpty();
-    }
-
-    @Test
-    void variableKeyExemptionsAreBoundToTheirDeclarationSite() {
-        assertThat(plainViolations("player.sendMessage(\"上一页\");")).hasSize(1);
-        assertThat(plainViolations("String raw = \"取消\";")).hasSize(1);
     }
 
     @Test
