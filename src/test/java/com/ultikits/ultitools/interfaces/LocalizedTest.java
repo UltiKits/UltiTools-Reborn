@@ -633,7 +633,7 @@ class LocalizedTest {
         @Test
         @DisplayName("Test 3: the English value substitutes the named seconds argument")
         void enValueHasPlaceholderAndFormatsToEnglish() throws Exception {
-            assertThat(loadMessageCatalogue("en").getString(expectedKey.path())).contains("<seconds>");
+            assertThat(loadMessageCatalogue("en").getString(expectedKey.path())).contains("<seconds:'0'>");
             try (var messages = new CommandMessageTestSupport("en")) {
                 String rendered = CommandMessageTestSupport.plain(messages.messages().render(
                         Text.of(expectedKey, Arg.number("seconds", 5L)), Locale.ENGLISH));
@@ -646,7 +646,7 @@ class LocalizedTest {
         @DisplayName("Test 4: the Chinese value retains its words and named parameter")
         void zhValueRetainsItsWordsAndNamedArgument() throws IOException {
             assertThat(loadMessageCatalogue("zh").getString(expectedKey.path()))
-                    .isEqualTo("<red>操作频繁，请 <seconds> 秒后再试");
+                    .isEqualTo("<red>操作频繁，请 <seconds:'0'> 秒后再试");
         }
 
         @Test
