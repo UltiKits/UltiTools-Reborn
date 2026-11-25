@@ -214,6 +214,17 @@ global/entity callback during unload: the unloading tick thread cannot run that 
 and later framework submissions are refused once its scheduler retires. A module's injected scheduler
 has its own retirement rules. Cooldown seconds remain plain integers without locale grouping.
 
+When a module is unloaded, reloaded or updated while the server is running, its unload path waits
+on the server thread. If an async command body has not finished within about ten seconds, Paper's
+default `watchdog.early-warning-delay` of 10000 milliseconds in `config/paper-global.yml` can produce
+`The server has not responded for 10 seconds! Creating thread dump` and a thread dump showing the
+framework's waiting call stack. This warning is not a crash: the server continues running after the
+wait. Investigate the unfinished command body, not the server itself. Command waiting and UI save
+waiting have independent allowances; if both use their full allowances, a live module unload can
+wait about twenty seconds, excluding other cleanup. Paper can repeat the warning during that wait
+(default `watchdog.early-warning-every`: 5000 milliseconds). These early warnings are not emitted
+during server shutdown.
+
 中文补充：框架命令反馈已改用 `Messages`；`language: auto` 时按各玩家当前客户端语言渲染，
 控制台、命令方块和面板使用后备语言。上列 13 个键都属于 `ultitools` 命名空间，可在
 `plugins/UltiTools/messages/<locale>.yml` 中覆盖；框架目录覆盖目前须重启生效。原有回复措辞和
@@ -234,6 +245,15 @@ has its own retirement rules. Cooldown seconds remain plain integers without loc
 一次（类名、剩余数量），命令体不中断、继续在后台运行。卸载期间不要阻塞等待跳回 global／
 entity 的回调：等待中的 tick 线程无法执行它，框架调度器收回后再提交也会被拒绝；模块注入的
 调度器另按模块生命周期收回。冷却秒数保持无千位分隔符的纯整数。
+
+服务器运行中卸载、重载或更新模块时，卸载路径在服务器线程上等待。如果该模块有异步命令体
+约 10 秒内没有结束，Paper 默认的预警延迟（`config/paper-global.yml` 中
+`watchdog.early-warning-delay`，10000 毫秒）可能触发控制台日志
+`The server has not responded for 10 seconds! Creating thread dump` 与线程转储，其中会看到框架
+等待的调用栈。这不是崩溃，等待结束后服务器继续运行；不需要处理服务器本身，应检查那个没有
+结束的命令体。命令等待与界面保存等待的预算各自独立，两者都等满时，运行中卸载最坏会等待约
+20 秒，不含其他清理；期间 Paper 可能重复预警（`watchdog.early-warning-every` 默认 5000 毫秒）。
+停服过程中不会发出这种预警。
 
 ## Message catalogues and automatic fallback (as of 7.0.0)
 
