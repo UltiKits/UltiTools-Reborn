@@ -1,12 +1,17 @@
 package com.ultikits.ultitools.services.impl;
 
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import static com.ultikits.ultitools.services.impl.ServiceKeys.*;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.title.Title;
+
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.Sound;
@@ -191,21 +196,31 @@ public class InMemeryTeleportService implements TeleportService {
      */
     static DelayTeleportResult processDelayTeleportTick(Player player, Location location, float time) {
         if (!teleportingPlayers.getOrDefault(player.getUniqueId(), false)) {
-            player.sendTitle(ChatColor.RED + UltiTools.getInstance().i18n("传送失败！"), UltiTools.getInstance().i18n("请勿移动！"), 10, 50, 20);
+            var messages = FrameworkMessages.messages();
+            player.showTitle(Title.title(messages.render(TELEPORT_FAILED_TITLE, player),
+                    messages.render(TELEPORT_FAILED_SUBTITLE, player), times(10, 50, 20)));
             return new DelayTeleportResult(true, time);
         }
         if (time == 0) {
             inMemoryLocationRecord.put(player.getUniqueId(), player.getLocation());
             player.teleport(location);
             player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1, 0);
-            player.sendTitle(ChatColor.GREEN + UltiTools.getInstance().i18n("传送成功！"), "", 10, 50, 20);
+            player.showTitle(Title.title(FrameworkMessages.messages().render(TELEPORT_SUCCESS_TITLE, player),
+                    Component.empty(), times(10, 50, 20)));
             teleportingPlayers.put(player.getUniqueId(), false);
             return new DelayTeleportResult(true, time);
         }
         if ((time / 0.5 % 2) == 0) {
-            player.sendTitle(ChatColor.GREEN + UltiTools.getInstance().i18n("传送中..."), String.format(UltiTools.getInstance().i18n("离传送还有%d秒"), (int) time), 10, 70, 20);
+            var messages = FrameworkMessages.messages();
+            player.showTitle(Title.title(messages.render(TELEPORT_PENDING_TITLE, player),
+                    messages.render(TELEPORT_PENDING_SUBTITLE, player, Arg.number("seconds", (int) time)), times(10, 70, 20)));
         }
         return new DelayTeleportResult(false, time - 0.5f);
+    }
+
+    private static Title.Times times(long fadeIn, long stay, long fadeOut) {
+        return Title.Times.times(net.kyori.adventure.util.Ticks.duration(fadeIn),
+                net.kyori.adventure.util.Ticks.duration(stay), net.kyori.adventure.util.Ticks.duration(fadeOut));
     }
 
     /**

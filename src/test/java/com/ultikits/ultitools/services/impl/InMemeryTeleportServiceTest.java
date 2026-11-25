@@ -54,6 +54,10 @@ import org.mockbukkit.mockbukkit.entity.PlayerMock;
 @DisplayName("InMemeryTeleportService 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class InMemeryTeleportServiceTest {
+    @org.junit.jupiter.api.extension.RegisterExtension
+    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
+            new com.ultikits.ultitools.manager.FrameworkMessagesExtension("en");
+
 
     private ServerMock server;
     private InMemeryTeleportService teleportService;
@@ -213,6 +217,7 @@ class InMemeryTeleportServiceTest {
     @Test
     void immediateAndDelayedTeleportKeepTheNativeSoundAndTitleParameters() {
         org.bukkit.entity.Player player = mock(org.bukkit.entity.Player.class);
+        when(player.locale()).thenReturn(java.util.Locale.ENGLISH);
         when(player.getUniqueId()).thenReturn(UUID.randomUUID());
         Location location = new Location(server.addSimpleWorld("native-sound"), 1, 64, 1);
         when(player.getLocation()).thenReturn(location);
@@ -225,7 +230,11 @@ class InMemeryTeleportServiceTest {
                 org.mockito.ArgumentMatchers.eq(location), sounds.capture(),
                 org.mockito.ArgumentMatchers.eq(1f), org.mockito.ArgumentMatchers.eq(0f));
         assertThat(sounds.getAllValues()).containsOnly(org.bukkit.Sound.ENTITY_ENDERMAN_TELEPORT);
-        org.mockito.Mockito.verify(player).sendTitle(org.bukkit.ChatColor.GREEN + "传送成功！", "", 10, 50, 20);
+        var titles = org.mockito.ArgumentCaptor.forClass(net.kyori.adventure.title.Title.class);
+        org.mockito.Mockito.verify(player).showTitle(titles.capture());
+        assertThat(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(titles.getValue().title()))
+                .isEqualTo("Teleport Succeed!");
+        assertThat(titles.getValue().times().stay()).isEqualTo(Duration.ofMillis(2500));
     }
 
     @Nested
