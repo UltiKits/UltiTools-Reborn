@@ -247,7 +247,7 @@ When a module is unloaded, reloaded or updated while the server is running, this
 
 ## Game-interrupted screens (as of 7.0.0)
 
-For chest grids and bound-container screens, only a player's own close maps to `PLAYER`. Paper closes
+For chest grids and bound-container screens, only a player's own close maps to `PLAYER`. Paper's close reasons
 `DEATH`, `TELEPORT`, `OPEN_NEW`, `PLUGIN`, `UNLOADED` and `UNKNOWN` map to `INTERRUPTED` unless the
 framework has already selected its own outcome. `DISCONNECT` maps to `DISCONNECTED`. `CANT_USE` waits
 for a quit in the same tick (`DISCONNECTED`), otherwise the next cleanup tick selects `INTERRUPTED`.
