@@ -36,7 +36,6 @@
     <properties>
         <java.version>25</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <gui.version>4.3.1</gui.version>
         <!-- Default excluded test groups - override with -DexcludedGroups= to run isolated tests -->
         <excludedGroups>isolated</excludedGroups>
         <!-- Default API URL for production; override with -Dultitools.api.url=http://localhost:8787 for dev -->
@@ -204,13 +203,7 @@
                         <configuration>
                             <failOnWarning>true</failOnWarning>
                             <ignoreNonCompile>true</ignoreNonCompile>
-                            <!-- These arrive transitively through paper-api (provided) or via
-                                 obliviate-invs' own multi-module jitpack split. Paper is the
-                                 sanctioned API boundary and already resolves them at runtime, so
-                                 declaring each one directly here would be redundant noise, not a
-                                 real supply-chain risk. History: this plugin execution was added to
-                                 catch an undeclared slf4j-api use (FOUND-05); that declaration and
-                                 the framework's slf4j use were later removed in 6.3.0. -->
+                            <!-- These arrive transitively through paper-api (provided), the sanctioned runtime API boundary. -->
                             <ignoredUsedUndeclaredDependencies>
                                 <ignoredUsedUndeclaredDependency>com.mojang:brigadier</ignoredUsedUndeclaredDependency>
                                 <ignoredUsedUndeclaredDependency>net.md-5:bungeecord-chat</ignoredUsedUndeclaredDependency>
@@ -219,20 +212,7 @@
                                 <ignoredUsedUndeclaredDependency>net.kyori:adventure-text-serializer-plain</ignoredUsedUndeclaredDependency>
                                 <ignoredUsedUndeclaredDependency>net.kyori:adventure-api</ignoredUsedUndeclaredDependency>
                                 <ignoredUsedUndeclaredDependency>com.google.guava:guava</ignoredUsedUndeclaredDependency>
-                                <ignoredUsedUndeclaredDependency>com.github.hamza-cskn.obliviate-invs:core</ignoredUsedUndeclaredDependency>
-                                <ignoredUsedUndeclaredDependency>com.github.hamza-cskn.obliviate-invs:pagination</ignoredUsedUndeclaredDependency>
                             </ignoredUsedUndeclaredDependencies>
-                            <!-- obliviate-invs is the parent aggregator whose own classes framework
-                                 code never references directly (only its core/pagination submodules
-                                 above). UniversalScheduler is pulled in solely so the shade plugin
-                                 can exclude its duplicate classes bundled inside obliviate-invs (see
-                                 the shade <filters> block below) and is invoked by obliviate-invs at
-                                 runtime via reflection, never from this framework's own compiled
-                                 classes - analyze-only's static bytecode scan cannot see that. -->
-                            <ignoredUnusedDeclaredDependencies>
-                                <ignoredUnusedDeclaredDependency>com.github.hamza-cskn:obliviate-invs</ignoredUnusedDeclaredDependency>
-                                <ignoredUnusedDeclaredDependency>com.github.Anon8281:UniversalScheduler</ignoredUnusedDeclaredDependency>
-                            </ignoredUnusedDeclaredDependencies>
                         </configuration>
                     </execution>
                 </executions>
@@ -540,26 +520,6 @@
                                         <exclude>DebugProbesKt.bin</exclude>
                                     </excludes>
                                 </filter>
-                                <!-- 排除 obliviate-invs 子模块中的重复 UniversalScheduler 类 -->
-                                <filter>
-                                    <artifact>com.github.hamza-cskn.obliviate-invs:advancedslot</artifact>
-                                    <excludes>
-                                        <exclude>com/github/Anon8281/universalScheduler/**</exclude>
-                                    </excludes>
-                                </filter>
-                                <filter>
-                                    <artifact>com.github.hamza-cskn.obliviate-invs:core</artifact>
-                                    <excludes>
-                                        <exclude>com/github/Anon8281/universalScheduler/**</exclude>
-                                        <exclude>mc/obliviate/util/versiondetection/**</exclude>
-                                    </excludes>
-                                </filter>
-                                <filter>
-                                    <artifact>com.github.hamza-cskn.obliviate-invs:configurablegui</artifact>
-                                    <excludes>
-                                        <exclude>mc/obliviate/util/versiondetection/**</exclude>
-                                    </excludes>
-                                </filter>
                             </filters>
                             <!-- 防止 minimizeJar 移除反射加载的类 -->
                             <transformers>
@@ -797,29 +757,6 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
-            <groupId>com.github.hamza-cskn</groupId>
-            <artifactId>obliviate-invs</artifactId>
-            <version>${gui.version}</version>
-            <exclusions>
-                <!-- 排除重复的 UniversalScheduler (core 和 advancedslot 都包含) -->
-                <exclusion>
-                    <groupId>com.github.Anon8281</groupId>
-                    <artifactId>UniversalScheduler</artifactId>
-                </exclusion>
-                <!-- 排除重复的 version-detection -->
-                <exclusion>
-                    <groupId>com.github.hamza-cskn.obliviate-utils</groupId>
-                    <artifactId>version-detection</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <!-- 单独引入 UniversalScheduler 避免重复 -->
-        <dependency>
-            <groupId>com.github.Anon8281</groupId>
-            <artifactId>UniversalScheduler</artifactId>
-            <version>0.1.7</version>
-        </dependency>
-        <dependency>
             <groupId>me.clip</groupId>
             <artifactId>placeholderapi</artifactId>
             <version>2.12.3</version>
@@ -907,7 +844,7 @@
              invoking any UltiToolsPlugin constructor. analyze-only (FOUND-05, T-01-03b) fails the
              build on any class used but not explicitly declared, so it is declared here rather
              than added to ignoredUsedUndeclaredDependencies - unlike that list's entries (arriving
-             solely through paper-api/obliviate-invs and never referenced by name), this one is
+             solely through paper-api and never referenced by name), this one is
              imported by fully-qualified name in framework test source. Its explicit version is
              maintained for these allocation tests independently of Mockito's transitive pin. -->
         <dependency>
