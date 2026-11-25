@@ -94,9 +94,22 @@ class FrameworkTextCatalogueInvariantTest {
                             + "(the display name getName() is English)"));
 
     /** Literals that reach the catalogue through a variable or a constructor field, not a literal argument. */
-    private static final List<String> KEYS_VIA_VARIABLE = Arrays.asList(
-            "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul reload <模块名> 重载指定模块\n"
-                    + "/ul list 查看已加载的模块列表\n================");
+    private static final List<VariableKey> KEYS_VIA_VARIABLE = List.of(
+            new VariableKey("com/ultikits/ultitools/commands/UltiToolsCommands.java", "UltiToolsCommands", "help",
+                    "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul reload <模块名> 重载指定模块\n"
+                            + "/ul list 查看已加载的模块列表\n================"),
+            // These two diagnostics still use FrameworkText.format until their log migration.
+            new VariableKey("com/ultikits/ultitools/utils/PluginInstallUtils.java", "PluginInstallUtils",
+                    "REASON_INTEGRITY_FAILED", "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。"),
+            new VariableKey("com/ultikits/ultitools/utils/PluginInstallUtils.java", "PluginInstallUtils",
+                    "REASON_LICENCE_REQUIRED", "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。"));
+
+    private record VariableKey(String file, String type, String site, String value) {
+        boolean matches(JavaLiteralScanner.Literal literal) {
+            return !literal.characterLiteral && file.equals(literal.file) && type.equals(literal.enclosingType)
+                    && site.equals(literal.site) && value.equals(literal.value);
+        }
+    }
 
     /**
      * A named exemption: every CJK literal of {@code file} that is not a translated catalogue key is
@@ -274,12 +287,7 @@ class FrameworkTextCatalogueInvariantTest {
     }
 
     private static boolean isVariableKeySite(JavaLiteralScanner.Literal literal) {
-        if (!KEYS_VIA_VARIABLE.contains(literal.value) || literal.characterLiteral) {
-            return false;
-        }
-        return "com/ultikits/ultitools/commands/UltiToolsCommands.java".equals(literal.file)
-                && "UltiToolsCommands".equals(literal.enclosingType) && "help".equals(literal.site)
-                && literal.value.equals(KEYS_VIA_VARIABLE.get(0));
+        return KEYS_VIA_VARIABLE.stream().anyMatch(key -> key.matches(literal));
     }
 
     private static boolean isHelperCall(JavaLiteralScanner.Literal literal) {
@@ -331,11 +339,11 @@ class FrameworkTextCatalogueInvariantTest {
         List<JavaLiteralScanner.Literal> literals = cjkLiterals();
         JsonObject en = catalogue("en");
         JsonObject zh = catalogue("zh");
-        for (String key : KEYS_VIA_VARIABLE) {
-            assertThat(literals.stream().filter(l -> l.value.equals(key) && isVariableKeySite(l)).count())
-                    .as("exactly one authorized declaration site remains for %s", key).isEqualTo(1);
-            assertThat(en.has(key)).as("en.json has %s", key).isTrue();
-            assertThat(zh.has(key)).as("zh.json has %s", key).isTrue();
+        for (VariableKey key : KEYS_VIA_VARIABLE) {
+            assertThat(literals.stream().filter(key::matches).count())
+                    .as("exactly one authorized declaration site remains for %s", key.site()).isEqualTo(1);
+            assertThat(en.has(key.value())).as("en.json has %s", key.site()).isTrue();
+            assertThat(zh.has(key.value())).as("zh.json has %s", key.site()).isTrue();
         }
     }
 
@@ -574,11 +582,12 @@ class FrameworkTextCatalogueInvariantTest {
 
     @Test
     void variableKeyExemptionsAreBoundToTheirDeclarationSite() {
-        // The one remaining exempt literal is exempt only where it is declared (UltiToolsCommands#help):
-        // the same literal in any other file is an ordinary violation.
-        String exemptLiteral = KEYS_VIA_VARIABLE.get(0)
-                .replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
-        assertThat(plainViolations("String raw = \"" + exemptLiteral + "\";")).hasSize(1);
+        for (VariableKey key : KEYS_VIA_VARIABLE) {
+            String literal = key.value().replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+            assertThat(plainViolations("String raw = \"" + literal + "\";")).hasSize(1);
+            String otherSite = "class " + key.type() + " { private static final String OTHER = \"" + literal + "\"; }";
+            assertThat(findViolations(Map.of(key.file(), otherSite), new JsonObject(), new JsonObject())).hasSize(1);
+        }
         assertThat(plainViolations("player.sendMessage(\"上一页\");")).hasSize(1);
     }
 

@@ -496,7 +496,9 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             }
             return;
         }
-        String identify = PluginInstallUtils.pendingUpdateIdentifier(pluginName);
+        // A queued change can be refreshed without relying on the unfinished startup scan.
+        var journal = UltiTools.getInstance().getModuleFileTransactions();
+        String identify = journal == null ? null : journal.pendingIdentifyString(pluginName);
         if (identify == null && sendPendingIfAny(sender, updateManager)) {
             return;
         }

@@ -5,6 +5,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
@@ -116,6 +118,24 @@ class ModuleUpdateCommandTest {
 
         assertThat(all()).contains("Demo 将在下次重启时从 1.0 更新到 1.1").contains("下次重启时").contains("恢复为 1.0")
                 .doesNotContain("更新成功");
+    }
+
+    @Test
+    void aQueuedInstallCanBeRefreshedWithoutReadingTheUnfinishedScan() {
+        UltiTools framework = UltiTools.getInstance();
+        UpdateManager updateManager = framework.getUpdateManager();
+        when(updateManager.isCheckComplete()).thenReturn(false);
+        var journal = mock(ModuleFileTransactions.class);
+        when(framework.getModuleFileTransactions()).thenReturn(journal);
+        when(journal.pendingIdentifyString("Demo")).thenReturn("demo");
+        var staged = result(ModuleFileTransactions.StageResult.Outcome.ALREADY_STAGED, null, "1.1", null);
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo", sender)).thenReturn(staged);
+
+        executor.updatePlugin(sender, "Demo");
+
+        verify(updateManager, never()).getModuleUpdates();
+        utils.verify(() -> PluginInstallUtils.stageUpdate("demo", sender));
+        assertThat(all()).contains("Demo 1.1 已在等待下次重启生效");
     }
 
     @Test

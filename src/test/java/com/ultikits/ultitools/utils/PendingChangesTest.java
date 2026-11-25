@@ -188,13 +188,13 @@ class PendingChangesTest {
     @CsvSource({"install,false", "update,true", "uninstall,true"})
     void revokeCancelsEveryPendingKindWithoutAdvancingGeneration(String kind, boolean running) throws IOException {
         prepare(kind, running);
-        long generation = ModuleFileTransactions.pendingGeneration();
+        long generation = transactions.pendingGeneration();
         var previous = pending.list().getFirst();
         assertThat(pending.revoke(previous.id(), "0".repeat(16), true).outcome()).isEqualTo(Outcome.CHANGED);
         assertThat(pending.list()).containsExactly(previous);
         assertThat(pending.revoke(previous.id(), previous.revision(), true).outcome()).isEqualTo(Outcome.REVOKED);
         assertThat(pending.revoke(previous.id(), null, false).outcome()).isEqualTo(Outcome.NOT_FOUND);
-        assertThat(ModuleFileTransactions.pendingGeneration()).isEqualTo(generation);
+        assertThat(transactions.pendingGeneration()).isEqualTo(generation);
     }
 
     @ParameterizedTest

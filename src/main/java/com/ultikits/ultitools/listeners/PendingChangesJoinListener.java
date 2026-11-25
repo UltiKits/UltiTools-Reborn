@@ -43,7 +43,7 @@ public final class PendingChangesJoinListener implements Listener {
         }
         UUID id = player.getUniqueId();
         Long last = remindedAt.get(id);
-        if (last != null && ModuleFileTransactions.pendingGeneration() <= last) {
+        if (last != null && transactions.pendingGeneration() <= last) {
             return;
         }
         var pending = new PendingChanges(transactions).snapshot();

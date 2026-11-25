@@ -171,7 +171,7 @@ public final class ModuleFileTransactions {
     }
 
     /** @return the number of additions and replacements made during this process */
-    public static long pendingGeneration() {
+    public long pendingGeneration() {
         return GENERATION.get();
     }
 
@@ -1079,7 +1079,16 @@ public final class ModuleFileTransactions {
         }
     }
 
-    String pendingIdentifyString(String name) {
+    /**
+     * Finds the catalogue identity of a queued change without consulting update scan results.
+     *
+     * @param name a module name, catalogue identifier or JAR name
+     * @return the queued catalogue identifier, or null if the change cannot be identified
+     */
+    public String pendingIdentifyString(String name) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
         synchronized (LOCK) {
             try {
                 RemovedModule identity = identityOf(name);

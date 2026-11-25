@@ -462,16 +462,6 @@ public class PluginInstallUtils {
         return new PendingChanges(transactions(UltiTools.getInstance()));
     }
 
-    /** @return a catalogue identifier for a queued change, even if the module is not loaded */
-    @ApiStatus.Internal
-    public static String pendingUpdateIdentifier(String name) {
-        UltiTools framework = UltiTools.getInstance();
-        if (name == null || name.isBlank() || framework.getModuleFileTransactions() == null && framework.getDataFolder() == null) {
-            return null;
-        }
-        return transactions(framework).pendingIdentifyString(name);
-    }
-
     private static ModuleFileTransactions transactions(UltiTools framework) {
         ModuleFileTransactions existing = framework.getModuleFileTransactions();
         return existing != null ? existing : new ModuleFileTransactions(framework.getDataFolder());
