@@ -20,7 +20,7 @@ final class ModuleBootstraps {
         // Internal runner; there is no global bootstrap state.
     }
 
-    static Run runAll(ModuleJarAdmission admission, ClassLoader loader, Logger logger) {
+    static Run runAll(ModuleJarAdmission admission, ClassLoader loader, Logger logger, ContributionRegistry contributions) {
         Map<Path, Throwable> failures = new LinkedHashMap<>();
         Set<String> mains = new HashSet<>();
         int attempted = 0;
@@ -42,7 +42,7 @@ final class ModuleBootstraps {
             }
             attempted++;
             try {
-                runOne(module.getKey(), metadata, bootstrapper, loader, logger);
+                contributions.accept(runOne(module.getKey(), metadata, bootstrapper, loader, logger));
             } catch (VirtualMachineError failure) {
                 throw failure;
             } catch (Throwable cause) { // NOPMD - a module failure must never abort the framework bootstrap
@@ -58,7 +58,7 @@ final class ModuleBootstraps {
         return new Run(failures, attempted);
     }
 
-    private static void runOne(Path jar, PluginYmlReader.PluginYmlInfo metadata, String className,
+    private static ModuleContributions runOne(Path jar, PluginYmlReader.PluginYmlInfo metadata, String className,
                                ClassLoader loader, Logger logger) throws Throwable {
         Thread thread = Thread.currentThread();
         ClassLoader previous = thread.getContextClassLoader();
@@ -73,7 +73,13 @@ final class ModuleBootstraps {
             ModuleBootstrap hook = construct(type);
             String declaredName = metadata.getName();
             String name = declaredName == null ? jar.getFileName().toString() : declaredName;
-            hook.bootstrap(new Context(name, jar, logger));
+            ModuleContributions contributions = new ModuleContributions(name, jar);
+            try {
+                hook.bootstrap(new Context(contributions, logger));
+                return contributions;
+            } finally {
+                contributions.seal();
+            }
         } finally {
             thread.setContextClassLoader(previous);
         }
@@ -141,18 +147,19 @@ final class ModuleBootstraps {
     }
 
     private static final class Context implements ModuleBootstrapContext {
-        private final String name;
-        private final Path jar;
+        private final ModuleContributions contributions;
         private final Logger logger;
 
-        Context(String name, Path jar, Logger parent) {
-            this.name = name;
-            this.jar = jar;
-            this.logger = BootstrapLogger.module(parent, name);
+        Context(ModuleContributions contributions, Logger parent) {
+            this.contributions = contributions;
+            this.logger = BootstrapLogger.module(parent, contributions.name());
         }
 
-        @Override public String moduleName() { return name; }
-        @Override public Path moduleJar() { return jar; }
+        @Override public String moduleName() { return contributions.name(); }
+        @Override public Path moduleJar() { return contributions.jar(); }
         @Override public Logger logger() { return logger; }
+        @Override public EnchantmentChannel enchantments() { return contributions.enchantments(); }
+        @Override public TagChannel tags() { return contributions.tags(); }
+        @Override public DatapackChannel datapacks() { return contributions.datapacks(); }
     }
 }

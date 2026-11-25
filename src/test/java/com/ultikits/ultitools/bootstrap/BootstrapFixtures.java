@@ -8,9 +8,12 @@ import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 
+import com.ultikits.ultitools.text.MessageKey;
+
 import net.bytebuddy.jar.asm.ClassWriter;
 import net.bytebuddy.jar.asm.MethodVisitor;
 import net.bytebuddy.jar.asm.Opcodes;
+import net.kyori.adventure.key.Key;
 
 /** Real archive/class fixtures, with no server or parent-classpath fixture classes. */
 public final class BootstrapFixtures {
@@ -19,11 +22,19 @@ public final class BootstrapFixtures {
     }
 
     public static Path jar(Path path, String descriptor, Map<String, byte[]> classes) throws IOException {
+        return jar(path, descriptor, classes, Map.of());
+    }
+
+    static Path jar(Path path, String descriptor, Map<String, byte[]> classes, Map<String, String> resources)
+            throws IOException {
         Files.createDirectories(path.getParent());
         try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(path))) {
             write(out, "plugin.yml", descriptor.getBytes(StandardCharsets.UTF_8));
             for (Map.Entry<String, byte[]> entry : classes.entrySet()) {
                 write(out, entry.getKey().replace('.', '/') + ".class", entry.getValue());
+            }
+            for (Map.Entry<String, String> entry : resources.entrySet()) {
+                write(out, entry.getKey(), entry.getValue().getBytes(StandardCharsets.UTF_8));
             }
         }
         return path.toAbsolutePath().normalize();
@@ -72,14 +83,23 @@ public final class BootstrapFixtures {
     }
 
     public static byte[] hook(String name, String failureType) {
-        return hook(name, failureType, false);
+        return hook(name, failureType, false, null);
+    }
+
+    static byte[] contentHook(String name, String failureType) {
+        return hook(name, failureType, false, "declareContent");
     }
 
     public static byte[] initializerFailureHook(String name) {
-        return hook(name, null, true);
+        return hook(name, null, true, null);
     }
 
-    private static byte[] hook(String name, String failureType, boolean initializerFailure) {
+    public static void declareContent(ModuleBootstrapContext context) {
+        String namespace = MessageKey.namespaceFor(context.moduleName());
+        context.enchantments().register(Key.key(namespace, "edge"), (builder, tags) -> {});
+    }
+
+    private static byte[] hook(String name, String failureType, boolean initializerFailure, String declarationMethod) {
         String owner = name.replace('.', '/');
         String context = "Lcom/ultikits/ultitools/bootstrap/ModuleBootstrapContext;";
         ClassWriter writer = new ClassWriter(0);
@@ -101,6 +121,11 @@ public final class BootstrapFixtures {
         hook.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Thread", "currentThread", "()Ljava/lang/Thread;", false);
         hook.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/Thread", "getContextClassLoader", "()Ljava/lang/ClassLoader;", false);
         hook.visitFieldInsn(Opcodes.PUTSTATIC, owner, "threadLoader", "Ljava/lang/ClassLoader;");
+        if (declarationMethod != null) {
+            hook.visitVarInsn(Opcodes.ALOAD, 1);
+            hook.visitMethodInsn(Opcodes.INVOKESTATIC, BootstrapFixtures.class.getName().replace('.', '/'),
+                    declarationMethod, "(" + context + ")V", false);
+        }
         if (failureType == null) {
             hook.visitInsn(Opcodes.RETURN);
         } else {

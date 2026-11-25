@@ -62,9 +62,12 @@ class BootstrapResultTest {
     }
 
     @Test
-    void moduleContext_exposesOnlyTheThreeAgreedMembers() throws Exception {
+    void moduleContext_exposesOnlyTheAgreedMembersAndContentChannels() throws Exception {
         assertThat(ModuleBootstrapContext.class.getDeclaredMethods()).extracting(Method::getName)
-                .containsExactlyInAnyOrder("moduleName", "moduleJar", "logger");
+                .containsExactlyInAnyOrder("moduleName", "moduleJar", "logger", "enchantments", "tags", "datapacks");
+        assertThat(ModuleBootstrapContext.class.getMethod("enchantments").getReturnType()).isEqualTo(EnchantmentChannel.class);
+        assertThat(ModuleBootstrapContext.class.getMethod("tags").getReturnType()).isEqualTo(TagChannel.class);
+        assertThat(ModuleBootstrapContext.class.getMethod("datapacks").getReturnType()).isEqualTo(DatapackChannel.class);
         assertThat(ModuleBootstrap.class.getDeclaredMethod("bootstrap", ModuleBootstrapContext.class).getExceptionTypes())
                 .containsExactly(Exception.class);
     }
