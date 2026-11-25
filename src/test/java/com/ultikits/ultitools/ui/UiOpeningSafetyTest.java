@@ -86,7 +86,7 @@ class UiOpeningSafetyTest extends ChestTestFixture {
                 @Override public void show(Player player, DialogModel model, DialogTicket ticket) {
                     boundary.events.add("show");
                 }
-                @Override public void dismiss(Player player) { }
+                @Override public void dismiss(Player player) { /* Nothing to dismiss in this test. */ }
             };
             runtime.register(new DialogBackend(messages, presenter, Logger.getAnonymousLogger(), runtime::ownerName));
             service.show(boundary.viewer, Notice.builder(Text.plain("Notice")).build());
