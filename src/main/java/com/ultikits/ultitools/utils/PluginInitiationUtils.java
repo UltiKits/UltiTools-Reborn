@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+
 import com.ultikits.ultitools.scheduling.TaskHandle;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import java.util.concurrent.RejectedExecutionException;
@@ -33,7 +36,6 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  */
 public class PluginInitiationUtils {
 
-    static final String LEGACY_TOKEN_REMOVED_KEY = "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.";
 
     /**
      * The elapsed-time threshold above which a {@link PanelMessageEvent} publish is considered
@@ -254,9 +256,8 @@ public class PluginInitiationUtils {
             // A failed removal falls through to the catch below, which names the cause class.
             ServerCredentialStore.LegacyTokenRemoval removal = ServerCredentialStore.removeLegacyToken();
             if (removal == ServerCredentialStore.LegacyTokenRemoval.REMOVED_UNLINKED) {
-                UltiTools.getInstance().getLogger().log(Level.WARNING, String.format(
-                        UltiTools.getInstance().i18n(LEGACY_TOKEN_REMOVED_KEY),
-                        CredentialStore.stateDirectory().resolve(CredentialStore.CREDENTIAL_FILE_NAME).toAbsolutePath()));
+                UltiTools.getInstance().getLogger().log(Level.WARNING, FrameworkMessages.plain(UtilsKeys.CLOUD_LEGACY_TOKEN_REMOVED,
+                        Arg.string("file", CredentialStore.stateDirectory().resolve(CredentialStore.CREDENTIAL_FILE_NAME).toAbsolutePath().toString())));
             }
             enableCloud();
             return CloudSession.current().loadServerCredential();

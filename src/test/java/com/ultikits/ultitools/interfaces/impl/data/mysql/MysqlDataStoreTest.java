@@ -58,6 +58,10 @@ import lombok.EqualsAndHashCode;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("MysqlDataStore 测试")
 class MysqlDataStoreTest {
+    @org.junit.jupiter.api.extension.RegisterExtension
+    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
+            new com.ultikits.ultitools.manager.FrameworkMessagesExtension("en");
+
 
     @Mock
     private UltiTools mockUltiTools;
@@ -242,7 +246,7 @@ class MysqlDataStoreTest {
                 MysqlDataStore store = new MysqlDataStore();
 
                 // Assert - 应该记录错误日志
-                verify(mockLogger).log(eq(Level.SEVERE), contains("Mysql数据库连接失败"));
+                verify(mockLogger).log(eq(Level.SEVERE), contains("MySQL connection failed:"));
                 assertThat(store.getDataSource()).isNull();
             }
         }
@@ -637,7 +641,7 @@ class MysqlDataStoreTest {
                 MysqlDataStore store = new MysqlDataStore();
 
                 // Assert
-                verify(mockLogger).log(eq(Level.SEVERE), contains("Mysql数据库连接失败"));
+                verify(mockLogger).log(eq(Level.SEVERE), contains("MySQL connection failed:"));
                 assertThat(store.getDataSource()).isNull();
             }
         }
@@ -648,7 +652,7 @@ class MysqlDataStoreTest {
         void shouldUseI18nForErrorMessage() {
             // Arrange
             setupMysqlConfig();
-            when(mockUltiTools.i18n("Mysql数据库连接失败：")).thenReturn("MySQL connection failed: ");
+
 
             try (MockedConstruction<HikariDataSource> mockedConstruction = 
                     mockConstruction(HikariDataSource.class, (mock, context) -> {
@@ -659,7 +663,7 @@ class MysqlDataStoreTest {
                 MysqlDataStore store = new MysqlDataStore();
 
                 // Assert - MockedConstruction 包装异常消息，所以只验证 i18n 被调用
-                verify(mockUltiTools).i18n("Mysql数据库连接失败：");
+                verify(mockUltiTools, org.mockito.Mockito.never()).i18n(anyString());
                 verify(mockLogger).log(eq(Level.SEVERE), contains("MySQL connection failed:"));
             }
         }

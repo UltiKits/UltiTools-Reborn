@@ -20,6 +20,10 @@ import com.ultikits.ultitools.stub.StubCatalogue;
 
 @DisplayName("UpdateManager Tests")
 class UpdateManagerTest {
+    @org.junit.jupiter.api.extension.RegisterExtension
+    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
+            new com.ultikits.ultitools.manager.FrameworkMessagesExtension("en");
+
 
     private UpdateManager updateManager;
 

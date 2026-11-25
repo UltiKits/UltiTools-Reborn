@@ -52,6 +52,10 @@ import org.mockbukkit.mockbukkit.ServerMock;
 @DisplayName("DataStoreManager 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class DataStoreManagerTest {
+    @org.junit.jupiter.api.extension.RegisterExtension
+    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
+            new com.ultikits.ultitools.manager.FrameworkMessagesExtension("zh");
+
 
     private ServerMock server;
 
@@ -861,11 +865,10 @@ class DataStoreManagerTest {
         }
 
         @Test
-        @DisplayName("i18n 返回 null 时应该回落到原文")
+        @DisplayName("新目录不依赖旧 i18n 查询")
         void nullTranslationShouldFallBackToRawText() {
             // Arrange - 打桩必须在发布到静态字段之前完成，见 TestHelper 的注释与 issue #250
-            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
-                    ultiTools -> when(ultiTools.i18n(anyString())).thenReturn(null));
+
             Logger logger = mock(Logger.class);
 
             // Act
@@ -876,11 +879,10 @@ class DataStoreManagerTest {
         }
 
         @Test
-        @DisplayName("i18n 抛异常时不应该把诊断本身带崩")
+        @DisplayName("诊断在旧文字服务不可用时仍可渲染")
         void throwingTranslationShouldNotBreakDiagnostics() {
             // Arrange
-            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
-                    ultiTools -> when(ultiTools.i18n(anyString())).thenThrow(new IllegalStateException("boom")));
+
             Logger logger = mock(Logger.class);
 
             // Act & Assert - 诊断跑在「已经出问题」的路径上，它自己不能再炸一次

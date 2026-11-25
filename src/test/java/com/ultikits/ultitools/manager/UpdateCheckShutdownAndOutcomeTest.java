@@ -61,6 +61,10 @@ import com.ultikits.ultitools.utils.VersionUtils;
 @DisplayName("D19-032: the start-up update check stops on disable and never reports up to date after a failed lookup")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class UpdateCheckShutdownAndOutcomeTest {
+    @org.junit.jupiter.api.extension.RegisterExtension
+    final com.ultikits.ultitools.manager.FrameworkMessagesExtension frameworkMessages =
+            new com.ultikits.ultitools.manager.FrameworkMessagesExtension("zh");
+
 
     private static final String UP_TO_DATE = "所有插件已是最新版本！";
     private static final String INCOMPLETE = "更新检查未完成：无法确认 %s 的最新版本。";

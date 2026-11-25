@@ -6,6 +6,8 @@ import static com.ultikits.ultitools.utils.PluginInitiationUtils.stopWebsocket;
 import static com.ultikits.ultitools.UltiToolsKeys.*;
 
 import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.MessageKey;
+import org.jetbrains.annotations.Nullable;
 import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import java.time.Duration;
@@ -1077,9 +1079,9 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
 
     /** Re-reads framework overrides only on full reload, not during startup fallback initialization. */
-    static void reloadFrameworkCatalogue(@org.jetbrains.annotations.Nullable TextEngine engine) {
+    static void reloadFrameworkCatalogue(@Nullable TextEngine engine) {
         if (engine != null) {
-            engine.reloadOverrides(com.ultikits.ultitools.text.MessageKey.FRAMEWORK_NAMESPACE);
+            engine.reloadOverrides(MessageKey.FRAMEWORK_NAMESPACE);
         }
     }
 

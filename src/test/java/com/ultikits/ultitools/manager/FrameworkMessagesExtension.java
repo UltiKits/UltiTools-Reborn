@@ -9,13 +9,19 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 
 /** Real English framework catalogue for existing manager regression fixtures. */
 public final class FrameworkMessagesExtension implements BeforeEachCallback, AfterEachCallback {
+    private final String language;
+
+    public FrameworkMessagesExtension() { this("en"); }
+
+    public FrameworkMessagesExtension(String language) { this.language = language; }
+
     private CommandMessageTestSupport support;
     private AutoCloseable scope;
 
     @Override
     public void beforeEach(ExtensionContext context) {
-        support = new CommandMessageTestSupport("en");
-        scope = FrameworkMessages.overrideForTests(support.messages(), Locale.ENGLISH);
+        support = new CommandMessageTestSupport(language);
+        scope = FrameworkMessages.overrideForTests(support.messages(), Locale.forLanguageTag(language));
     }
 
     @Override
