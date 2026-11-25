@@ -26,3 +26,167 @@ text:
   fallback:
     time_zone: "Fallback language: <language> (system time zone <zone>; set fallback-language in config.yml to override)"
     configured: "Fallback language: <language> (configuration; set fallback-language in config.yml to override)"
+startup:
+  data_store: "Data Storage Method: <store>"
+  enabled: "UltiTools-API enabled, current version: <version>"
+  server_uuid: "Server UUID: <uuid>"
+  server_uuid_failed: "Could not obtain the server UUID!<error>"
+module:
+  duplicate_main_class: "These JAR files all declare the same module main class <main_class>: <jars>. The module's classes load only from <loaded_from>; the other copies are not loaded. Keep only one of them."
+  missing_required_plugin: "Module '<module>' requires <plugins>, which is not installed or not enabled; the module is not loaded."
+  api_version:
+    unreadable: "\\<missing>"
+    invalid: "Module '<module>' has no valid api-version (read: <read>); UltiTools-API <framework_version> requires an integer api-version of <min_level:'0'> or higher -- refusing to load. Install a module rebuilt for the current UltiTools-API."
+    too_low: "Module '<module>' declares api-version <level:'0'>, below the minimum <min_level:'0'> required by UltiTools-API <framework_version>; refusing to load. Install a module rebuilt for the current UltiTools-API; changing api-version alone does not make an old module compatible."
+  bootstrap:
+    failed: "Module '<module>' is not loaded because its bootstrap phase failed at this start; see the earlier bootstrap error."
+reload:
+  partial: "Module <module> reloaded partially; not reloaded: <reasons>"
+  summary:
+    failed: "Failed to reload <failed:'0'> of <total:'0'> modules: <modules>. See the console for each failure."
+    mixed_partial: "<partial:'0'> of the others reloaded only partially:"
+    partial: "Reloaded <total:'0'> modules; <partial:'0'> only partially:"
+    all: "All <total:'0'> modules reloaded."
+config:
+  binding:
+    timer_rule: "a bound @Scheduled period or delay must be a whole number of seconds from 1 to <max:'0'> (0 does not mean off)"
+    cooldown_rule: "a bound @CmdCD cooldown must be a whole number of seconds from 0 (no cooldown) to <max:'0'>"
+    cooldown_invalid: "it has value <value> after the reload; <rule>"
+    reload_incomplete: "the reload of <file> did not complete (for example, its write-back threw an IOException), so its values were not validated"
+    scheduled_kept: "config-bound @Scheduled <task>: <config> key '<config_key>' has value <value> after the reload (<rule>); the running <seconds:'0'>s is kept"
+    scheduled_not_validated: "config-bound @Scheduled <task>: the reload of <file> did not complete, so <config> key '<config_key>' was not applied; the running <seconds:'0'>s is kept"
+    cooldown_kept: "config-bound @CmdCD <binding> was not updated: <reason>; the running <seconds:'0'>s is kept"
+    scheduled_invalid_warning: "<module>: <task> is bound to <config> key '<config_key>', which has value <value> after the reload; <rule>; keeping <seconds:'0'>s"
+    scheduled_not_validated_warning: "<module>: <task> is bound to <config> key '<config_key>', but the reload of <file> did not complete (for example, its write-back threw an IOException), so its values were not validated; keeping <seconds:'0'>s"
+    cooldown_not_updated_warning: "<module>: @CmdCD bound to <binding> is not updated: <reason>; keeping <seconds:'0'>s"
+    step_failed: "applying the reloaded config-bound <what> values failed: <cause>; updates applied before the failure remain in effect; remaining updates did not complete"
+    off_thread: "config-bound @Scheduled and @CmdCD values were not applied: the reload ran off the main thread"
+datastore:
+  reason:
+    mysql_disabled: "mysql.enable is false, so the MySQL data source was never initialized"
+    mysql_failed: "MySQL connection failed, the data source is unavailable (see the connection error above)"
+    no_provider: "no registered data store provides that type"
+  downgraded: "Data store downgraded: datasource.type in config.yml is '<configured>', but '<actual>' is actually in use. Reason: <reason>"
+  player_data_store: "Player data will be read from and written to the '<store>' store. Data is not shared between backends - if this is not what you want, stop the server, fix config.yml and restart."
+update:
+  checking: "Checking for updates..."
+  framework_available: "UltiTools-API update available: <latest> (current: <current>)"
+  download: "Download URL: <url>"
+  modules_available: "Module updates available (<count:'0'>):"
+  incomplete: "Update check incomplete: could not confirm the latest version of <modules>."
+  join_notice: "<green>[UltiTools] <yellow><count:'0'> update(s) available. Run /upm check for details."
+  up_to_date: "All plugins are up to date!"
+teleport:
+  failed:
+    title: "<red>Teleport Failed!"
+    subtitle: "Please Do Not Move!"
+  success:
+    title: "<green>Teleport Succeed!"
+  pending:
+    title: "<green>Teleporting..."
+    subtitle: "Teleport in <seconds:'0'> ..."
+data:
+  json:
+    corrupted: "<red>Found corrupted data! Location: <path>"
+  mysql:
+    connection_failed: "MySQL connection failed: <error>"
+cloud:
+  legacy_token_removed: "The account login saved by an earlier UltiTools version is no longer used and was removed from <file>. Run /ulticloud login to re-attach this server."
+  session:
+    server_id_mismatch: "UltiCloud answered this server's connection with a different server ID than the one it is linked to. Reconnecting has stopped and the credential is kept. Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login to link this server again."
+panel:
+  syslog:
+    config_loaded: "[UltiPanel] System log handler configuration loaded"
+    config_load_failed: "[UltiPanel] Failed to load the log configuration, using the defaults: <error>"
+    record_failed: "[UltiPanel] SystemLogHandler failed to process a log record: <error>"
+    parameters: " [parameters: "
+    summary:
+      title: "SystemLogHandler configuration:"
+      minimum_level: "- Minimum log level: "
+      enabled_levels: "- Enabled levels: "
+      excluded_loggers: "- Excluded loggers: "
+      transmitter: "- Log transmitter status: "
+      connected: "Connected"
+      not_connected: "Not connected"
+  log_stream:
+    listener_failed: "Failed to register the event listener: <error>"
+  log:
+    enabled: "[UltiPanel] Log transmission enabled"
+    disabled: "[UltiPanel] Log transmission disabled"
+    closed: "[UltiPanel] Log transmitter shut down"
+remote_command:
+  blocked: "[Remote command] Blocked: <command>"
+  echo: "[Remote command] > <command>"
+  failed: "[Remote command] Command threw an exception: <command>"
+monitor:
+  cpu_unavailable: "Unable to read the CPU usage: <error>"
+  off_main_thread: "[ServerMonitor] Refused to sample the Bukkit state off the main thread. This is a programming error; check the scheduling."
+  sample_failed: "[ServerMonitor] Failed to sample the server state"
+  tps_update: "TPS update: current TPS=<tps:'0.00'>, interval=<interval:'0'>ms"
+server_properties:
+  batch:
+    incomplete: "Batch update of server.properties was not fully applied"
+    rejected: "; keys rejected because they are not whitelisted: "
+    write_failed: "; keys that failed to write: "
+    malformed: "; keys whose value is neither a string nor a number and so could not be written: "
+    not_present: "; keys this server version does not have: "
+install:
+  reason:
+    licence_required: "Cannot install <module> <version>: this version requires a licence and is not offered for public download. Nothing was written to the modules folder."
+    integrity_failed: "Refused to install <module> <version>: the file did not pass its integrity check against the catalogue (its SHA-256 or size does not match, or the catalogue gave no usable hash or size). Nothing was written to the modules folder."
+ul:
+  reload:
+    failed: "<red>Module <module> failed to reload: <error>. See the console for details."
+    done: "<green>Module <module> has been reloaded"
+    not_found: "<red><module> is not a loaded UltiTools module. Use /ul list to see loaded modules"
+  help: "=== UltiTools Commands ===\n/ul reload Reload all modules\n/ul reload \\<name> Reload a specific module\n/ul list Check loaded module list\n================"
+ulticloud:
+  logout:
+    unlinking: "<aqua>Unlinking this server from UltiCloud..."
+    revoked: "<green>Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped."
+    link_again: "<gray>Use /ulticloud login to link it again."
+    revoke_failed: "<yellow>Unlinked this server locally, but UltiCloud could not be reached to revoke its credential."
+    revoke_in_panel: "<yellow>The cloud credential may still be valid. Revoke it in the panel: server settings > Revoke credential."
+    cancelled: "<green>Cancelled the pending UltiCloud link request. Cloud features are stopped."
+    local_delete_failed: "<red>Could not delete this server's UltiCloud credential from the local credentials file. Check the server log, then run /ulticloud logout again."
+    stopped: "<gray>Cloud features have been stopped regardless."
+    not_linked: "<yellow>This server is not linked to UltiCloud."
+  login:
+    invalid_code: "<red>That is not a valid UltiCloud re-pair code. Copy the whole code from the panel and try again."
+    requesting: "<aqua>Requesting a device code from UltiCloud..."
+    requesting_remote: "<aqua>Requesting a device code from UltiCloud. The code and the link will be printed in the server console."
+    redeeming: "<aqua>Redeeming the re-pair code with UltiCloud..."
+    redeeming_remote: "<aqua>Redeeming the re-pair code with UltiCloud. The result will be printed in the server console."
+    already_linked: "<yellow>This server is already linked to UltiCloud as <server>. Use /ulticloud logout first to link it again."
+    separator: "<green>========================================"
+    open: "<green> To link this server to UltiCloud, open:"
+    uri: "<aqua> <uri>"
+    enter_code: "<green> and enter the code:"
+    code: "<aqua> <code>"
+    direct_link: "<gray> Or open this link directly: <uri>"
+    expires: "<gray>The code expires in <minutes:'0'> minutes. Waiting for confirmation..."
+    code_failed: "<red>Could not use the re-pair code: <reason>"
+    request_failed: "<red>Failed to get a device code: <reason>"
+  reconnect:
+    started: "<green>Reconnecting to UltiCloud now."
+    status_hint: "<gray>Use /ulticloud status to see the result."
+    already_connected: "<green>This server is already connected to UltiCloud."
+    already_connecting: "<yellow>A connection attempt to UltiCloud is already in progress."
+    upgrade_required: "<yellow>UltiCloud no longer accepts this UltiTools version. Upgrade UltiTools, then restart the server."
+    not_linked: "<yellow>This server is not linked to UltiCloud. Use /ulticloud login to link it."
+    server_id_mismatch: "<yellow>Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to. Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login."
+  rate_limited: "<red>Please wait <seconds:'0'> seconds before trying again."
+  panel_refused: "<red>UltiCloud login/logout must be run from the server console, not the panel."
+  status:
+    linked: "<green>UltiCloud: Linked as <name> (server ID <server_id>)"
+    unnamed: "an unnamed server"
+    connection: "<gray>Connection: <connection>"
+    not_linked: "<yellow>UltiCloud: Not linked"
+    login_hint: "<gray>Use /ulticloud login to link this server."
+  help:
+    header: "<aqua>=== UltiCloud Commands ==="
+    login: "<white>/ulticloud login<gray> - Link this server to UltiCloud"
+    login_code: "<white>/ulticloud login \\<code><gray> - Reattach this server with the re-pair code from the panel"
+    logout: "<white>/ulticloud logout<gray> - Unlink this server and revoke its credential"
+    status: "<white>/ulticloud status<gray> - Show link and connection status"
+    reconnect: "<white>/ulticloud reconnect<gray> - Retry the UltiCloud connection now"
