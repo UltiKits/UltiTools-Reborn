@@ -30,7 +30,6 @@ import com.ultikits.ultitools.utils.EconomyUtils;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
 import lombok.Getter;
-import mc.obliviate.inventory.InventoryAPI;
 import org.bukkit.Bukkit;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -50,7 +49,6 @@ public class DependenceManagers {
         // Register the main plugin so modules can resolve Plugin/JavaPlugin dependencies
         context.registerSingleton("ultiTools", plugin);
         initScheduling(plugin);
-        initInventoryAPI(plugin);
         initCoreServices(plugin);
         try {
             initUi(plugin);
@@ -72,15 +70,6 @@ public class DependenceManagers {
         context.registerSingleton(Scheduler.class.getName(), scheduler);
         context.registerType(Scheduler.class, scheduler);
         FrameworkScheduling.install(scheduler);
-    }
-
-    /**
-     * Initialize inventory API.
-     *
-     * @param plugin plugin instance
-     */
-    public void initInventoryAPI(UltiTools plugin) {
-        new InventoryAPI(plugin).init();
     }
 
     /**
