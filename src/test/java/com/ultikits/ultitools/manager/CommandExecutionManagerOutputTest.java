@@ -280,7 +280,7 @@ class CommandExecutionManagerOutputTest {
     @Test
     void aDispatchExceptionIsLoggedWithTheCommandNameAndTheStackTrace() throws Exception {
         try (var support = new CommandMessageTestSupport("en");
-                var scope = FrameworkMessages.overrideForTests(support.messages(), java.util.Locale.ENGLISH)) {
+                var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.ENGLISH)) {
             register("crash", (sender, args) -> {
                 throw new IllegalStateException("boom");
             });

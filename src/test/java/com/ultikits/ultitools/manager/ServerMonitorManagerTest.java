@@ -144,7 +144,7 @@ class ServerMonitorManagerTest {
         var messages = mock(Messages.class);
         try (var scope = FrameworkMessages.overrideForTests(messages, Locale.ENGLISH)) {
             invokeMonitor("updateTpsAndCpu");
-            org.mockito.Mockito.verifyNoInteractions(messages);
+            assertThat(org.mockito.Mockito.mockingDetails(messages).getInvocations()).isEmpty();
         }
     }
 
