@@ -26,3 +26,167 @@ text:
   fallback:
     time_zone: "后备语言：<language>（系统时区 <zone>；可在 config.yml 中设置 fallback-language 覆盖）"
     configured: "后备语言：<language>（配置选择；可在 config.yml 中设置 fallback-language 覆盖）"
+startup:
+  data_store: "数据存储方式：<store>"
+  enabled: "UltiTools-API已启动，当前版本：<version>"
+  server_uuid: "服务器UUID: <uuid>"
+  server_uuid_failed: "获取服务器UUID失败！<error>"
+module:
+  duplicate_main_class: "以下 JAR 文件都声明了同一个模块主类 <main_class>：<jars>。该模块的类只从 <loaded_from> 加载，其余副本不会加载；请只保留其中一个。"
+  missing_required_plugin: "模块 '<module>' 需要 <plugins>，但它没有安装或没有启用；该模块未加载。"
+  api_version:
+    unreadable: "\\<缺失>"
+    invalid: "模块 '<module>' 未声明有效的 api-version（读到的值：<read>）；UltiTools-API <framework_version> 要求模块声明 <min_level:'0'> 或更高的整数；拒绝加载。请安装针对当前 UltiTools-API 重新构建的模块。"
+    too_low: "模块 '<module>' 声明的 api-version 为 <level:'0'>，低于 UltiTools-API <framework_version> 要求的最低级别 <min_level:'0'>；拒绝加载。请安装针对当前 UltiTools-API 重新构建的模块；仅修改 api-version 无法使旧模块兼容。"
+  bootstrap:
+    failed: "模块 '<module>' 在本次启动的引导阶段失败，未加载；原因见前面的引导错误。"
+reload:
+  partial: "模块 <module> 只重载了一部分；未重载：<reasons>"
+  summary:
+    failed: "重载失败 <failed:'0'> 个（共 <total:'0'> 个模块）：<modules>。每个失败的详情见控制台。"
+    mixed_partial: "其余模块中有 <partial:'0'> 个只重载了一部分："
+    partial: "已重载 <total:'0'> 个模块，其中 <partial:'0'> 个只重载了一部分："
+    all: "已重载全部 <total:'0'> 个模块。"
+config:
+  binding:
+    timer_rule: "绑定的 @Scheduled 周期或延迟必须是 1 到 <max:'0'> 范围内的整数秒（0 不表示关闭）"
+    cooldown_rule: "绑定的 @CmdCD 冷却必须是 0（无冷却）到 <max:'0'> 范围内的整数秒"
+    cooldown_invalid: "重载后的值为 <value>；<rule>"
+    reload_incomplete: "<file> 的重载未完成（例如写回时抛出了 IOException），因此其值尚未通过校验"
+    scheduled_kept: "绑定配置的 @Scheduled <task>：<config> 的键 '<config_key>' 重载后的值为 <value>（<rule>）；继续使用运行中的 <seconds:'0'> 秒"
+    scheduled_not_validated: "绑定配置的 @Scheduled <task>：<file> 的重载没有完成，因此 <config> 的键 '<config_key>' 未生效；继续使用运行中的 <seconds:'0'> 秒"
+    cooldown_kept: "绑定配置的 @CmdCD <binding> 未更新：<reason>；继续使用运行中的 <seconds:'0'> 秒"
+    scheduled_invalid_warning: "<module>：<task> 绑定到 <config> 的键 '<config_key>'，重载后的值为 <value>；<rule>；继续使用 <seconds:'0'> 秒"
+    scheduled_not_validated_warning: "<module>：<task> 绑定到 <config> 的键 '<config_key>'，但 <file> 的重载未完成（例如写回时抛出了 IOException），因此其值尚未通过校验；继续使用 <seconds:'0'> 秒"
+    cooldown_not_updated_warning: "<module>：绑定到 <binding> 的 @CmdCD 未更新：<reason>；继续使用 <seconds:'0'> 秒"
+    step_failed: "应用重载后的绑定配置 <what> 值失败：<cause>；失败前已应用的更新继续生效，其余更新未完成"
+    off_thread: "绑定配置的 @Scheduled 和 @CmdCD 值未生效：重载不是在主线程上执行的"
+datastore:
+  reason:
+    mysql_disabled: "mysql.enable 为 false，MySQL 数据源从未初始化"
+    mysql_failed: "MySQL 连接失败，数据源不可用（详见上方的连接错误）"
+    no_provider: "没有已注册的数据存储提供该类型"
+  downgraded: "数据存储降级：config.yml 里 datasource.type 配置为 '<configured>'，实际使用的是 '<actual>'。原因：<reason>"
+  player_data_store: "玩家数据将读写 '<store>' 存储；不同后端之间的数据并不互通，如果这不是你要的，请停服修正 config.yml 后重启"
+update:
+  checking: "正在检查版本更新..."
+  framework_available: "UltiTools-API有新版本 <latest> 可用（当前：<current>）"
+  download: "下载地址：<url>"
+  modules_available: "模块更新可用（<count:'0'>个）："
+  incomplete: "更新检查未完成：无法确认 <modules> 的最新版本。"
+  join_notice: "<green>[UltiTools] <yellow><count:'0'> update(s) available. Run /upm check for details."
+  up_to_date: "所有插件已是最新版本！"
+teleport:
+  failed:
+    title: "<red>传送失败！"
+    subtitle: "请勿移动！"
+  success:
+    title: "<green>传送成功！"
+  pending:
+    title: "<green>传送中..."
+    subtitle: "离传送还有<seconds:'0'>秒"
+data:
+  json:
+    corrupted: "<red>发现一个数据损坏！位置：<path>"
+  mysql:
+    connection_failed: "Mysql数据库连接失败：<error>"
+cloud:
+  legacy_token_removed: "早期 UltiTools 版本保存的账号登录已不再使用，已从 <file> 删除。请执行 /ulticloud login 接回此服务器。"
+  session:
+    server_id_mismatch: "UltiCloud 对本服务器连接的应答使用了与绑定时不同的服务器 ID。已停止重连，凭据保留。请联系 UltiCloud 支持，或先执行 /ulticloud logout 再执行 /ulticloud login 重新绑定此服务器。"
+panel:
+  syslog:
+    config_loaded: "[UltiPanel] 系统日志处理器配置已加载"
+    config_load_failed: "[UltiPanel] 加载日志配置失败，使用默认配置: <error>"
+    record_failed: "[UltiPanel] SystemLogHandler处理日志记录失败: <error>"
+    parameters: " [参数: "
+    summary:
+      title: "SystemLogHandler配置信息:"
+      minimum_level: "- 最小日志级别: "
+      enabled_levels: "- 启用的级别: "
+      excluded_loggers: "- 排除的记录器数量: "
+      transmitter: "- 日志传输器状态: "
+      connected: "已连接"
+      not_connected: "未连接"
+  log_stream:
+    listener_failed: "注册事件监听器失败: <error>"
+  log:
+    enabled: "[UltiPanel] 日志传输已启用"
+    disabled: "[UltiPanel] 日志传输已禁用"
+    closed: "[UltiPanel] 日志传输器已关闭"
+remote_command:
+  blocked: "[远程命令] 已拦截: <command>"
+  echo: "[远程命令] > <command>"
+  failed: "[远程命令] 命令执行异常: <command>"
+monitor:
+  cpu_unavailable: "无法获取CPU使用率: <error>"
+  off_main_thread: "[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。"
+  sample_failed: "[ServerMonitor] 采样服务器状态失败"
+  tps_update: "TPS更新: 当前TPS=<tps:'0.00'>, 时间间隔=<interval:'0'>ms"
+server_properties:
+  batch:
+    incomplete: "server.properties 批量设置未完全生效"
+    rejected: "；不在白名单因而被拒的键: "
+    write_failed: "；写入失败的键: "
+    malformed: "；值不是字符串或数字因而无法写入的键: "
+    not_present: "；本服务器版本没有的键: "
+install:
+  reason:
+    licence_required: "无法安装 <module> <version>：该版本需要许可证，不提供公开下载。模块目录没有任何改动。"
+    integrity_failed: "已拒绝安装 <module> <version>：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。"
+ul:
+  reload:
+    failed: "<red>模块 <module> 重载失败：<error>。详情见控制台。"
+    done: "<green>模块 <module> 已重载"
+    not_found: "<red>模块 <module> 不是已加载的UltiTools模块，请使用 /ul list 查看已加载的模块"
+  help: "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul reload \\<模块名> 重载指定模块\n/ul list 查看已加载的模块列表\n================"
+ulticloud:
+  logout:
+    unlinking: "<aqua>正在解除此服务器与 UltiCloud 的绑定……"
+    revoked: "<green>已解除此服务器与 UltiCloud 的绑定并吊销其凭据。云功能现已停止。"
+    link_again: "<gray>使用 /ulticloud login 重新绑定。"
+    revoke_failed: "<yellow>已在本地解除此服务器的绑定，但无法联系 UltiCloud 吊销其凭据。"
+    revoke_in_panel: "<yellow>云端凭据可能仍然有效。请在面板的服务器设置 > 吊销凭据中将其吊销。"
+    cancelled: "<green>已取消等待中的 UltiCloud 绑定请求。云功能已停止。"
+    local_delete_failed: "<red>无法从本地凭据文件中删除此服务器的 UltiCloud 凭据。请查看服务器日志，然后再次执行 /ulticloud logout。"
+    stopped: "<gray>云功能仍已停止。"
+    not_linked: "<yellow>此服务器尚未绑定 UltiCloud。"
+  login:
+    invalid_code: "<red>这不是有效的 UltiCloud 重新配对代码。请从面板复制完整的代码后重试。"
+    requesting: "<aqua>Requesting a device code from UltiCloud..."
+    requesting_remote: "<aqua>Requesting a device code from UltiCloud. The code and the link will be printed in the server console."
+    redeeming: "<aqua>Redeeming the re-pair code with UltiCloud..."
+    redeeming_remote: "<aqua>Redeeming the re-pair code with UltiCloud. The result will be printed in the server console."
+    already_linked: "<yellow>This server is already linked to UltiCloud as <server>. Use /ulticloud logout first to link it again."
+    separator: "<green>========================================"
+    open: "<green> To link this server to UltiCloud, open:"
+    uri: "<aqua> <uri>"
+    enter_code: "<green> and enter the code:"
+    code: "<aqua> <code>"
+    direct_link: "<gray> Or open this link directly: <uri>"
+    expires: "<gray>The code expires in <minutes:'0'> minutes. Waiting for confirmation..."
+    code_failed: "<red>Could not use the re-pair code: <reason>"
+    request_failed: "<red>Failed to get a device code: <reason>"
+  reconnect:
+    started: "<green>正在重新连接 UltiCloud。"
+    status_hint: "<gray>使用 /ulticloud status 查看结果。"
+    already_connected: "<green>此服务器已连接到 UltiCloud。"
+    already_connecting: "<yellow>正在连接 UltiCloud，请稍候。"
+    upgrade_required: "<yellow>UltiCloud 不再接受此版本的 UltiTools。请升级 UltiTools 后重启服务器。"
+    not_linked: "<yellow>此服务器尚未绑定 UltiCloud。请使用 /ulticloud login 绑定。"
+    server_id_mismatch: "<yellow>重连保持停止：UltiCloud 应答的服务器 ID 与本服务器绑定的不同。请联系 UltiCloud 支持，或先执行 /ulticloud logout 再执行 /ulticloud login。"
+  rate_limited: "<red>请等待 <seconds:'0'> 秒后再试。"
+  panel_refused: "<red>UltiCloud login/logout must be run from the server console, not the panel."
+  status:
+    linked: "<green>UltiCloud: Linked as <name> (server ID <server_id>)"
+    unnamed: "an unnamed server"
+    connection: "<gray>Connection: <connection>"
+    not_linked: "<yellow>UltiCloud: Not linked"
+    login_hint: "<gray>Use /ulticloud login to link this server."
+  help:
+    header: "<aqua>=== UltiCloud Commands ==="
+    login: "<white>/ulticloud login<gray> - Link this server to UltiCloud"
+    login_code: "<white>/ulticloud login \\<code><gray> - Reattach this server with the re-pair code from the panel"
+    logout: "<white>/ulticloud logout<gray> - Unlink this server and revoke its credential"
+    status: "<white>/ulticloud status<gray> - Show link and connection status"
+    reconnect: "<white>/ulticloud reconnect<gray> - Retry the UltiCloud connection now"
