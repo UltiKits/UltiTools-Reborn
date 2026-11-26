@@ -30,8 +30,11 @@ import org.mockito.MockedStatic;
 import com.ultikits.ultitools.bootstrap.BootstrapResult;
 import com.ultikits.ultitools.bootstrap.UltiToolsBootstrap;
 import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.manager.TaskManager;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
+import com.ultikits.ultitools.utils.ModuleFileTransactions.StartOutcome;
 import com.ultikits.ultitools.utils.ModuleUpdateFixtures;
+import com.ultikits.ultitools.utils.PendingChanges;
 
 import io.papermc.paper.plugin.bootstrap.BootstrapContext;
 import io.papermc.paper.plugin.bootstrap.PluginProviderContext;
@@ -48,7 +51,7 @@ class BootstrapInstallRollbackTest {
         try (ModuleClassLoader loader = start.classLoader()) {
             assertThat(loader.getURLs()).contains(candidate.toUri().toURL());
             assertThat(start.bootstrapFailures()).containsOnlyKeys(candidate);
-            assertThat(discover(start, candidate).getPluginList()).isEmpty();
+            assertThat(discover(start, data).getPluginList()).isEmpty();
         }
     }
 
@@ -69,33 +72,32 @@ class BootstrapInstallRollbackTest {
         try (ModuleClassLoader loader = start.classLoader()) {
             assertThat(loader.getURLs()).contains(candidate.toUri().toURL());
             assertThat(start.bootstrapFailures()).containsOnlyKeys(candidate);
-            PluginManager manager = discover(start, candidate);
+            PluginManager manager = discover(start, data);
             assertThat(manager.getPluginList()).isEmpty();
             UltiTools.loadModulesThenObserve(start.transactions(), () -> { /* Discovery has already run. */ }, manager::getPluginList);
             assertThat(candidate).doesNotExist();
             assertThat(ModuleUpdateFixtures.treeOf(transactions.toFile())).isEmpty();
+            assertThat(start.transactions().startOutcomes()).containsExactly(new StartOutcome(
+                    PendingChanges.Kind.INSTALL, "Boom", null, "1.0.0", StartOutcome.Result.ROLLED_BACK));
         }
     }
 
-    // Drive the same discovery entry point without starting Bukkit's unrelated lifecycle services.
-    private static PluginManager discover(BootstrapResult start, Path candidate) throws Exception {
-        PluginManager manager = new PluginManager(start.admission());
-        var discovery = PluginManager.class.getDeclaredMethod("discoverModuleClasses", File.class);
-        var loader = PluginManager.class.getDeclaredField("classLoader");
-        var load = PluginManager.class.getDeclaredMethod("loadDiscoveredModules");
-        discovery.setAccessible(true);
-        loader.setAccessible(true);
-        load.setAccessible(true);
-        loader.set(manager, start.classLoader());
+    // Run the real manager initialization, with Bukkit wiring and scheduling isolated.
+    private static PluginManager discover(BootstrapResult start, File data) throws Exception {
+        var manager = new PluginManager(start.admission());
         UltiTools framework = mock(UltiTools.class);
+        when(framework.getDataFolder()).thenReturn(data);
         when(framework.i18n("module.bootstrap.failed")).thenReturn("Skipped %s");
+        var bukkitManager = mock(org.bukkit.plugin.PluginManager.class);
         try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
-             MockedStatic<UltiTools> tools = mockStatic(UltiTools.class)) {
+             MockedStatic<UltiTools> tools = mockStatic(UltiTools.class);
+             var tasks = mockConstruction(TaskManager.class)) {
             bukkit.when(Bukkit::getLogger).thenReturn(Logger.getAnonymousLogger());
+            bukkit.when(Bukkit::getPluginManager).thenReturn(bukkitManager);
             tools.when(UltiTools::getInstance).thenReturn(framework);
             tools.when(UltiTools::getJavaPluginClassLoader).thenReturn(start.classLoader());
-            assertThat(discovery.invoke(manager, candidate.getParent().toFile())).isEqualTo(true);
-            load.invoke(manager);
+            manager.init(start.classLoader());
+            assertThat(tasks.constructed()).hasSize(1);
         }
         return manager;
     }

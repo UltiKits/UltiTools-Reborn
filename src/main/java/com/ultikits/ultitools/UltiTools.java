@@ -76,6 +76,7 @@ import com.ultikits.ultitools.manager.ServerPropertiesManager;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
+import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
 import com.ultikits.ultitools.text.internal.LocaleNames;
 import com.ultikits.ultitools.text.internal.TextEngine;
@@ -149,7 +150,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
     private ModuleFileTransactions moduleFileTransactions;
 
     /** @return the journal that also recorded the decisions of this start */
-    @org.jetbrains.annotations.ApiStatus.Internal
+    @ApiStatus.Internal
     public ModuleFileTransactions getModuleFileTransactions() {
         return moduleFileTransactions;
     }
@@ -609,17 +610,39 @@ public final class UltiTools extends JavaPlugin implements Localized {
             //noinspection ResultOfMethodCallIgnored
             file.mkdirs();
         }
+        Throwable loadFailure = null;
         try {
             loadModulesThenObserve(moduleFileTransactions, () -> pluginManager.init(ultiToolsClassLoader),
                     pluginManager::getPluginList);
         } catch (IOException e) {
-            // GATE-05 group two (08-21): routed to the typed plugin-module hierarchy -- this is
-            // the module-loading subsystem itself failing to initialize, before any individual
-            // module is even identified.
-            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
+            // The loading subsystem itself failed before it identified an individual module.
+            var failure = new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
                     "Failed to initialize plugin module loading", e);
+            loadFailure = failure;
+            throw failure;
+        } catch (RuntimeException | Error failure) {
+            loadFailure = failure;
+            throw failure;
         } finally {
-            moduleFileTransactions.flushReports(getLogger(), this::i18n, CommandRuntime.messages());
+            try {
+                moduleFileTransactions.flushReports(getLogger(), this::i18n, messagesIfAvailable());
+            } catch (RuntimeException | Error reportFailure) {
+                if (loadFailure == null) {
+                    throw reportFailure;
+                }
+                if (loadFailure != reportFailure) {
+                    loadFailure.addSuppressed(reportFailure);
+                }
+            }
+        }
+    }
+
+    private static Messages messagesIfAvailable() {
+        try {
+            return CommandRuntime.messages();
+        } catch (IllegalStateException unavailable) {
+            // Transaction reports have a plain key-and-arguments fallback when no engine is bound.
+            return null;
         }
     }
 
@@ -815,7 +838,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             return null;
         }
         try {
-            return new String(java.nio.file.Files.readAllBytes(configFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+            return new String(java.nio.file.Files.readAllBytes(configFile.toPath()), StandardCharsets.UTF_8);
         } catch (IOException unreadable) {
             return null;
         }
@@ -886,7 +909,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
         String text;
         try {
-            text = new String(java.nio.file.Files.readAllBytes(shared.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+            text = new String(java.nio.file.Files.readAllBytes(shared.toPath()), StandardCharsets.UTF_8);
         } catch (IOException | RuntimeException unreadable) {
             return "cannot be read (" + unreadable.getClass().getSimpleName() + ")";
         }

@@ -104,16 +104,20 @@ class ModulesFolderSingleSourceTest {
         assertThat(body(ultiTools, "void initPluginModules")).contains("modulesFolder(");
         String install = read("utils/PluginInstallUtils.java");
         // 18-40: both install entry points delegate to installReporting, which hands the known version
-        // to installVersion; its download step is the one place an install reads the modules folder.
+        // to installVersion, which binds the verified downloader to the shared journal staging path.
         assertThat(body(install, "boolean installLatestPlugin")).contains("installReporting(");
         assertThat(body(install, "boolean installPlugin")).contains("installReporting(");
         assertThat(body(install, "PendingResult installReporting")).contains("installReporting(");
         assertThat(install).contains("return installVersion(metadata, module, requested, level, sender)");
-        assertThat(body(install, "PendingResult installVersion")).contains("downloadAndAdmit(");
+        assertThat(body(install, "PendingResult installVersion"))
+                .contains("transactions(framework).stageChange(", "download, download");
+        assertThat(body(install, "void download")).contains("downloadAndAdmit(url, metadata, file, folder,");
         assertThat(body(install, "PendingResult requestUninstallLocked")).contains("modulesFolder(");
         assertThat(body(install, "File modulesFolder")).contains("ModuleFileTransactions.modulesFolder(");
         String transactions = read("utils/ModuleFileTransactions.java");
         assertThat(body(transactions, "public ModuleFileTransactions")).contains("modulesFolder(dataFolder)");
+        assertThat(body(transactions, "StageResult stageChange"))
+                .contains("Files.createTempDirectory(transactionsFolder.toPath()", "fetch(downloader, url, target, incoming, stagedFolder)");
         // The records live under the server root (follow-up 18), found from the same data folder --
         // its grandparent, as the credential store finds it -- never from the working directory.
         assertThat(body(transactions, "File transactionsFolder")).contains("serverRoot(dataFolder)")

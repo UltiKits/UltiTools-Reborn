@@ -119,7 +119,7 @@ class ModuleUpdateStagingTest {
         }
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_STAGED_UNREADABLE);
-        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "IOException: hash read failed");
+        assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "IOException: hash read failed");
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -135,7 +135,7 @@ class ModuleUpdateStagingTest {
         }
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_STAGED_UNREADABLE);
-        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "IOException: metadata read failed");
+        assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "IOException: metadata read failed");
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -149,7 +149,7 @@ class ModuleUpdateStagingTest {
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_WRONG_VERSION);
-        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "1.0", "1.1");
+        assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "1.0", "1.1");
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -184,7 +184,7 @@ class ModuleUpdateStagingTest {
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_SHARED_JAR);
-        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath(), "Companion");
+        assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath(), "Companion");
         assertThat(downloads).isEmpty();
         assertThat(snapshot()).isEqualTo(before);
     }
@@ -209,9 +209,9 @@ class ModuleUpdateStagingTest {
 
         assertThat(selectedFirst.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(selectedFirst.getReasonKey()).isEqualTo(UpmKeys.REASON_SHARED_JAR);
-        assertThat(PendingTestValues.values(java.util.List.of(selectedFirst.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath(), "DemoCompanion");
+        assertThat(PendingTestValues.values(List.of(selectedFirst.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath(), "DemoCompanion");
         assertThat(companionFirst.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(PendingTestValues.values(java.util.List.of(companionFirst.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath(), "Demo");
+        assertThat(PendingTestValues.values(List.of(companionFirst.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath(), "Demo");
         assertThat(downloads).isEmpty();
         assertThat(snapshot()).isEqualTo(before);
     }
@@ -238,9 +238,9 @@ class ModuleUpdateStagingTest {
 
         assertThat(demoFirst.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(demoFirst.getReasonKey()).isEqualTo(UpmKeys.REASON_AMBIGUOUS_IDENTIFY_STRING);
-        assertThat(PendingTestValues.values(java.util.List.of(demoFirst.getReasonArgs()))).containsExactly("demo", "Demo, Twin");
+        assertThat(PendingTestValues.values(List.of(demoFirst.getReasonArgs()))).containsExactly("demo", "Demo, Twin");
         assertThat(twinFirst.getReasonKey()).isEqualTo(UpmKeys.REASON_AMBIGUOUS_IDENTIFY_STRING);
-        assertThat(PendingTestValues.values(java.util.List.of(twinFirst.getReasonArgs()))).containsExactly("demo", "Twin, Demo");
+        assertThat(PendingTestValues.values(List.of(twinFirst.getReasonArgs()))).containsExactly("demo", "Twin, Demo");
         assertThat(downloads).isEmpty();
         assertThat(snapshot()).isEqualTo(before);
     }
@@ -279,9 +279,7 @@ class ModuleUpdateStagingTest {
                             waitsForTheUninstall, null));
             assertThat(reading.await(10, TimeUnit.SECONDS)).isTrue();
 
-            new ModuleFileTransactions(dataFolder).cancelStagedUpdates(new ModuleFileTransactions.RemovedModule(
-                    Collections.singletonList("demo"), Collections.singletonList("Demo"),
-                    Collections.singletonList("demo-1.0.jar")));
+            assertThat(pending().revokeByModule("demo").outcome()).isEqualTo(PendingChanges.RevokeResult.Outcome.REVOKED);
             cancelled.countDown();
 
             ModuleFileTransactions.StageResult result = staging.get(20, TimeUnit.SECONDS);
@@ -308,7 +306,7 @@ class ModuleUpdateStagingTest {
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_NEEDS_OPERATOR);
-        assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("a foreign file", records[0].getAbsolutePath());
+        assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("a foreign file", records[0].getAbsolutePath());
         assertThat(snapshot()).isEqualTo(before);
     }
 
@@ -330,7 +328,7 @@ class ModuleUpdateStagingTest {
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
             assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_OLD_JAR_UNREADABLE);
-            assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath());
+            assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly(oldJar.getAbsolutePath());
             assertThat(downloads).isEmpty();
         } finally {
             Files.setPosixFilePermissions(oldJar.toPath(), original);
@@ -348,17 +346,17 @@ class ModuleUpdateStagingTest {
                 Files.getPosixFilePermissions(transactions.toPath());
         Files.setPosixFilePermissions(transactions.toPath(),
                 java.nio.file.attribute.PosixFilePermissions.fromString("-wx------"));
-        List<String> cancelled;
+        PendingChanges.RevokeResult.Outcome cancelled;
         try {
             org.junit.jupiter.api.Assumptions.assumeTrue(transactions.list() == null,
                     "running as a user that ignores permissions");
 
-            cancelled = new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Demo");
+            cancelled = pending().revokeByModule("Demo").outcome();
         } finally {
             Files.setPosixFilePermissions(transactions.toPath(), original);
         }
 
-        assertThat(cancelled).isEmpty();
+        assertThat(cancelled).isEqualTo(PendingChanges.RevokeResult.Outcome.NOT_FOUND);
         assertThat(treeOf(transactions)).anyMatch(p -> p.endsWith(".json"));
     }
 
@@ -377,7 +375,7 @@ class ModuleUpdateStagingTest {
 
         assertThat(again.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(again.getReasonKey()).isEqualTo(UpmKeys.REASON_RECORD_UNREADABLE);
-        assertThat(PendingTestValues.values(java.util.List.of(again.getReasonArgs()))).containsExactly(records[0].getAbsolutePath(), "missing field newVersion");
+        assertThat(PendingTestValues.values(List.of(again.getReasonArgs()))).containsExactly(records[0].getAbsolutePath(), "missing field newVersion");
         assertThat(downloads).isEmpty();
     }
 
@@ -416,9 +414,9 @@ class ModuleUpdateStagingTest {
                     }));
             assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
 
-            java.util.concurrent.CompletableFuture<List<String>> cancel = java.util.concurrent.CompletableFuture
-                    .supplyAsync(() -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Other"));
-            assertThat(cancel.get(2, TimeUnit.SECONDS)).isEmpty();
+            var cancel = java.util.concurrent.CompletableFuture
+                    .supplyAsync(() -> pending().revokeByModule("Other"));
+            assertThat(cancel.get(2, TimeUnit.SECONDS).outcome()).isEqualTo(PendingChanges.RevokeResult.Outcome.NOT_FOUND);
             List<String> downloads = new ArrayList<>();
             ModuleFileTransactions.StageResult second = stage((link, name, folder) -> downloads.add(name));
             assertThat(second.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.BUSY);
@@ -437,7 +435,11 @@ class ModuleUpdateStagingTest {
      * Stages Demo's update with a download that waits, runs {@code cancel} while it waits, then lets
      * it finish, and returns what staging replied.
      */
-    private ModuleFileTransactions.StageResult cancelledWhileDownloading(java.util.function.Supplier<List<String>> cancel)
+    private PendingChanges pending() {
+        return new PendingChanges(new ModuleFileTransactions(dataFolder));
+    }
+
+    private ModuleFileTransactions.StageResult cancelledWhileDownloading(String module, PendingChanges.RevokeResult.Outcome expected)
             throws Exception {
         java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
@@ -455,7 +457,8 @@ class ModuleUpdateStagingTest {
                         moduleJar(new File(folder, name), "Demo", "1.1", "demo");
                     }));
             assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
-            assertThat(java.util.concurrent.CompletableFuture.supplyAsync(cancel).get(2, TimeUnit.SECONDS)).isEmpty();
+            assertThat(java.util.concurrent.CompletableFuture.supplyAsync(() -> pending().revokeByModule(module))
+                    .get(2, TimeUnit.SECONDS).outcome()).isEqualTo(expected);
             release.countDown();
             return staging.get(10, TimeUnit.SECONDS);
         } finally {
@@ -465,12 +468,12 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
-    @DisplayName("an uninstall by name during the download cancels it: no record is written, nothing applies (Codex round 9)")
-    void uninstallByNameDuringDownload_cancelsIt() throws Exception {
+    @DisplayName("revoking by module name during the download cancels it: no record is written, nothing applies (Codex round 9)")
+    void revokingByNameDuringDownload_cancelsIt() throws Exception {
         byte[] before = Files.readAllBytes(oldJar.toPath());
 
         ModuleFileTransactions.StageResult result = cancelledWhileDownloading(
-                () -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Demo"));
+                "Demo", PendingChanges.RevokeResult.Outcome.REVOKED);
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
         assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING);
@@ -482,12 +485,10 @@ class ModuleUpdateStagingTest {
     }
 
     @Test
-    @DisplayName("an uninstall by another name that removed the module's JAR during the download cancels it too")
-    void uninstallByJarDuringDownload_cancelsIt() throws Exception {
+    @DisplayName("revoking by the old JAR name during the download cancels it too")
+    void revokingByJarDuringDownload_cancelsIt() throws Exception {
         ModuleFileTransactions.StageResult result = cancelledWhileDownloading(
-                () -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates(
-                        new ModuleFileTransactions.RemovedModule(Collections.<String>emptyList(),
-                                Collections.singletonList("demo-module"), Collections.singletonList(oldJar.getName()))));
+                oldJar.getName(), PendingChanges.RevokeResult.Outcome.REVOKED);
 
         assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING);
         assertThat(treeOf(transactions)).isEmpty();
@@ -497,19 +498,20 @@ class ModuleUpdateStagingTest {
     @DisplayName("a cancellation for another module during the download leaves it staged, and leaves no marker behind")
     void unrelatedCancellationDuringDownload_leavesItStaged() throws Exception {
         ModuleFileTransactions.StageResult result = cancelledWhileDownloading(
-                () -> new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Other"));
+                "Other", PendingChanges.RevokeResult.Outcome.NOT_FOUND);
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
     }
 
     @Test
-    @DisplayName("an uninstall cancels a staged update: its record and staged JAR go, the modules folder is untouched")
+    @DisplayName("revoking a staged update: its record and staged JAR go, the modules folder is untouched")
     void cancellingAStagedUpdate_removesOnlyTheTransaction() throws IOException {
         stage(downloading("Demo", "1.1", "demo"));
 
-        List<String> cancelled = new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Demo");
+        var cancelled = pending().revokeByModule("Demo");
 
-        assertThat(cancelled).containsExactly("1.1");
+        assertThat(cancelled.outcome()).isEqualTo(PendingChanges.RevokeResult.Outcome.REVOKED);
+        assertThat(cancelled.before().toVersion()).isEqualTo("1.1");
         assertThat(treeOf(transactions)).isEmpty();
         assertThat(namesIn(modules)).containsExactly("demo-1.0.jar");
     }
@@ -519,9 +521,9 @@ class ModuleUpdateStagingTest {
     void cancellingWithNothingStaged_isANoOp() throws IOException {
         stage(downloading("Demo", "1.1", "demo"));
 
-        List<String> cancelled = new ModuleFileTransactions(dataFolder).cancelStagedUpdates("Other");
+        var cancelled = pending().revokeByModule("Other");
 
-        assertThat(cancelled).isEmpty();
+        assertThat(cancelled.outcome()).isEqualTo(PendingChanges.RevokeResult.Outcome.NOT_FOUND);
         assertThat(treeOf(transactions)).filteredOn(p -> p.endsWith(".json")).hasSize(1);
     }
 }

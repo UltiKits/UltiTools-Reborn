@@ -3,6 +3,7 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
 import java.io.*;
 import java.util.jar.*;
 
@@ -189,7 +190,7 @@ class PluginInstallUtilsUpdateTest {
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
             assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_INCOMPATIBLE_API_LEVEL);
-            assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "620", 700, 700, 700);
+            assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "620", 700, 700, 700);
             assertThat(snapshot()).isEqualTo(before);
         }
 
@@ -203,7 +204,7 @@ class PluginInstallUtilsUpdateTest {
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
             assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_INCOMPATIBLE_API_LEVEL);
-            assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "710", 700, 700, 700);
+            assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "710", 700, 700, 700);
             assertThat(snapshot()).isEqualTo(before);
         }
 
@@ -217,7 +218,7 @@ class PluginInstallUtilsUpdateTest {
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
             assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_NO_API_LEVEL);
-            assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", 700, 700, 700);
+            assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", 700, 700, 700);
             assertThat(snapshot()).isEqualTo(before);
         }
 
@@ -235,7 +236,7 @@ class PluginInstallUtilsUpdateTest {
         void latestConflict_stagesNothing() throws IOException {
             com.ultikits.ultitools.stub.StubCatalogue catalogue = com.ultikits.ultitools.stub.StubCatalogue.start();
             catalogue.mode(com.ultikits.ultitools.stub.StubCatalogue.Mode.NO_COMPATIBLE_VERSION);
-            java.util.List<String> downloads = new java.util.ArrayList<>();
+            List<String> downloads = new java.util.ArrayList<>();
             try {
                 PluginInstallUtils.setBaseUrlForTesting(catalogue.baseUrl());
                 java.util.Map<String, String> before = snapshot();
@@ -245,7 +246,7 @@ class PluginInstallUtilsUpdateTest {
 
                 assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
                 assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_NO_COMPATIBLE_UPDATE);
-                assertThat(PendingTestValues.values(java.util.List.of(result.getReasonArgs()))).containsExactly("demo", 700, 700, 700);
+                assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("demo", 700, 700, 700);
                 assertThat(downloads).isEmpty();
                 assertThat(snapshot()).isEqualTo(before);
             } finally {

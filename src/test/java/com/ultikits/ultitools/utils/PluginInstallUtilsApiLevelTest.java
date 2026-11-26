@@ -1,19 +1,21 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
@@ -27,10 +29,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.manager.ModuleApiLevels;
+import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
@@ -296,22 +304,93 @@ class PluginInstallUtilsApiLevelTest {
     }
 
     @Test
-    @DisplayName("an existing file of the final name is left unchanged both by staging and at restart")
+    @DisplayName("a same-name file refuses a new install without downloading or touching that file")
     void existingFinalName_isNotOverwritten() throws IOException {
-        try (OutputStream out = Files.newOutputStream(inModules("demo-1.1.0.jar").toPath())) {
-            out.write("old".getBytes(StandardCharsets.UTF_8));
-        }
-
-        assertThat(PluginInstallUtils.installReporting("demo", null).queued()).isTrue();
-
+        String name = "demo-1.1.0.jar";
         byte[] original = "old".getBytes(StandardCharsets.UTF_8);
-        assertThat(modulesFolderNames()).containsExactly("demo-1.1.0.jar");
-        assertThat(bytesInModules("demo-1.1.0.jar")).isEqualTo(original);
-        var transactions = new ModuleFileTransactions(modules.getParentFile());
-        transactions.applyBeforeLoad();
-        assertThat(bytesInModules("demo-1.1.0.jar")).isEqualTo(original);
-        assertThat(new PendingChanges(transactions).list()).singleElement().satisfies(entry ->
-                assertThat(entry.state()).isEqualTo(PendingChanges.State.FAILED));
+        Files.write(inModules(name).toPath(), original);
+
+        var result = PluginInstallUtils.installReporting("demo", null);
+
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies()).singleElement().satisfies(reply -> {
+            assertThat(reply.key().path()).isEqualTo("upm.install.refused.target_exists");
+            assertThat(reply.args()).containsExactly(Arg.string("file", name));
+        });
+        assertThat(downloadedAnything()).isFalse();
+        assertThat(modulesFolderNames()).containsExactly(name);
+        assertThat(bytesInModules(name)).isEqualTo(original);
+        assertThat(PluginInstallUtils.pendingChanges().list()).isEmpty();
+        assertThat(ModuleUpdateFixtures.treeOf(ModuleFileTransactions.transactionsFolder(modules.getParentFile()))).isEmpty();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "1.1.0,other,wrong_identity",
+        "1.0.0,demo,wrong_version"
+    })
+    void aNewInstallRejectsAValidDownloadWhoseDescriptorDisagreesWithTheCatalogue(
+            String version, String identity, String reason) throws IOException {
+        catalogue.jar(StubCatalogue.moduleJar("Demo", version, identity, "700"));
+
+        var result = PluginInstallUtils.installReporting("demo", StubCatalogue.VERSION);
+
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies()).singleElement().satisfies(reply -> {
+            assertThat(reply.key().path()).isEqualTo("upm.install.not_staged");
+            assertThat(reply.args().getLast()).isInstanceOfSatisfying(Arg.Localized.class,
+                    arg -> assertThat(arg.value().toString()).contains("upm.reason." + reason));
+        });
+        assertThat(downloadedAnything()).isTrue();
+        assertThat(modulesFolderNames()).isEmpty();
+        assertThat(PluginInstallUtils.pendingChanges().list()).isEmpty();
+        assertThat(ModuleUpdateFixtures.treeOf(ModuleFileTransactions.transactionsFolder(modules.getParentFile()))).isEmpty();
+    }
+
+    @Test
+    void aDeniedInstallNamesTheReasonInTheOperatorsLanguage() throws IOException {
+        var manager = mock(PluginManager.class);
+        when(UltiTools.getInstance().getPluginManager()).thenReturn(manager);
+        when(manager.getPluginList()).thenThrow(new SecurityException("fixture access failure"));
+
+        var result = PluginInstallUtils.installReporting("demo", StubCatalogue.VERSION);
+
+        assertThat(result.queued()).isFalse();
+        try (var text = new CommandMessageTestSupport("en")) {
+            assertThat(result.replies()).singleElement().satisfies(reply -> {
+                assertThat(reply.key().path()).isEqualTo("upm.install.not_staged");
+                var args = reply.args().toArray(Arg[]::new);
+                assertThat(CommandMessageTestSupport.plain(text.messages().render(reply.key(), Locale.CHINESE, args)))
+                        .contains("访问", "fixture access failure");
+                assertThat(CommandMessageTestSupport.plain(text.messages().render(reply.key(), Locale.ENGLISH, args)))
+                        .contains("access", "fixture access failure");
+            });
+        }
+        assertThat(downloadedAnything()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void aCancelledDownloadNamesTheCancellationAndAnUnknownFailureKeepsTheFallback(boolean cancelled) {
+        var transactions = mock(ModuleFileTransactions.class);
+        when(UltiTools.getInstance().getModuleFileTransactions()).thenReturn(transactions);
+        var result = cancelled ? ModuleFileTransactions.StageResult.failed(null, UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING)
+                : ModuleFileTransactions.StageResult.of(ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null, null);
+        when(transactions.stageChange(eq("demo"), eq(StubCatalogue.VERSION), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(result);
+
+        var install = PluginInstallUtils.installReporting("demo", StubCatalogue.VERSION);
+
+        assertThat(install.queued()).isFalse();
+        assertThat(install.replies()).singleElement().satisfies(reply -> {
+            if (cancelled) {
+                assertThat(reply.key().path()).isEqualTo("upm.install.not_staged");
+                assertThat(reply.args().getLast()).isInstanceOfSatisfying(Arg.Localized.class,
+                        arg -> assertThat(arg.value().toString()).contains(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING.path()));
+            } else {
+                assertThat(reply.key()).isEqualTo(UpmKeys.INSTALL_FAILED);
+            }
+        });
     }
 
     @Test

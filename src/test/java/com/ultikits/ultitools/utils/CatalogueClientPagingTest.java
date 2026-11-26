@@ -3,6 +3,7 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
@@ -284,8 +285,8 @@ class CatalogueClientPagingTest {
 
     private static MockedStatic<PluginInstallUtils> stagingThroughRealCatalogue() {
         MockedStatic<PluginInstallUtils> utils = mockStatic(PluginInstallUtils.class, CALLS_REAL_METHODS);
-        utils.when(() -> PluginInstallUtils.stageUpdate(org.mockito.ArgumentMatchers.eq(MODULE),
-                org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+        utils.when(() -> PluginInstallUtils.stageUpdate(eq(MODULE),
+                any())).thenAnswer(invocation -> {
             assertThat(CatalogueClient.latestVersion(MODULE, LEVEL).getVersion()).isEqualTo("1.0.11");
             ModuleFileTransactions.StageResult result = mock(ModuleFileTransactions.StageResult.class);
             when(result.getOutcome()).thenReturn(ModuleFileTransactions.StageResult.Outcome.FAILED);
@@ -304,6 +305,11 @@ class CatalogueClientPagingTest {
         entries.get(6).addProperty("version", "9.0.0");
         entries.get(6).getAsJsonObject("download").addProperty("url", downloadUrl("9.0.0"));
         String selected = markedLatest ? "1.0.11" : "9.0.0";
+        // The selected body's integrity metadata and descriptor must describe the same version.
+        jar = StubCatalogue.moduleJar("Demo", selected, MODULE, "700");
+        JsonObject selectedEntry = entries.get(markedLatest ? 10 : 6);
+        selectedEntry.addProperty("sha256", CatalogueHttp.sha256Hex(jar));
+        selectedEntry.addProperty("sizeBytes", jar.length);
         assertThat(CatalogueClient.latestVersion(MODULE, LEVEL).getVersion()).isEqualTo(selected);
         assertQueries(3);
         queries.clear();

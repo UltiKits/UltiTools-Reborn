@@ -196,6 +196,7 @@ upm:
     pending: "/upm pending - List module changes waiting for a restart"
     revoke: "/upm revoke \\<module> - Undo one of them"
   install:
+    not_staged: "<red>Could not add the install request for <module> to the pending changes: <reason>."
     already_current: "<yellow><module> <version> is already installed and running; nothing changed."
     as_update: "<green><module> is already installed (version <from>), so this counts as an update: <from> → <version> at the next restart. Undo with /upm revoke <module>."
     cancelled_uninstall: "<green>Replaced: <module> was waiting to be uninstalled; it will now stay and be updated from <from> to <version> at the next restart. Undo with /upm revoke <module>."
@@ -205,6 +206,7 @@ upm:
     not_recorded: "<red>Could not add <module> to the pending changes: <error>. Nothing changed."
     queued: "<green>Added to the pending changes: <module> <version> will be installed at the next restart. Undo with /upm revoke <module>."
     refused:
+      target_exists: "<red>A file named <file> already exists in the modules folder. Move or delete it before installing."
       integrity_failed: "<red>Refused to install <module> <version>: the file did not pass its integrity check against the catalogue (its SHA-256 or size does not match, or the catalogue gave no usable hash or size). Nothing was written to the modules folder."
       jar_invalid: "<red>Refused to install <module> <version>: the downloaded file is not a valid module JAR. The download was deleted; nothing was written to the modules folder."
       jar_level_refused: "<red>Refused to install <module> <version>: the downloaded JAR declares api-version <declared>. This UltiTools-API is at API level <level:'0'> and installs only modules declaring api-version <floor:'0'> to <max:'0'>. The download was deleted; nothing was written to the modules folder."
@@ -247,7 +249,7 @@ upm:
       unknown: "an earlier version"
     state:
       downloading: "<gray>    still downloading"
-      failed: "<red>    could not be applied at the last restart: <failure>. /upm revoke <module> clears this entry."
+      failed: "<red>    could not be applied at the last restart: <failure>. This entry cannot be undone; the next request for <module> will report it."
       in_progress: "<yellow>    the last start stopped halfway; the next start finishes it. It cannot be undone now."
       needs_operator: "<red>    needs manual attention: <failure>. Record: <file>. This entry cannot be undone here."
     truncated: "<gray>… and <count:'0'> more."
@@ -263,7 +265,7 @@ upm:
   reason:
     access_denied: "a file access was denied: <error>"
     ambiguous_identify_string: "the identify-string <module> is declared by more than one loaded module in different JARs (<modules>), so which one to update cannot be determined; give each module its own identify-string"
-    cancelled_while_downloading: "the module was uninstalled while the update downloaded, so the update was cancelled"
+    cancelled_while_downloading: "the download was cancelled before it could be queued"
     download_failed: "the download failed: <error>"
     incompatible_api_level: "the downloaded <file> declares api-version <declared>, but this UltiTools-API is at API level <level:'0'> and installs only modules declaring api-version <floor:'0'> to <max:'0'>"
     invalid_jar: "the downloaded file <file> is not a valid module JAR"
@@ -287,32 +289,33 @@ upm:
   revoke:
     done:
       downloading: "<green>Cancelled the download for <module>; it will not be added to the pending changes."
-      failed: "<green>Cleared the entry of <module> that could not be applied."
       install: "<green>Undone: <module> <to> will not be installed."
       uninstall: "<green>Undone: <module> stays installed and keeps running."
       update: "<green>Undone: <module> stays at <from> (the update to <to> is cancelled)."
     failed: "<red>Could not undo the change of <module>: <error>. Nothing changed."
     not_found: "<yellow><module> has no change waiting for a restart."
     not_revocable:
+      failed: "<red>The change of <module> could not be applied at the last restart and cannot be undone: <failure>."
       in_progress: "<red>The change of <module> is unfinished from the last start and cannot be undone now; the next start finishes it."
       needs_operator: "<red>The change of <module> needs manual attention and cannot be undone here: <failure>. Record: <file>."
   start:
     install:
+      not_recorded: "The install of module <module> <version> was rolled back before loading because its transaction record could not be written. Install it again with /upm install."
       cleanup_deferred: "Module <module> <version> is installed, but its transaction folder <folder> could not be cleaned up; the next start will retry."
       committed: "Module <module> <version> is installed: this start loaded it."
       cross_file_system: "The install of module <module> <version> was not applied: the modules folder <folder> and the transaction folder <work> are on different file systems."
       failed: "The install of module <module> <version> was not applied: <error>."
-      rollback_deferred: "Could not remove module <module> <version> after an unsuccessful install (<error>); the next start will retry."
+      rollback_deferred: "Could not remove module <module> <version> after an unsuccessful install (<error>). If the JAR remains in the modules folder, it may load; the next start will recover the transaction."
       rolled_back: "Module <module> <version> was installed but did not load at this start, so it was removed again. See the errors above; install it again with /upm install once the cause is fixed."
       target_exists: "The install of module <module> <version> was not applied: <file> already exists in <folder>. Nothing in the modules folder was changed."
       unconfirmed: "The install of module <module> <version> was put in place by a start that ended before it could confirm the module loaded; it was removed again. Install it again with /upm install."
     removal:
       failed: "Could not delete <file> while uninstalling module <module> (<error>); it may load at this start and the next start will retry."
       removed: "Uninstalled module <module>: deleted <files>."
-      skipped: "Did not delete <file> while uninstalling module <module>: it differs from the recorded file."
+      skipped: "Did not delete <file> while uninstalling module <module>: it differs from the recorded file. This uninstall was dropped for that file, so the module can still load. Run /upm uninstall again if you still want to remove it."
       unreadable: "Could not read <file> while uninstalling module <module> (<error>) to confirm its identity; it was not deleted, and the next start will retry."
   uninstall:
-    already_queued: "<yellow><module> is already waiting to be uninstalled at the next restart; nothing changed."
+    already_queued: "<yellow><module> is already waiting to be uninstalled at the next restart."
     also_cancelled_update: "<yellow>The pending update of <module> to <version> was cancelled and replaced by the uninstall."
     cancelled_install: "<green>Cancelled: <module> <version> was waiting to be installed and now will not be installed."
     folder_unreadable: "<red>The modules folder <folder> could not be read, so it cannot be confirmed whether it still holds a JAR of this module."

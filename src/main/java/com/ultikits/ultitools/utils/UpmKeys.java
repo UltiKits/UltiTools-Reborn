@@ -23,6 +23,8 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.cancelled_update_same");
     public static final MessageKey INSTALL_FAILED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.failed");
+    public static final MessageKey INSTALL_NOT_STAGED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.not_staged");
     public static final MessageKey INSTALL_NOT_RECORDED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.not_recorded");
     public static final MessageKey INSTALL_QUEUED =
@@ -39,6 +41,8 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.refused.licence_required");
     public static final MessageKey INSTALL_REFUSED_NO_COMPATIBLE_VERSION =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.refused.no_compatible_version");
+    public static final MessageKey INSTALL_REFUSED_TARGET_EXISTS =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.refused.target_exists");
     public static final MessageKey INSTALL_REFUSED_VERSION_INCOMPATIBLE =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.refused.version_incompatible");
     public static final MessageKey INSTALL_REPLACED_INSTALL =
@@ -167,8 +171,6 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.reason.wrong_version");
     public static final MessageKey REVOKE_DONE_DOWNLOADING =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.done.downloading");
-    public static final MessageKey REVOKE_DONE_FAILED =
-            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.done.failed");
     public static final MessageKey REVOKE_DONE_INSTALL =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.done.install");
     public static final MessageKey REVOKE_DONE_UNINSTALL =
@@ -179,6 +181,8 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.failed");
     public static final MessageKey REVOKE_NOT_FOUND =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.not_found");
+    public static final MessageKey REVOKE_NOT_REVOCABLE_FAILED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.not_revocable.failed");
     public static final MessageKey REVOKE_NOT_REVOCABLE_IN_PROGRESS =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.not_revocable.in_progress");
     public static final MessageKey REVOKE_NOT_REVOCABLE_NEEDS_OPERATOR =
@@ -191,6 +195,8 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.install.cross_file_system");
     public static final MessageKey START_INSTALL_FAILED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.install.failed");
+    public static final MessageKey START_INSTALL_NOT_RECORDED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.install.not_recorded");
     public static final MessageKey START_INSTALL_ROLLBACK_DEFERRED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.install.rollback_deferred");
     public static final MessageKey START_INSTALL_ROLLED_BACK =

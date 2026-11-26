@@ -59,7 +59,7 @@ public final class PendingChanges {
 
         /** @return whether this state admits a revocation attempt */
         public boolean revocable() {
-            return state == State.PENDING || state == State.DOWNLOADING || state == State.FAILED;
+            return state == State.PENDING || state == State.DOWNLOADING;
         }
     }
 

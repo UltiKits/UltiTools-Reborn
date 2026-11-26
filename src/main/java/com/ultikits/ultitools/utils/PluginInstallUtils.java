@@ -55,7 +55,7 @@ public class PluginInstallUtils {
             "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。";
 
     /** How the uninstall asks a loaded module which JAR it came from; a test passes its own. */
-    static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
+    static final Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
             module -> codeSourceLocationOf(module.getClass());
 
     /**
@@ -410,50 +410,84 @@ public class PluginInstallUtils {
         if (installedJarName(identify, version) == null) {
             return PendingResult.reply(UpmKeys.INSTALL_FAILED);
         }
-        var admission = new PendingResult[1];
-        ModuleFileTransactions.Catalogue catalogue = new ModuleFileTransactions.Catalogue() {
-            @Override public String latestVersion(String id) { return version; }
-
-            @Override public String downloadLink(String id, String desiredVersion) {
-                if (!metadata.downloadable()) {
-                    if (licenceRequired(metadata)) {
-                        LOGGER.log(Level.WARNING, FrameworkText.format(REASON_LICENCE_REQUIRED, requested,
-                                version));
-                        admission[0] = PendingResult.reply(UpmKeys.INSTALL_REFUSED_LICENCE_REQUIRED,
-                                string("module", requested), string("version", version));
-                    } else {
-                        LOGGER.log(Level.WARNING, notAvailableLine(requested, version));
-                        admission[0] = PendingResult.reply(UpmKeys.INSTALL_FAILED);
-                    }
-                    return null;
-                }
-                String url = CatalogueClient.absoluteDownloadUrl(metadata.downloadUrl());
-                if (url == null) {
-                    LOGGER.log(Level.SEVERE, foreignDownloadLine(requested, version));
-                    admission[0] = PendingResult.reply(UpmKeys.INSTALL_FAILED);
-                }
-                return url;
-            }
-        };
         UltiTools framework = UltiTools.getInstance();
         PluginManager manager = framework.getPluginManager();
-        String name = module.getName() == null || module.getName().isBlank() ? requested : module.getName();
+        String name = module.getName();
+        if (name == null || name.isBlank()) {
+            name = requested;
+        }
+        var download = new InstallStaging(metadata, requested, level);
         var staged = transactions(framework).stageChange(identify, version, name, PendingChanges.Requester.from(sender),
-                () -> manager == null ? List.of() : manager.getPluginList(), DEFAULT_MODULE_CODE_SOURCE, catalogue,
-                (url, file, folder) -> {
-                    admission[0] = downloadAndAdmit(url, metadata, file, folder, requested, version, level);
-                    if (admission[0] != null) {
-                        throw new IOException("the downloaded module was not admitted");
-                    }
-                }, recordedMainClass(manager == null ? null : manager.getModuleJarIndex()));
+                () -> loadedSnapshot(manager), DEFAULT_MODULE_CODE_SOURCE, download, download,
+                recordedMainClass(manager == null ? null : manager.getModuleJarIndex()));
+        return installResult(name, staged, download.refusal);
+    }
+
+    private static List<UltiToolsPlugin> loadedSnapshot(PluginManager manager) {
+        // The manager takes an independent snapshot; staging must not iterate its backing list.
+        return manager == null ? List.of() : manager.getPluginList();
+    }
+
+    private static PendingResult installResult(String name, ModuleFileTransactions.StageResult staged,
+                                               PendingResult admissionRefusal) {
         var result = PendingResult.builder();
         appendPreviousFailure(result, name, staged);
-        if (admission[0] != null) {
-            result.replies.addAll(admission[0].replies());
-            return result.build();
+        if (admissionRefusal == null || UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING.equals(staged.getReasonKey())) {
+            appendStageReply(result, name, staged, true);
+        } else {
+            result.replies.addAll(admissionRefusal.replies());
         }
-        appendStageReply(result, name, staged, true);
         return result.build();
+    }
+
+    /** The metadata and admission result of one install request, never shared across downloads. */
+    private static final class InstallStaging implements ModuleFileTransactions.Catalogue, ModuleFileTransactions.Downloader {
+        private final CatalogueClient.Version metadata;
+        private final String requested;
+        private final int level;
+        private PendingResult refusal;
+
+        private InstallStaging(CatalogueClient.Version metadata, String requested, int level) {
+            this.metadata = metadata;
+            this.requested = requested;
+            this.level = level;
+        }
+
+        @Override
+        public String latestVersion(String id) {
+            return metadata.version();
+        }
+
+        @Override
+        public String downloadLink(String id, String desiredVersion) {
+            String version = metadata.version();
+            if (!metadata.downloadable()) {
+                if (licenceRequired(metadata)) {
+                    LOGGER.log(Level.WARNING, FrameworkText.format(REASON_LICENCE_REQUIRED, requested,
+                            version));
+                    refusal = PendingResult.reply(UpmKeys.INSTALL_REFUSED_LICENCE_REQUIRED,
+                            string("module", requested), string("version", version));
+                } else {
+                    LOGGER.log(Level.WARNING, notAvailableLine(requested, version));
+                    refusal = PendingResult.reply(UpmKeys.INSTALL_FAILED);
+                }
+                return null;
+            }
+            String url = CatalogueClient.absoluteDownloadUrl(metadata.downloadUrl());
+            if (url == null) {
+                LOGGER.log(Level.SEVERE, foreignDownloadLine(requested, version));
+                refusal = PendingResult.reply(UpmKeys.INSTALL_FAILED);
+            }
+            return url;
+        }
+
+        @Override
+        public void download(String url, String file, File folder) throws IOException {
+            refusal = downloadAndAdmit(url, metadata, file, folder, requested, metadata.version(), level);
+            if (refusal != null) {
+                throw new IOException("the downloaded module was not admitted");
+            }
+        }
     }
 
     /** @return the running framework's journal view */
@@ -720,6 +754,7 @@ public class PluginInstallUtils {
             case UNFINISHED -> result.add(UpmKeys.PENDING_UNFINISHED, module);
             case PENDING_UNINSTALL -> result.add(UpmKeys.UPDATE_PENDING_UNINSTALL, module);
             case FAILED -> appendStageFailure(result, module, staged, install);
+            default -> throw new IllegalStateException("Unhandled staging outcome: " + staged.getOutcome());
         }
     }
 
@@ -731,10 +766,13 @@ public class PluginInstallUtils {
             result.add(UpmKeys.PENDING_NEEDS_OPERATOR, module, args[0], args[1]);
         } else if (install && UpmKeys.REASON_RECORD_FAILED.equals(reason)) {
             result.add(UpmKeys.INSTALL_NOT_RECORDED, module, args[0]);
-        } else if (install) {
+        } else if (UpmKeys.INSTALL_REFUSED_TARGET_EXISTS.equals(reason)) {
+            result.add(reason, args);
+        } else if (install && reason == null) {
             result.add(UpmKeys.INSTALL_FAILED);
         } else {
-            result.add(UpmKeys.UPDATE_NOT_STAGED, module, Arg.text("reason", Text.of(reason, args)));
+            result.add(install ? UpmKeys.INSTALL_NOT_STAGED : UpmKeys.UPDATE_NOT_STAGED,
+                    module, Arg.text("reason", Text.of(reason, args)));
         }
     }
 
@@ -799,11 +837,9 @@ public class PluginInstallUtils {
     public static ModuleFileTransactions.StageResult stageUpdate(String identifyString, CommandSender sender) {
         UltiTools ultiTools = UltiTools.getInstance();
         PluginManager pluginManager = ultiTools.getPluginManager();
-        // The loaded modules are read by staging under its lock, not snapshotted here: an uninstall
-        // completing between a snapshot and the lock would be missed (Codex round 16).
         StagingCatalogue staging = new StagingCatalogue();
         return transactions(ultiTools).stageChange(identifyString, null, null, PendingChanges.Requester.from(sender),
-                pluginManager::getPluginList, DEFAULT_MODULE_CODE_SOURCE,
+                () -> loadedSnapshot(pluginManager), DEFAULT_MODULE_CODE_SOURCE,
                 staging, staging, recordedMainClass(pluginManager.getModuleJarIndex()));
     }
 
@@ -915,7 +951,7 @@ public class PluginInstallUtils {
      * @param index the loader's index, or {@code null}
      * @return the resolver
      */
-    static java.util.function.Function<UltiToolsPlugin, String> recordedMainClass(ModuleJarIndex index) {
+    static Function<UltiToolsPlugin, String> recordedMainClass(ModuleJarIndex index) {
         if (index == null) {
             return module -> null;
         }
@@ -996,7 +1032,7 @@ public class PluginInstallUtils {
      */
     private static Presence probe(File file, java.nio.file.LinkOption... options) {
         try {
-            java.nio.file.attribute.BasicFileAttributes attributes = java.nio.file.Files.readAttributes(
+            java.nio.file.attribute.BasicFileAttributes attributes = Files.readAttributes(
                     file.toPath(), java.nio.file.attribute.BasicFileAttributes.class, options);
             if (attributes.isDirectory()) {
                 return Presence.DIRECTORY;
@@ -1277,6 +1313,16 @@ public class PluginInstallUtils {
         if (entries == null && probe(folder) != Presence.ABSENT) {
             return PendingResult.reply(UpmKeys.UNINSTALL_FOLDER_UNREADABLE, string("folder", folder.getAbsolutePath()));
         }
+        var candidates = matchRemovalCandidates(entries, identity);
+        List<File> files = candidates.files();
+        refuseToTouchAnotherModulesJar(identity, files);
+        identity.noteCandidates(files);
+        return queueResolvedRemoval(transactions(frame), identity, candidates, name, sender);
+    }
+
+    private record RemovalCandidates(List<File> files, List<String> undetermined) { }
+
+    private static RemovalCandidates matchRemovalCandidates(File[] entries, ModuleIdentity identity) {
         var files = new ArrayList<File>();
         var undetermined = new ArrayList<String>();
         if (entries != null) {
@@ -1288,22 +1334,35 @@ public class PluginInstallUtils {
                 }
             }
         }
-        refuseToTouchAnotherModulesJar(identity, files);
-        identity.noteCandidates(files);
+        return new RemovalCandidates(files, undetermined);
+    }
+
+    private static PendingResult queueResolvedRemoval(ModuleFileTransactions journal, ModuleIdentity identity,
+                                                      RemovalCandidates candidates, String name, CommandSender sender) {
+        List<File> files = candidates.files();
         UltiToolsPlugin running = identity.loaded.isEmpty() ? null : identity.loaded.getFirst();
-        String key = running == null ? null : running.getIdentifyString();
-        String module = running == null ? null : running.getPluginName();
-        if (running == null && !files.isEmpty()) {
-            var metadata = PluginYmlReader.readFromJarFile(files.getFirst());
-            key = readIdentifyString(files.getFirst());
-            module = metadata.getName();
-        }
+        RemovalTarget target = removalTarget(running, files);
+        String key = target.key();
+        String module = target.module();
         if (identity.recorded.bystanderIds.contains(normalizeIdentifyString(key))) {
             key = null;
         }
-        return transactions(frame).queueRemoval(module == null || module.isBlank() ? name : module, key,
-                running == null ? null : running.getVersion(), identity.removedModule(), files, undetermined,
+        return journal.queueRemoval(module == null || module.isBlank() ? name : module, key,
+                running == null ? null : running.getVersion(), identity.removedModule(), files, candidates.undetermined(),
                 sender, running != null);
+    }
+
+    private record RemovalTarget(String module, String key) { }
+
+    private static RemovalTarget removalTarget(UltiToolsPlugin running, List<File> files) {
+        if (running != null) {
+            return new RemovalTarget(running.getPluginName(), running.getIdentifyString());
+        }
+        if (files.isEmpty()) {
+            return new RemovalTarget(null, null);
+        }
+        File file = files.getFirst();
+        return new RemovalTarget(PluginYmlReader.readFromJarFile(file).getName(), readIdentifyString(file));
     }
 
     private static String readIdentifyString(File file) {
@@ -1505,7 +1564,7 @@ public class PluginInstallUtils {
      * @return the resolved identity
      */
     private static ModuleIdentity resolveIdentity(String requested, PluginManager pluginManager,
-                                                  java.util.function.Function<UltiToolsPlugin, File> codeSource) {
+                                                  Function<UltiToolsPlugin, File> codeSource) {
         List<UltiToolsPlugin> loaded = new ArrayList<>();
         List<UltiToolsPlugin> others = new ArrayList<>();
         Map<UltiToolsPlugin, File> jars = new java.util.LinkedHashMap<>();
@@ -1646,7 +1705,7 @@ public class PluginInstallUtils {
      * @param someUnknown   set when some instance's code source could not be determined at all
      */
     private static void readLoadedModules(PluginManager pluginManager,
-                                          java.util.function.Function<UltiToolsPlugin, File> codeSource,
+                                          Function<UltiToolsPlugin, File> codeSource,
                                           List<UltiToolsPlugin> others, Map<UltiToolsPlugin, File> jars,
                                           Map<UltiToolsPlugin, String> declared,
                                           java.util.concurrent.atomic.AtomicBoolean someUnknown) {
@@ -1776,5 +1835,4 @@ public class PluginInstallUtils {
         return identity.someCodeSourceUnknown ? EntryState.UNDETERMINED : EntryState.THIS_MODULES;
     }
 
-    /** The absolute paths of {@code files}, in the order given. */
 }

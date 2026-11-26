@@ -284,17 +284,21 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         var result = PluginInstallUtils.pendingChanges().revokeByModule(module);
         switch (result.outcome()) {
             case REVOKED -> sendRevoked(sender, result.before());
-            case NOT_REVOCABLE -> {
-                var item = result.before();
-                if (item.state() == PendingChanges.State.NEEDS_OPERATOR) {
-                    send(sender, UpmKeys.REVOKE_NOT_REVOCABLE_NEEDS_OPERATOR, string("module", item.module()),
-                            arg("failure", item.failure()), recordFile(item));
-                } else {
-                    send(sender, UpmKeys.REVOKE_NOT_REVOCABLE_IN_PROGRESS, string("module", item.module()));
-                }
-            }
+            case NOT_REVOCABLE -> sendNotRevocable(sender, result.before());
             case NOT_FOUND -> send(sender, UpmKeys.REVOKE_NOT_FOUND, string("module", module));
             case FAILED, CHANGED -> send(sender, UpmKeys.REVOKE_FAILED, string("module", module), arg("error", result.error()));
+            default -> throw new IllegalStateException("Unhandled revoke outcome: " + result.outcome());
+        }
+    }
+
+    private static void sendNotRevocable(CommandSender sender, PendingChange item) {
+        Arg module = string("module", item.module());
+        switch (item.state()) {
+            case FAILED -> send(sender, UpmKeys.REVOKE_NOT_REVOCABLE_FAILED, module, arg("failure", item.failure()));
+            case NEEDS_OPERATOR -> send(sender, UpmKeys.REVOKE_NOT_REVOCABLE_NEEDS_OPERATOR, module,
+                    arg("failure", item.failure()), recordFile(item));
+            case IN_PROGRESS -> send(sender, UpmKeys.REVOKE_NOT_REVOCABLE_IN_PROGRESS, module);
+            default -> throw new IllegalStateException("Unhandled non-revocable state: " + item.state());
         }
     }
 
@@ -337,6 +341,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             case UPDATE -> send(sender, UpmKeys.PENDING_ENTRY_UPDATE, number, module, from, to);
             case UNINSTALL -> send(sender, UpmKeys.PENDING_ENTRY_UNINSTALL, number, module, from,
                     string("files", String.join(", ", item.files())));
+            default -> throw new IllegalStateException("Unhandled pending change kind: " + item.kind());
         }
         if (item.requestedAt() != null) {
             String time = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT).withZone(ZoneId.systemDefault())
@@ -350,6 +355,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                     arg("failure", item.failure()), recordFile(item));
             case IN_PROGRESS -> send(sender, UpmKeys.PENDING_STATE_IN_PROGRESS);
             case PENDING -> { /* The entry already says what is pending. */ }
+            default -> throw new IllegalStateException("Unhandled pending state: " + item.state());
         }
         sendWarnings(sender, item.module(), item.content());
     }
@@ -381,9 +387,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
 
     private static void sendRevoked(CommandSender sender, PendingChange before) {
         Arg module = string("module", before.module());
-        if (before.state() == PendingChanges.State.FAILED) {
-            send(sender, UpmKeys.REVOKE_DONE_FAILED, module);
-        } else if (before.state() == PendingChanges.State.DOWNLOADING) {
+        if (before.state() == PendingChanges.State.DOWNLOADING) {
             send(sender, UpmKeys.REVOKE_DONE_DOWNLOADING, module);
         } else {
             switch (before.kind()) {
@@ -391,6 +395,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
                 case UPDATE -> send(sender, UpmKeys.REVOKE_DONE_UPDATE, module, arg("from", before.fromVersion()),
                         arg("to", before.toVersion()));
                 case UNINSTALL -> send(sender, UpmKeys.REVOKE_DONE_UNINSTALL, module);
+                default -> throw new IllegalStateException("Unhandled revoked change kind: " + before.kind());
             }
         }
     }

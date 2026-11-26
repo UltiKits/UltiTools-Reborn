@@ -468,17 +468,19 @@ class PluginInstallCommandsTest {
     }
 
     @Test
-    @DisplayName("#501: a failed jar delete is reported as a failure naming the jar that is still on disk")
-    void uninstallDeleteFailure_replyNamesTheJarStillOnDisk() {
+    @DisplayName("uninstall reports why the request was not recorded without claiming a deletion")
+    void uninstallJournalWriteFailure_reportsTheReasonExactlyOnce() {
         var sender = player;
         mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NOT_RECORDED, "test-plugin", "error", "read-only journal"));
         executor.uninstallPlugin(sender, "test-plugin");
-        assertThat(player.nextMessage()).contains("read-only journal");
+        assertThat(player.nextMessage()).isEqualTo(
+                "§cCould not add the uninstall of test-plugin to the pending changes: read-only journal. Nothing changed.");
+        assertThat(player.nextMessage()).isNull();
     }
 
     @Test
-    @DisplayName("#501 review WR-02: a failed uninstall names every module jar still on disk")
-    void uninstallSeveralUndeletableJars_replyNamesEveryJar() {
+    @DisplayName("an uninstall lists every JAR scheduled for deletion, without unloading immediately")
+    void queuedUninstall_replyNamesEveryJar() {
         var sender = player;
         mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.remove("test-plugin", "first.jar, second.jar"));
         executor.uninstallPlugin(sender, "test-plugin");
@@ -486,39 +488,14 @@ class PluginInstallCommandsTest {
     }
 
     @Test
-    @DisplayName("#501 review WR-03: a module unloaded without a jar on disk is reported as such, not as a misspelling")
-    void uninstallLoadedModuleWithoutJar_replySaysUnloadedAndNoJarFound() {
+    @DisplayName("a running module with no identifiable JAR cannot be queued for uninstall")
+    void uninstallLoadedModuleWithoutJar_replySaysItIsStillRunning() {
         var sender = player;
         mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NO_JAR, "test-plugin", "folder", "modules-folder"));
         executor.uninstallPlugin(sender, "test-plugin");
-        assertThat(player.nextMessage()).contains("modules-folder");
-    }
-
-    @Test
-    @DisplayName("#503 review WR-01: an unload that throws is reported, together with the jars having been deleted")
-    void uninstallUnloadThrew_jarsDeleted_replyReportsBoth() {
-        var sender = player;
-        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.remove("test-plugin", "module.jar"));
-        executor.uninstallPlugin(sender, "test-plugin");
-        assertThat(player.nextMessage()).contains("module.jar");
-    }
-
-    @Test
-    @DisplayName("#503 review WR-01: an unload that throws and a jar that cannot be deleted are both reported, naming the jar")
-    void uninstallUnloadThrew_jarNotDeleted_replyNamesTheJar() {
-        var sender = player;
-        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NOT_RECORDED, "test-plugin", "error", "read-only journal"));
-        executor.uninstallPlugin(sender, "test-plugin");
-        assertThat(player.nextMessage()).contains("read-only journal");
-    }
-
-    @Test
-    @DisplayName("#503 review WR-01: an unload that throws with no jar on disk says so")
-    void uninstallUnloadThrew_noJar_replySaysNoJarFound() {
-        var sender = player;
-        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NO_JAR, "test-plugin", "folder", "modules-folder"));
-        executor.uninstallPlugin(sender, "test-plugin");
-        assertThat(player.nextMessage()).contains("modules-folder");
+        assertThat(player.nextMessage()).isEqualTo("§ctest-plugin is running, but no JAR in modules-folder could be "
+                + "identified as its file, so it cannot be added to the pending changes. Nothing changed.");
+        assertThat(player.nextMessage()).isNull();
     }
 
     @Test
@@ -529,25 +506,6 @@ class PluginInstallCommandsTest {
         executor.uninstallPlugin(sender, "test-plugin");
         assertThat(player.nextMessage()).contains("module.jar");
         assertThat(player.nextMessage()).contains("uncertain.jar");
-    }
-
-    @Test
-    @DisplayName("state C is reported once, however many branches of a failure carry it")
-    void uninstallUnloadThrew_noJarWithUndetermined_reportsThemOnce() {
-        var sender = player;
-        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.unknown("test-plugin"));
-        executor.uninstallPlugin(sender, "test-plugin");
-        assertThat(player.nextMessage()).contains("module.jar");
-        assertThat(player.nextMessage()).contains("uncertain.jar");
-    }
-
-    @Test
-    @DisplayName("state D reached through a failed unload is still reported as a folder, not as a JAR")
-    void uninstallUnloadThrew_folderUnlistable_replySaysNothingCanBeConcluded() {
-        var sender = player;
-        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("test-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_FOLDER_UNREADABLE, "test-plugin", "folder", "modules-folder"));
-        executor.uninstallPlugin(sender, "test-plugin");
-        assertThat(player.nextMessage()).contains("modules-folder");
     }
 
     @Test

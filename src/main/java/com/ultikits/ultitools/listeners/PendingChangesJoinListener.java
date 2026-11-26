@@ -14,6 +14,7 @@ import org.jetbrains.annotations.ApiStatus;
 
 import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.ModuleFileTransactions.StartOutcome;
 import com.ultikits.ultitools.utils.PendingChanges;
@@ -56,13 +57,17 @@ public final class PendingChangesJoinListener implements Listener {
             messages.send(player, UpmKeys.PENDING_NOTICE_WAITING, Arg.number("count", pending.total()));
         }
         if (!outcomes.isEmpty()) {
-            long problems = outcomes.stream().filter(outcome -> outcome.result() != StartOutcome.Result.APPLIED).count();
-            if (problems != 0) {
-                messages.send(player, UpmKeys.PENDING_NOTICE_LAST_START_PROBLEMS, Arg.number("count", problems));
-            } else {
-                messages.send(player, UpmKeys.PENDING_NOTICE_LAST_START_OK, Arg.number("count", outcomes.size()));
-            }
+            sendStartSummary(player, messages, outcomes);
         }
         remindedAt.put(id, pending.generation());
+    }
+
+    private static void sendStartSummary(Player player, Messages messages, List<StartOutcome> outcomes) {
+        long problems = outcomes.stream().filter(outcome -> outcome.result() != StartOutcome.Result.APPLIED).count();
+        if (problems != 0) {
+            messages.send(player, UpmKeys.PENDING_NOTICE_LAST_START_PROBLEMS, Arg.number("count", problems));
+        } else {
+            messages.send(player, UpmKeys.PENDING_NOTICE_LAST_START_OK, Arg.number("count", outcomes.size()));
+        }
     }
 }

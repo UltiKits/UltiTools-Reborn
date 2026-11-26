@@ -12,7 +12,9 @@ import static org.mockito.Mockito.when;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +36,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.utils.ModuleFileTransactions.CrashPoints;
 import com.ultikits.ultitools.utils.ModuleFileTransactions.FileOps;
 import com.ultikits.ultitools.utils.ModuleFileTransactions.StageResult;
@@ -117,16 +120,102 @@ class PendingChangesTest {
     }
 
     @Test
-    void occupiedTargetCannotBeOverwrittenOrDeletedByRevokingTheFailure() throws IOException {
-        stage("1.1", true);
+    void targetOccupiedAfterQueuingFailsOnlyOnceAndIsNeverOverwritten() throws IOException {
+        assertThat(stage("1.1", true).getOutcome()).isEqualTo(StageResult.Outcome.QUEUED_INSTALL);
         Files.createDirectories(modules.toPath());
         var target = modules.toPath().resolve("demo-1.1.jar");
         Files.writeString(target, "not the staged JAR");
         transactions.applyBeforeLoad();
-        var failure = pending.list().getFirst();
-        assertThat(failure.state()).isEqualTo(State.FAILED);
-        assertThat(pending.revoke(failure.id(), failure.revision(), true).outcome()).isEqualTo(Outcome.REVOKED);
+        assertThat(transactions.startOutcomes()).containsExactly(
+                new StartOutcome(Kind.INSTALL, "Demo", null, "1.1", StartOutcome.Result.NOT_APPLIED));
+        assertThat(transactions.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
+                .containsExactly(UpmKeys.START_INSTALL_TARGET_EXISTS.translationKey());
         assertThat(Files.readString(target)).isEqualTo("not the staged JAR");
+
+        var next = new ModuleFileTransactions(data);
+        next.applyBeforeLoad();
+        assertThat(next.startOutcomes()).isEmpty();
+        assertThat(next.pendingReports()).isEmpty();
+        assertThat(Files.readString(target)).isEqualTo("not the staged JAR");
+        Files.delete(target);
+        var later = new ModuleFileTransactions(data);
+        later.applyBeforeLoad();
+        assertThat(target).doesNotExist();
+        assertThat(later.startOutcomes()).isEmpty();
+        assertThat(stage("1.1", true).getOutcome()).isEqualTo(StageResult.Outcome.QUEUED_INSTALL);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void aDeniedInstallRecordWriteRemovesTheJarBeforeLoading(boolean previouslyApplied) throws IOException {
+        assertThat(stage("2", true).getOutcome()).isEqualTo(StageResult.Outcome.QUEUED_INSTALL);
+        var target = new File(modules, "demo-2.jar");
+        if (previouslyApplied) {
+            transactions.applyBeforeLoad();
+            assertThat(target).exists();
+            assertThat(Files.readString(pending.list().getFirst().recordFile().toPath())).contains("APPLIED");
+        }
+        var denied = new ModuleFileTransactions(modules, records, FileOps.DEFAULT, point -> {
+            if (CrashPoints.BEFORE_RECORD_MOVED.equals(point)) {
+                throw new SecurityException("injected: access denied");
+            }
+        });
+
+        denied.applyBeforeLoad();
+        assertThat(target).doesNotExist();
+        assertThat(treeOf(records)).isEmpty();
+        assertThat(denied.startOutcomes()).containsExactly(
+                new StartOutcome(Kind.INSTALL, "Demo", null, "2", StartOutcome.Result.ROLLED_BACK));
+        assertThat(denied.pendingReports()).anySatisfy(report ->
+                assertThat(report.getArgs()).anyMatch(arg -> arg.toString().contains("injected: access denied")));
+    }
+
+    @Test
+    void anInstallThatCannotRollBackWarnsThatItsJarCouldNotBeRemoved() throws IOException {
+        assertThat(stage("2", true).getOutcome()).isEqualTo(StageResult.Outcome.QUEUED_INSTALL);
+        transactions.applyBeforeLoad();
+        var target = new File(modules, "demo-2.jar");
+        var ops = new FileOps() {
+            @Override public void move(Path from, Path to) throws IOException {
+                if (from.equals(target.toPath())) {
+                    throw new IOException("injected: the JAR cannot be moved back");
+                }
+                DEFAULT.move(from, to);
+            }
+            @Override public void delete(Path path) throws IOException {
+                DEFAULT.delete(path);
+            }
+        };
+        var denied = new ModuleFileTransactions(modules, records, ops, point -> {
+            if (CrashPoints.BEFORE_RECORD_MOVED.equals(point)) {
+                throw new SecurityException("injected: access denied");
+            }
+        });
+
+        denied.applyBeforeLoad();
+        assertThat(target).exists();
+        assertThat(denied.startOutcomes()).containsExactly(
+                new StartOutcome(Kind.INSTALL, "Demo", null, "2", StartOutcome.Result.NOT_APPLIED));
+        assertThat(denied.pendingReports()).anySatisfy(report -> {
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_INSTALL_ROLLBACK_DEFERRED.translationKey());
+            assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
+            assertThat(report.getArgs()).anyMatch(arg -> arg.toString().contains("the JAR cannot be moved back"));
+        });
+    }
+
+    @Test
+    void installingForARunningModuleCanUpdateItsOwnSameNameJar() throws IOException {
+        loaded = List.of(loadedModule("Demo", "1.0", "demo"));
+        oldJar = moduleJar(new File(modules, "demo-1.1.jar"), "Demo", "1.0", "demo");
+        byte[] original = Files.readAllBytes(oldJar.toPath());
+
+        assertThat(stage("1.1", true).getOutcome()).isEqualTo(StageResult.Outcome.STAGED);
+        assertThat(pending.list()).singleElement().satisfies(change -> {
+            assertThat(change.kind()).isEqualTo(Kind.UPDATE);
+            assertThat(change.fromVersion()).isEqualTo("1.0");
+            assertThat(change.toVersion()).isEqualTo("1.1");
+        });
+        assertThat(Files.readAllBytes(oldJar.toPath())).isEqualTo(original);
     }
 
     @ParameterizedTest
@@ -198,7 +287,7 @@ class PendingChangesTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"FAILED,REVOKED", "NEEDS_OPERATOR,NOT_REVOCABLE", "APPLIED,NOT_REVOCABLE",
+    @CsvSource({"FAILED,NOT_REVOCABLE", "NEEDS_OPERATOR,NOT_REVOCABLE", "APPLIED,NOT_REVOCABLE",
         "COMMITTING,NOT_REVOCABLE", "ROLLING_BACK,NOT_REVOCABLE"})
     void revisionIsFromTheRecordBytesAndEachStateDecidesRevocability(String state, Outcome expected) throws IOException {
         stage("2", true);
@@ -214,7 +303,10 @@ class PendingChangesTest {
         assertThat(pending.list().getFirst().revision()).isNotEqualTo(replacement.revision());
         Files.writeString(path, Files.readString(path).replace("PENDING", state));
         var changed = pending.list().getFirst();
+        assertThat(changed.revocable()).isFalse();
         assertThat(pending.revoke(changed.id(), changed.revision(), true).outcome()).isEqualTo(expected);
+        assertThat(pending.revokeByModule(changed.module()).outcome()).isEqualTo(expected);
+        assertThat(pending.list()).containsExactly(changed);
     }
 
     @Test
@@ -247,6 +339,89 @@ class PendingChangesTest {
             assertThat(download.get(10, TimeUnit.SECONDS).getReasonKey()).isEqualTo(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING);
         }
         assertThat(pending.list()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "none,false,upm.revoke.done.downloading",
+        "none,true,upm.uninstall.queued",
+        "install,false,upm.uninstall.cancelled_install",
+        "update,true,upm.uninstall.also_cancelled_update",
+        "uninstall,true,upm.uninstall.already_queued"
+    })
+    void aLaterUninstallCancelsTheInFlightDownloadAndKeepsOnlyTheRequestedRemoval(
+            String previous, boolean running, String removalReply) throws Exception {
+        prepare(previous, running);
+        var entered = new CountDownLatch(1);
+        var released = new CountDownLatch(1);
+        PluginInstallUtils.PendingResult removal;
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var work = executor.submit(() -> transactions.stageChange("demo", "3", "Demo", null,
+                    () -> loaded, ignored -> oldJar, catalogue("demo", "3"), (link, name, folder) -> {
+                        entered.countDown();
+                        try {
+                            if (!released.await(10, TimeUnit.SECONDS)) {
+                                throw new IOException("release timed out");
+                            }
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException(interrupted);
+                        }
+                        moduleJar(new File(folder, name), "Demo", "3", "demo");
+                    }, null));
+            try {
+                assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+                assertThat(pending.list()).singleElement().satisfies(item -> {
+                    assertThat(item.state()).isEqualTo(State.DOWNLOADING);
+                    assertThat(item.toVersion()).isEqualTo("3");
+                });
+                assertThat(stage("4", true).getOutcome()).isEqualTo(StageResult.Outcome.BUSY);
+                assertThat(stage("4", false).getOutcome()).isEqualTo(StageResult.Outcome.BUSY);
+                removal = remove();
+            } finally {
+                released.countDown();
+            }
+            assertThat(work.get(10, TimeUnit.SECONDS).getReasonKey()).isEqualTo(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING);
+        }
+        if (running) {
+            assertThat(oldJar).exists();
+            assertThat(pending.list()).singleElement().satisfies(item -> {
+                assertThat(item.kind()).isEqualTo(Kind.UNINSTALL);
+                assertThat(item.state()).isEqualTo(State.PENDING);
+                assertThat(item.files()).containsExactly("demo-1.jar");
+                assertThat(treeOf(records)).containsExactly(item.recordFile().getName());
+            });
+        } else {
+            assertThat(pending.list()).isEmpty();
+            assertThat(treeOf(records)).isEmpty();
+        }
+        assertThat(removal.replies()).extracting(reply -> reply.key().path())
+                .contains(removalReply, "upm.revoke.done.downloading");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "en,This uninstall was dropped,Run /upm uninstall again",
+        "zh,这次卸载已放弃,请重新运行 /upm uninstall"
+    })
+    void aRemovalSkippedOnIdentityMismatchExplainsTheOutcomeAndHowToRetry(
+            String language, String outcome, String retry) throws IOException {
+        prepare("none", true);
+        assertThat(remove().queued()).isTrue();
+        Files.writeString(oldJar.toPath(), "replacement");
+        transactions.applyBeforeLoad();
+        assertThat(oldJar).hasContent("replacement");
+        assertThat(pending.list()).isEmpty();
+        assertThat(transactions.startOutcomes()).containsExactly(
+                new StartOutcome(Kind.UNINSTALL, "Demo", "1", null, StartOutcome.Result.NOT_APPLIED));
+        var report = transactions.pendingReports().getFirst();
+        assertThat(report.getKey()).isEqualTo(UpmKeys.START_REMOVAL_SKIPPED.translationKey());
+        try (var text = new CommandMessageTestSupport(language)) {
+            var rendered = text.messages().render(UpmKeys.START_REMOVAL_SKIPPED, Locale.forLanguageTag(language),
+                    java.util.Arrays.copyOf(report.getArgs(), report.getArgs().length, com.ultikits.ultitools.text.Arg[].class));
+            assertThat(CommandMessageTestSupport.plain(rendered)).contains(outcome, retry,
+                    "en".equals(language) ? "can still load" : "模块仍会加载");
+        }
     }
 
     @Test
@@ -328,7 +503,7 @@ class PendingChangesTest {
             @Override public void close() { /* No resources. */ }
         });
         try (var bukkit = org.mockito.Mockito.mockStatic(org.bukkit.Bukkit.class);
-             var text = new com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport(language)) {
+             var text = new CommandMessageTestSupport(language)) {
             bukkit.when(org.bukkit.Bukkit::getConsoleSender).thenReturn(mock(ConsoleCommandSender.class));
             transactions.flushReports(logger, key -> key, text.messages());
         }

@@ -2,6 +2,7 @@ package com.ultikits.ultitools.utils;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
 
@@ -9,6 +10,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.function.Function;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.text.Arg;
@@ -32,6 +35,34 @@ final class PendingTestValues {
             return files.filter(Files::isRegularFile).filter(path -> path.getFileName().toString().equals(name))
                     .findFirst().orElseThrow().toFile();
         }
+    }
+
+    static PluginInstallUtils.PendingResult queueRemoval(ModuleFileTransactions journal, String module, String key,
+                                                        File... files) {
+        var identity = new ModuleFileTransactions.RemovedModule(key == null ? List.of() : List.of(key), List.of(module),
+                java.util.Arrays.stream(files).map(File::getName).toList());
+        return ModuleFileTransactions.underLock(() -> journal.queueRemoval(module, key, null, identity,
+                List.of(files), List.of(), null, false));
+    }
+
+    /** Seeds a 6.x removal so recovery tests can keep an update and a legacy removal side by side. */
+    static File legacyRemoval(File data, String module, File file) throws IOException {
+        var removal = new JsonObject();
+        removal.addProperty("name", file.getName());
+        removal.addProperty("size", Files.size(file.toPath()));
+        removal.addProperty("lastModified", Files.getLastModifiedTime(file.toPath()).toMillis());
+        removal.addProperty("sha256", ResourceHashSidecar.sha256(file));
+        var removals = new JsonArray();
+        removals.add(removal);
+        var record = new JsonObject();
+        record.addProperty("type", "REMOVE");
+        record.addProperty("key", module);
+        record.addProperty("state", "PENDING");
+        record.addProperty("moduleName", module);
+        record.add("removals", removals);
+        String id = ResourceHashSidecar.sha256(("REMOVE:" + module).getBytes(StandardCharsets.UTF_8)).substring(0, 16);
+        var dir = Files.createDirectories(ModuleFileTransactions.transactionsFolder(data).toPath());
+        return Files.writeString(dir.resolve("remove-" + id + ".json"), record.toString()).toFile();
     }
 
     record RemovalObservation(PluginInstallUtils.PendingResult request, List<String> files, List<String> undetermined) {

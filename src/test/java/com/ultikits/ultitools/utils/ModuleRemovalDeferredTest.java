@@ -14,7 +14,6 @@ import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -289,7 +288,7 @@ class ModuleRemovalDeferredTest {
     void oneUnreadableOfTwoRecordedJars_staysRecordedWithItsOriginalFields() throws IOException {
         File other = moduleJar(new File(modules, "removal-fixture-extra-1.0.jar"), "RemovalFixtureExtra", "1.0",
                 "removal-fixture-extra");
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval(MODULE, Arrays.asList(jar, other));
+        assertThat(PendingTestValues.queueRemoval(new ModuleFileTransactions(dataFolder), MODULE, null, jar, other).queued()).isTrue();
         JsonObject recordedBefore = jsonOf(onlyRecord());
         JsonObject otherBefore = removalNamed(recordedBefore, other.getName());
         unreadable(other);
