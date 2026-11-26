@@ -81,21 +81,28 @@ class CommandManagerTest {
         Fixture own = new Fixture();
         container.registerSingleton("own", own);
         manager.register(module, Fixture.class, "custom", EXPLICIT, "custom", "other");
-        verify(engine).register(module, "module", own, "显式命令说明", "custom", false,
-                List.of("custom", "other"));
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq(module), eq("module"), same(own), description.capture(), eq("custom"), eq(false),
+                eq(List.of("custom", "other")));
+        assertThat(description.getValue()).isEqualTo("显式命令说明");
     }
     @Test void explicitRegistrationWithoutAliasesUsesTheAnnotationLabels() {
         Fixture own = new Fixture();
         container.registerSingleton("own", own);
         manager.register(module, Fixture.class, "custom", DESCRIPTION);
-        verify(engine).register(module, "module", own, "运行探针", "custom", false,
-                List.of("test", "alias"));
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq(module), eq("module"), same(own), description.capture(), eq("custom"), eq(false),
+                eq(List.of("test", "alias")));
+        assertThat(description.getValue()).isEqualTo("运行探针");
     }
     @Test void theShortOverloadAllowsManualRegistration() {
         Manual manual = new Manual();
         container.registerSingleton("manual", manual);
         manager.register(module, Manual.class);
-        verify(engine).register(module, "module", manual, "", "", false, List.of("manual"));
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq(module), eq("module"), same(manual), description.capture(), eq(""), eq(false),
+                eq(List.of("manual")));
+        assertThat(description.getValue()).isEmpty();
     }
     @Test void aPlainSentenceRemainsTheDescriptionInEitherRegistrationPath() {
         var literal = new Literal();
@@ -110,8 +117,10 @@ class CommandManagerTest {
     @Test void coreCommandsHaveFrameworkOwnershipAndRawDescriptions() {
         var executor = new Fixture();
         manager.registerCoreCommand(executor);
-        verify(engine).register("UltiTools", "UltiTools", executor, DESCRIPTION, "root.permission", false,
-                List.of("test", "alias"));
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq("UltiTools"), eq("UltiTools"), same(executor), description.capture(),
+                eq("root.permission"), eq(false), eq(List.of("test", "alias")));
+        assertThat(description.getValue()).isEqualTo(DESCRIPTION);
     }
     @Test void externalCommandsUseTheirNameAndDoNotTranslateDescriptions() {
         var executor = new Fixture();
@@ -121,8 +130,10 @@ class CommandManagerTest {
         when(adapter.getContext()).thenReturn(container);
         when(adapter.getPluginName()).thenReturn("external");
         manager.registerAllExternal(adapter);
-        verify(engine).register("external", "external", executor, DESCRIPTION, "root.permission", false,
-                List.of("test", "alias"));
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq("external"), eq("external"), same(executor), description.capture(),
+                eq("root.permission"), eq(false), eq(List.of("test", "alias")));
+        assertThat(description.getValue()).isEqualTo(DESCRIPTION);
         verifyNoMoreInteractions(engine);
     }
     @Test void absentExternalContextHasNoRegistrations() {

@@ -80,7 +80,7 @@ public abstract class AbstractConfigEntity {
     private static final List<Class<?>> NUMBER_KINDS = Arrays.asList(Integer.class, Long.class, Double.class, Float.class,
             Short.class, Byte.class, java.math.BigInteger.class, java.math.BigDecimal.class);
     private static final List<Class<?>> TEXT_KINDS = Arrays.asList(String.class, Character.class);
-    private static final List<Class<?>> CONTAINER_KINDS = Arrays.asList(ArrayList.class, java.util.LinkedHashSet.class,
+    private static final List<Class<?>> CONTAINER_KINDS = Arrays.asList(ArrayList.class, LinkedHashSet.class,
             LinkedHashMap.class, Object[].class);
 
     private final String configFilePath;
@@ -312,7 +312,7 @@ public abstract class AbstractConfigEntity {
     @SuppressWarnings("PMD.NPathComplexity") // Map parents emptied by the changes are owned whole; every other change owns its key.
     private static OwnedPaths saveOwnership(List<ModuleChange> changes, ConfigDocument read) {
         Map<List<String>, Map<String, Object>> after = new LinkedHashMap<>();
-        Set<List<String>> emptied = new java.util.LinkedHashSet<>();
+        Set<List<String>> emptied = new LinkedHashSet<>();
         for (ModuleChange change : changes) {
             if (change.path.size() < 2) { continue; }
             List<String> parent = change.path.subList(0, change.path.size() - 1);
@@ -501,7 +501,7 @@ public abstract class AbstractConfigEntity {
             Map<?, ?> before = (Map<?, ?>) base;
             Map<?, ?> after = (Map<?, ?>) current;
             Type valueType = mapValueType(declared);
-            Set<Object> names = new java.util.LinkedHashSet<>(after.keySet()); names.addAll(before.keySet());
+            Set<Object> names = new LinkedHashSet<>(after.keySet()); names.addAll(before.keySet());
             for (Object name : names) {
                 List<String> path = new ArrayList<>(prefix); path.add(String.valueOf(name));
                 if (!before.containsKey(name) || !after.containsKey(name)) { out.add(path); }
@@ -2334,7 +2334,7 @@ public abstract class AbstractConfigEntity {
         private final boolean incomplete = lastInitIncomplete;
         private final boolean deferred = deferInitialization;
         private final PendingInitialization initialization = pendingInitialization;
-        private final Set<String> warningKeys = new java.util.LinkedHashSet<>(warnedCommentKeys);
+        private final Set<String> warningKeys = new LinkedHashSet<>(warnedCommentKeys);
         private PanelCheckpoint() {
             for (Field field : fields) { values.add(ReflectionUtil.getFieldValue(AbstractConfigEntity.this, field)); }
         }
@@ -2467,7 +2467,7 @@ public abstract class AbstractConfigEntity {
         Map<Field, List<List<String>>> leaves = new LinkedHashMap<>();
         compositeReads.clear();
         compositeWrites.clear();
-        Set<Field> whole = new java.util.LinkedHashSet<>();
+        Set<Field> whole = new LinkedHashSet<>();
         List<String> refused = new ArrayList<>();
         JsonObject displayed = toJsonObject();
         for (Map.Entry<String, JsonElement> edit : jsonObject.entrySet()) {
@@ -2566,7 +2566,7 @@ public abstract class AbstractConfigEntity {
         }
         if (!heldTwice.isEmpty()) {
             // Not a value violation: the operator chooses which form stays (gate-1 R613-04).
-            throw new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+            throw new ConfigurationException(ErrorCode.CONFIG_VALIDATION_FAILED,
                     "Module '" + ultiToolsPlugin.getPluginName() + "' refused to load: configuration file '" + configFilePath
                             + "' writes a setting in two forms: " + String.join("; ", heldTwice)
                             + ". The file was not modified - delete one of the two forms and restart.");
@@ -2600,7 +2600,7 @@ public abstract class AbstractConfigEntity {
             List<String> conflicts) {
         Type valueType = mapValueType(declared);
         Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
-        Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
+        Set<Object> keys = new LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
         Map<String, Object> merged = new LinkedHashMap<>();
         for (Object key : keys) {
             List<String> child = new ArrayList<>(leaf); child.add(String.valueOf(key));
@@ -2952,7 +2952,7 @@ public abstract class AbstractConfigEntity {
 
     /** Edit refusal, shared by annotation and binding-range checks; memory and file are restored by the caller. */
     private ConfigurationException editValidationFailed(String moduleName, List<String> violations) {
-        return new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+        return new ConfigurationException(ErrorCode.CONFIG_VALIDATION_FAILED,
                 "Module '" + moduleName + "': configuration edit was not applied to file '" + configFilePath
                         + "': " + String.join("; ", violations)
                         + ". The file and running values are unchanged - correct the proposed value(s) and try again.");
