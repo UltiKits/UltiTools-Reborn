@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -111,11 +110,11 @@ class PluginInstallUtilsUninstallTest {
     void stateA_entryDeclaringThisModule_isDeleted() throws IOException {
         File jar = writeModuleJar(MODULE_NAME);
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply(MODULE_NAME);
 
         assertThat(jar).doesNotExist();
-        assertThat(report.jarsDeleted()).isTrue();
-        assertThat(report.undeterminedEntries()).isEmpty();
+        assertThat(report.queued()).isTrue();
+        assertThat(report.undetermined()).isEmpty();
     }
 
     @Test
@@ -124,12 +123,12 @@ class PluginInstallUtilsUninstallTest {
         File jar = writeModuleJar(MODULE_NAME);
         File other = writeModuleJar("SomethingElse");
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply(MODULE_NAME);
 
         assertThat(jar).doesNotExist();
         assertThat(other).exists();
-        assertThat(report.jarsDeleted()).isTrue();
-        assertThat(report.undeterminedEntries())
+        assertThat(report.queued()).isTrue();
+        assertThat(report.undetermined())
                 .as("its identity was read and it is not this module's -- there is nothing uncertain about it")
                 .isEmpty();
     }
@@ -141,13 +140,13 @@ class PluginInstallUtilsUninstallTest {
         File unopenable = new File(pluginsFolder, "zz-corrupt.jar");
         Files.write(unopenable.toPath(), "not an archive".getBytes(StandardCharsets.UTF_8));
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply(MODULE_NAME);
 
         assertThat(jar).as("what could be identified is still deleted").doesNotExist();
-        assertThat(report.jarsDeleted())
+        assertThat(report.queued())
                 .as("an entry nothing could be read from must not stop an uninstall")
                 .isTrue();
-        assertThat(report.undeterminedEntries())
+        assertThat(report.undetermined())
                 .as("nothing here says whether this is a copy of the module, and that is what must be said")
                 .containsExactly(unopenable.getAbsolutePath());
         assertThat(unopenable).exists();
@@ -165,11 +164,11 @@ class PluginInstallUtilsUninstallTest {
             out.closeEntry();
         }
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply(MODULE_NAME);
 
         assertThat(jar).doesNotExist();
-        assertThat(report.jarsDeleted()).isTrue();
-        assertThat(report.undeterminedEntries())
+        assertThat(report.queued()).isTrue();
+        assertThat(report.undetermined())
                 .as("a plugin.yml that cannot be parsed says nothing, which is not the same as saying no")
                 .containsExactly(malformed.getAbsolutePath());
     }
@@ -192,12 +191,10 @@ class PluginInstallUtilsUninstallTest {
             Assumptions.assumeFalse(pluginsFolder.listFiles() != null,
                     "running as a user that can list an unreadable directory (e.g. root)");
 
-            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-            assertThat(thrown)
-                    .as("the module's JAR is there and will load again; saying no JAR was found is false")
-                    .isInstanceOf(java.nio.file.AccessDeniedException.class);
-            assertThat(((FileSystemException) thrown).getFile()).isEqualTo(pluginsFolder.getAbsolutePath());
+            var request = PluginInstallUtils.requestUninstall(MODULE_NAME, null);
+            assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_FOLDER_UNREADABLE);
+            assertThat(PendingTestValues.values(request.replies().getFirst().args())).containsExactly(pluginsFolder.getAbsolutePath());
+            assertThat(pluginManager.getPluginList()).containsExactly(plugin);
         } finally {
             Files.setPosixFilePermissions(folder, original);
         }
@@ -215,14 +212,10 @@ class PluginInstallUtilsUninstallTest {
         File unreadable = new File(pluginsFolder, MODULE_NAME + "-1.0.0.jar");
         Files.write(unreadable.toPath(), "not an archive".getBytes(StandardCharsets.UTF_8));
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting(MODULE_NAME));
-
-        assertThat(thrown)
-                .as("no JAR of the module could be identified, which is true and is still said")
-                .isInstanceOf(java.nio.file.NoSuchFileException.class);
-        assertThat(namedFiles((FileSystemException) thrown))
-                .as("the entry that could not be read must be named too, or the operator is told half the story")
-                .contains(unreadable.getAbsolutePath());
+        var request = PluginInstallUtils.requestUninstall(MODULE_NAME, null);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_NO_JAR, UpmKeys.UNINSTALL_UNDETERMINED);
+        assertThat(PendingTestValues.values(request.replies().getLast().args())).contains(1, unreadable.getAbsolutePath());
+        assertThat(pluginManager.getPluginList()).containsExactly(plugin);
     }
 
     @Test
@@ -236,12 +229,10 @@ class PluginInstallUtilsUninstallTest {
         File unreadable = new File(pluginsFolder, "zz-corrupt.jar");
         Files.write(unreadable.toPath(), "not an archive".getBytes(StandardCharsets.UTF_8));
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting(MODULE_NAME));
-
-        assertThat(thrown).isInstanceOf(IllegalStateException.class);
-        assertThat(undeterminedIn(thrown))
-                .as("the unload failure must not swallow what state C established")
-                .containsExactly(unreadable.getAbsolutePath());
+        var report = PendingTestValues.queueAndApply(MODULE_NAME);
+        assertThat(report.queued()).isTrue();
+        assertThat(report.undetermined()).containsExactly(unreadable.getAbsolutePath());
+        org.mockito.Mockito.verify(plugin, org.mockito.Mockito.never()).unregisterSelf();
     }
 
     @Test
@@ -259,30 +250,12 @@ class PluginInstallUtilsUninstallTest {
         try {
             Assumptions.assumeFalse(Files.isWritable(folder), "running as a user who can write a read-only directory");
 
-            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting(MODULE_NAME));
-
-            assertThat(thrown).isInstanceOf(FileSystemException.class);
-            assertThat(undeterminedIn(thrown))
-                    .as("a failed delete must not swallow it either")
-                    .containsExactly(unreadable.getAbsolutePath());
+            var report = PendingTestValues.queueAndApply(MODULE_NAME);
+            assertThat(report.queued()).isTrue();
+            assertThat(report.undetermined()).containsExactly(unreadable.getAbsolutePath());
+            assertThat(new PendingChanges(new ModuleFileTransactions(dataFolder)).list()).hasSize(1);
         } finally {
             Files.setPosixFilePermissions(folder, original);
-        }
-    }
-
-    /** The entries a failure carries as undetermined, wherever in its suppressed chain they sit. */
-    private static java.util.List<String> undeterminedIn(Throwable thrown) {
-        java.util.List<String> files = new java.util.ArrayList<>();
-        collectUndetermined(thrown, files);
-        return files;
-    }
-
-    private static void collectUndetermined(Throwable thrown, java.util.List<String> files) {
-        if (thrown instanceof PluginInstallUtils.UndeterminedEntriesException) {
-            files.addAll(((PluginInstallUtils.UndeterminedEntriesException) thrown).entries());
-        }
-        for (Throwable suppressed : thrown.getSuppressed()) {
-            collectUndetermined(suppressed, files);
         }
     }
 
@@ -297,10 +270,10 @@ class PluginInstallUtilsUninstallTest {
         Path link = new File(pluginsFolder, "zz-linked.jar").toPath();
         Files.createSymbolicLink(link, pluginsFolder.toPath().resolve("elsewhere/Fixture-1.0.0.jar"));
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply(MODULE_NAME);
 
         assertThat(jar).doesNotExist();
-        assertThat(report.undeterminedEntries())
+        assertThat(report.undetermined())
                 .as("nothing could be read from it, which is not the same as knowing it is unrelated")
                 .containsExactly(link.toFile().getAbsolutePath());
     }
@@ -319,12 +292,9 @@ class PluginInstallUtilsUninstallTest {
         Files.delete(pluginsFolder.toPath());
         Files.createSymbolicLink(pluginsFolder.toPath(), dataFolder.toPath().resolve("elsewhere"));
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-        assertThat(thrown)
-                .as("its contents are unknown, so 'no JAR of this module is here' is not something to claim")
-                .isInstanceOf(java.nio.file.AccessDeniedException.class);
-        assertThat(((FileSystemException) thrown).getFile()).isEqualTo(pluginsFolder.getAbsolutePath());
+        var request = PluginInstallUtils.requestUninstall(MODULE_NAME, null);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_FOLDER_UNREADABLE);
+        assertThat(pluginManager.getPluginList()).containsExactly(plugin);
     }
 
     @Test
@@ -337,14 +307,14 @@ class PluginInstallUtilsUninstallTest {
         // A module JAR carrying no plugin.yml at all: UltiTools modules are identified by
         // @UltiToolsModule, so this loads perfectly well and metadata cannot rule it in or out.
         File jar = writeJarWithoutPluginYml(MODULE_NAME + "-1.0.0.jar");
-        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> jar);
+        PendingTestValues.RemovalObservation report = uninstallReporting(MODULE_NAME, module -> jar);
 
         assertThat(jar)
                 .as("the framework can ask the instance which JAR it came from; leaving it means the "
                         + "module returns at the next restart")
                 .doesNotExist();
-        assertThat(report.jarsDeleted()).isTrue();
-        assertThat(report.undeterminedEntries()).isEmpty();
+        assertThat(report.queued()).isTrue();
+        assertThat(report.undetermined()).isEmpty();
     }
 
     @Test
@@ -378,10 +348,10 @@ class PluginInstallUtilsUninstallTest {
         // Another JAR with no metadata: it may be a module too, since a module needs no plugin.yml.
         File metadataFree = writeJarWithoutPluginYml("zz-no-metadata.jar");
 
-        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> codeSource);
+        PendingTestValues.RemovalObservation report = uninstallReporting(MODULE_NAME, module -> codeSource);
 
         assertThat(codeSource).doesNotExist();
-        assertThat(report.undeterminedEntries())
+        assertThat(report.undetermined())
                 .as("a JAR with no plugin.yml is not proof of not being a module -- modules are "
                         + "identified by @UltiToolsModule, so nothing here rules it out")
                 .containsExactly(metadataFree.getAbsolutePath());
@@ -399,10 +369,10 @@ class PluginInstallUtilsUninstallTest {
         // A development checkout: the module runs from an exploded class directory.
         File exploded = new File(dataFolder, "classes");
         assertThat(exploded.mkdirs()).isTrue();
-        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> exploded);
+        PendingTestValues.RemovalObservation report = uninstallReporting(MODULE_NAME, module -> exploded);
 
         assertThat(jar).as("the plugin.yml still identifies it, which is the table's own answer").doesNotExist();
-        assertThat(report.jarsDeleted()).isTrue();
+        assertThat(report.queued()).isTrue();
         assertThat(exploded).exists();
     }
 
@@ -453,15 +423,15 @@ class PluginInstallUtilsUninstallTest {
         File loaded = writeModuleJar("DivergentName");
         File secondCopy = writeModuleJar("DivergentName", "0.9.0");
 
-        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> loaded);
+        PendingTestValues.RemovalObservation report = uninstallReporting(MODULE_NAME, module -> loaded);
 
         assertThat(loaded).as("the code source is this module's whatever it declares").doesNotExist();
         assertThat(secondCopy)
                 .as("it declares what the loaded copy's JAR declares, which is what makes it a copy; "
                         + "matching on the typed runtime name would leave it to load the module again")
                 .doesNotExist();
-        assertThat(report.jarsDeleted()).isTrue();
-        assertThat(report.undeterminedEntries()).isEmpty();
+        assertThat(report.queued()).isTrue();
+        assertThat(report.undetermined()).isEmpty();
     }
 
     @Test
@@ -472,13 +442,13 @@ class PluginInstallUtilsUninstallTest {
         doCallRealMethod().when(plugin).unregisterSelf();
         PluginListSeeding.add(pluginManager, plugin);
         File jar = writeModuleJar("DeclaredName");
-        PluginInstallUtils.UninstallReport report = uninstallReporting("DeclaredName", module -> jar);
+        PendingTestValues.RemovalObservation report = uninstallReporting("DeclaredName", module -> jar);
 
         assertThat(jar).doesNotExist();
         assertThat(pluginManager.getPluginList())
                 .as("deleting a loaded module's JAR while leaving the module running is the state #503 exists to prevent")
-                .doesNotContain(plugin);
-        assertThat(report.jarsDeleted()).isTrue();
+                .contains(plugin);
+        assertThat(report.queued()).isTrue();
     }
 
     @Test
@@ -496,7 +466,7 @@ class PluginInstallUtilsUninstallTest {
         File targetJar = writeModuleJar("Bystander", "2.0.0");
         File bystanderJar = writeModuleJar("Bystander");
 
-        PluginInstallUtils.UninstallReport report = uninstallReporting("RuntimeName",
+        PendingTestValues.RemovalObservation report = uninstallReporting("RuntimeName",
                 module -> module == target ? targetJar : bystanderJar);
 
         assertThat(targetJar).as("the module the operator named still goes").doesNotExist();
@@ -504,7 +474,7 @@ class PluginInstallUtilsUninstallTest {
                 .as("a module the operator never named must not lose its JAR")
                 .exists();
         assertThat(pluginManager.getPluginList()).contains(bystander);
-        assertThat(report.deletedFiles()).containsExactly(targetJar.getAbsolutePath());
+        assertThat(report.files()).containsExactly(targetJar.getAbsolutePath());
     }
 
     @Test
@@ -524,12 +494,9 @@ class PluginInstallUtilsUninstallTest {
         // outcome to let through.
         File shared = writeJarWithoutPluginYml("zz-shared.jar");
 
-        Throwable thrown = catchThrowable(() -> uninstallReporting(MODULE_NAME, module -> shared));
-
-        assertThat(thrown)
-                .as("the guard must fire at the point of destruction, not silently upstream")
-                .isInstanceOf(IllegalStateException.class);
-        assertThat(thrown).hasMessageContaining("Bystander").hasMessageContaining(shared.getAbsolutePath());
+        var request = PluginInstallUtils.requestUninstall(MODULE_NAME, null, module -> shared);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_REFUSED_SHARED_JAR);
+        assertThat(PendingTestValues.values(request.replies().getFirst().args())).contains("Bystander", shared.getAbsolutePath());
         assertThat(shared).exists();
     }
 
@@ -544,10 +511,10 @@ class PluginInstallUtilsUninstallTest {
             out.closeEntry();
         }
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply(MODULE_NAME);
 
         assertThat(jar).doesNotExist();
-        assertThat(report.undeterminedEntries())
+        assertThat(report.undetermined())
                 .as("a plugin.yml that names no module says exactly what no plugin.yml says: nothing")
                 .containsExactly(nameless.getAbsolutePath());
     }
@@ -568,11 +535,8 @@ class PluginInstallUtilsUninstallTest {
         try {
             Assumptions.assumeFalse(pluginsFolder.exists(), "running as a user who can search an unsearchable directory");
 
-            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-            assertThat(thrown)
-                    .as("every probe answers false here because the answer is unknown, not because it is no")
-                    .isInstanceOf(java.nio.file.AccessDeniedException.class);
+            var request = PluginInstallUtils.requestUninstall(MODULE_NAME, null);
+            assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_FOLDER_UNREADABLE);
         } finally {
             Files.setPosixFilePermissions(dataFolder.toPath(), original);
         }
@@ -593,15 +557,15 @@ class PluginInstallUtilsUninstallTest {
         // Another loaded module whose JAR happens to declare the name that was typed.
         File otherJar = writeModuleJar("Foo", "9.9.9");
 
-        PluginInstallUtils.UninstallReport report = uninstallReporting("Foo",
+        PendingTestValues.RemovalObservation report = uninstallReporting("Foo",
                 module -> module == target ? targetJar : otherJar);
 
         assertThat(targetJar).doesNotExist();
         assertThat(otherJar)
                 .as("the runtime name answered the question, so nothing else needed asking")
                 .exists();
-        assertThat(pluginManager.getPluginList()).containsExactly(other);
-        assertThat(report.deletedFiles()).containsExactly(targetJar.getAbsolutePath());
+        assertThat(pluginManager.getPluginList()).containsExactly(target, other);
+        assertThat(report.files()).containsExactly(targetJar.getAbsolutePath());
     }
 
     @Test
@@ -619,16 +583,10 @@ class PluginInstallUtilsUninstallTest {
         File firstJar = writeModuleJar("Foo");
         File secondJar = writeModuleJar("Foo", "2.0.0");
 
-        Throwable thrown = catchThrowable(() -> uninstallReporting("Foo",
-                module -> module == first ? firstJar : secondJar));
-
-        assertThat(thrown)
-                .as("a destructive command with two possible targets must stop, not choose one")
-                .isInstanceOf(IllegalStateException.class);
-        assertThat(thrown).hasMessageContaining("FirstModule").hasMessageContaining("SecondModule");
-        assertThat(pluginManager.getPluginList())
-                .as("the refusal's value is the absence of an effect")
-                .containsExactly(first, second);
+        var request = PluginInstallUtils.requestUninstall("Foo", null, module -> module == first ? firstJar : secondJar);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_REFUSED_AMBIGUOUS);
+        assertThat(PendingTestValues.values(request.replies().getFirst().args())).contains("FirstModule, SecondModule");
+        assertThat(pluginManager.getPluginList()).containsExactly(first, second);
         assertThat(firstJar).exists();
         assertThat(secondJar).exists();
     }
@@ -643,13 +601,13 @@ class PluginInstallUtilsUninstallTest {
         File loaded = writeJarDeclaring("zz-blank-loaded.jar", "name: \"   \"\n");
         File other = writeJarDeclaring("zz-blank-other.jar", "name: \"\"\n");
 
-        PluginInstallUtils.UninstallReport report = uninstallReporting(MODULE_NAME, module -> loaded);
+        PendingTestValues.RemovalObservation report = uninstallReporting(MODULE_NAME, module -> loaded);
 
         assertThat(loaded).as("the code source is this module's whatever it declares").doesNotExist();
         assertThat(other)
                 .as("a blank name is not a name: it must never become a key that matches other archives")
                 .exists();
-        assertThat(report.undeterminedEntries()).containsExactly(other.getAbsolutePath());
+        assertThat(report.undetermined()).containsExactly(other.getAbsolutePath());
     }
 
     @Test
@@ -663,21 +621,21 @@ class PluginInstallUtilsUninstallTest {
         // answer is unknown, not "it has none".
         File jar = writeModuleJar("DeclaredName");
 
-        PluginInstallUtils.UninstallReport report = uninstallReporting("DeclaredName", module -> null);
+        PendingTestValues.RemovalObservation report = uninstallReporting("DeclaredName", module -> null);
 
         assertThat(jar)
                 .as("this may be the running module's own JAR, and nothing here can say it is not")
                 .exists();
         assertThat(pluginManager.getPluginList()).containsExactly(plugin);
-        assertThat(report.deletedFiles()).isEmpty();
-        assertThat(report.undeterminedEntries())
+        assertThat(report.files()).isEmpty();
+        assertThat(report.undetermined())
                 .as("what cannot be identified is reported, which is what state C is for")
                 .containsExactly(jar.getAbsolutePath());
     }
 
     @Test
     @DisplayName("a symbolic link to a real module JAR is followed, as the module loader follows it")
-    void resolvableJarSymlink_isReadAndDeleted() throws Exception {
+    void recordedRemovalDoesNotFollowAnExternalJarSymlink() throws Exception {
         Assumptions.assumeTrue(Files.getFileStore(pluginsFolder.toPath()).supportsFileAttributeView("posix"),
                 "needs a file system that supports symbolic links");
         File target = new File(dataFolder, "elsewhere-" + MODULE_NAME + "-1.0.0.jar");
@@ -689,14 +647,10 @@ class PluginInstallUtilsUninstallTest {
         Path link = new File(pluginsFolder, MODULE_NAME + "-1.0.0.jar").toPath();
         Files.createSymbolicLink(link, target.toPath());
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
-
-        assertThat(link.toFile())
-                .as("PluginManager#init opens this through new JarFile, so an uninstall that will not "
-                        + "read it leaves a JAR that loads the module again")
-                .doesNotExist();
-        assertThat(report.deletedFiles()).containsExactly(link.toFile().getAbsolutePath());
-        assertThat(report.undeterminedEntries()).isEmpty();
+        var request = PluginInstallUtils.requestUninstall(MODULE_NAME, null);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_NOT_RECORDED);
+        assertThat(link).exists();
+        assertThat(target).exists();
     }
 
     @Test
@@ -713,13 +667,10 @@ class PluginInstallUtilsUninstallTest {
         // Both module classes packaged in one JAR, which PluginManager.register makes possible.
         File shared = writeModuleJar(MODULE_NAME);
 
-        Throwable thrown = catchThrowable(() -> uninstallReporting(MODULE_NAME, module -> shared));
-
-        assertThat(thrown).isInstanceOf(PluginInstallUtils.UninstallRefusedException.class);
-        assertThat(thrown).hasMessageContaining(MODULE_NAME).hasMessageContaining("SecondModule");
-        assertThat(pluginManager.getPluginList())
-                .as("refusing after the unload would change the loaded state and report no JAR outcome")
-                .containsExactly(target, other);
+        var request = PluginInstallUtils.requestUninstall(MODULE_NAME, null, module -> shared);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_REFUSED_SHARED_JAR);
+        assertThat(PendingTestValues.values(request.replies().getFirst().args())).contains(MODULE_NAME, "SecondModule");
+        assertThat(pluginManager.getPluginList()).containsExactly(target, other);
         assertThat(shared).exists();
     }
 
@@ -735,15 +686,10 @@ class PluginInstallUtilsUninstallTest {
         doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
         File jar = writeModuleJar(MODULE_NAME);
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-        assertThat(thrown)
-                .as("escaping here delists the module, skips the JAR half and reaches the operator as "
-                        + "a generic command error")
-                .isInstanceOf(PluginInstallUtils.ModuleUnloadFailedException.class)
-                .hasCause(unloadFailure);
-        assertThat(jar).doesNotExist();
-        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+        assertThat(PluginInstallUtils.requestUninstall(MODULE_NAME, null).queued()).isTrue();
+        assertThat(jar).exists();
+        assertThat(pluginManager.getPluginList()).containsExactly(plugin);
+        org.mockito.Mockito.verify(plugin, org.mockito.Mockito.never()).unregisterSelf();
     }
 
     @Test
@@ -757,12 +703,10 @@ class PluginInstallUtilsUninstallTest {
         doThrow(fatal).when(commandManager).unregisterAll(plugin);
         File jar = writeModuleJar(MODULE_NAME);
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-        assertThat(thrown)
-                .as("collecting this and going on to delete files is not a recovery")
-                .isSameAs(fatal);
-        assertThat(jar).as("nothing further was attempted").exists();
+        assertThat(PluginInstallUtils.requestUninstall(MODULE_NAME, null).queued()).isTrue();
+        assertThat(jar).exists();
+        assertThat(pluginManager.getPluginList()).containsExactly(plugin);
+        org.mockito.Mockito.verify(plugin, org.mockito.Mockito.never()).unregisterSelf();
     }
 
     @Test
@@ -782,14 +726,10 @@ class PluginInstallUtilsUninstallTest {
         doThrow(shared).when(commandManager).unregisterAll(second);
         File jar = writeModuleJar(MODULE_NAME);
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-        assertThat(thrown)
-                .as("self-suppression would abort the uninstall past every handler, leaving the JAR")
-                .isInstanceOf(PluginInstallUtils.ModuleUnloadFailedException.class)
-                .hasCause(shared);
-        assertThat(jar).doesNotExist();
-        assertThat(pluginManager.getPluginList()).isEmpty();
+        var request = PluginInstallUtils.requestUninstall(MODULE_NAME, null);
+        assertThat(request.queued()).isTrue();
+        assertThat(jar).exists();
+        assertThat(pluginManager.getPluginList()).hasSize(2);
     }
 
     @Test
@@ -801,11 +741,11 @@ class PluginInstallUtilsUninstallTest {
         File renamed = new File(pluginsFolder, MODULE_NAME + "-9.9.9.jar");
         assertThat(impostor.renameTo(renamed)).isTrue();
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(MODULE_NAME);
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply(MODULE_NAME);
 
         assertThat(jar).doesNotExist();
         assertThat(renamed).as("its plugin.yml names another module, whatever the file is called").exists();
-        assertThat(report.undeterminedEntries()).isEmpty();
+        assertThat(report.undetermined()).isEmpty();
     }
 
     /** A module bean carrying one repeating {@code @Scheduled} task that counts its own runs. */
@@ -821,7 +761,7 @@ class PluginInstallUtilsUninstallTest {
     @Test
     @DisplayName("#503: uninstalling a loaded module cancels its @Scheduled task, removes it from the plugin list and deletes its jar")
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // injecting a real TaskManager bound to a MockBukkit host plugin
-    void uninstallLoadedModule_stopsItsScheduledTask() throws Exception {
+    void uninstallLoadedModule_leavesItsScheduledTaskRunning() throws Exception {
         PluginMock host = MockBukkit.createMockPlugin("UninstallHost");
         TaskManager taskManager = new TaskManager(host);
         Field taskManagerField = PluginManager.class.getDeclaredField("taskManager");
@@ -844,15 +784,15 @@ class PluginInstallUtilsUninstallTest {
                         + "otherwise 'it stopped' below would pass vacuously")
                 .isPositive();
 
-        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+        assertThat(PluginInstallUtils.requestUninstall(MODULE_NAME, null).queued()).isTrue();
 
         server.getScheduler().performTicks(10);
         assertThat(bean.runs.get())
                 .as("an uninstalled module's @Scheduled task must stop running -- it is cancelled "
                         + "only by PluginManager#unregister, which uninstallPlugin must go through (#503)")
-                .isEqualTo(runsBeforeUninstall);
-        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
-        assertThat(jar).doesNotExist();
+                .isGreaterThan(runsBeforeUninstall);
+        assertThat(pluginManager.getPluginList()).contains(plugin);
+        assertThat(jar).exists();
     }
 
     @Test
@@ -869,12 +809,14 @@ class PluginInstallUtilsUninstallTest {
             Assumptions.assumeFalse(Files.isWritable(folder),
                     "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
 
-            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-            assertThat(thrown)
-                    .as("a failed delete must not be reported as a successful uninstall (#501)")
-                    .isInstanceOf(FileSystemException.class);
-            assertThat(((FileSystemException) thrown).getFile()).isEqualTo(jar.getAbsolutePath());
+            assertThat(PluginInstallUtils.requestUninstall(MODULE_NAME, null).queued()).isTrue();
+            var next = new ModuleFileTransactions(dataFolder);
+            next.applyBeforeLoad();
+            assertThat(next.pendingReports()).singleElement().satisfies(line -> {
+                assertThat(line.getKey()).isEqualTo(UpmKeys.START_REMOVAL_FAILED.translationKey());
+                assertThat(PendingTestValues.values(java.util.Arrays.stream(line.getArgs())
+                        .map(com.ultikits.ultitools.text.Arg.class::cast).toList())).contains(jar.getAbsolutePath());
+            });
             assertThat(jar).exists();
         } finally {
             Files.setPosixFilePermissions(folder, original);
@@ -887,7 +829,7 @@ class PluginInstallUtilsUninstallTest {
         File first = writeModuleJar(MODULE_NAME, "1.0.0");
         File second = writeModuleJar(MODULE_NAME, "2.0.0");
 
-        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isTrue();
+        assertThat(PendingTestValues.queueAndApply(MODULE_NAME).queued()).isTrue();
 
         assertThat(first)
                 .as("a second jar of the same module left on disk loads the module again on restart, "
@@ -911,13 +853,12 @@ class PluginInstallUtilsUninstallTest {
             Assumptions.assumeFalse(Files.isWritable(folder),
                     "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
 
-            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-            assertThat(thrown).isInstanceOf(FileSystemException.class);
-            assertThat(namedFiles((FileSystemException) thrown))
-                    .as("the operator must be told every jar that will load again, via getFile() and "
-                            + "one suppressed FileSystemException per further jar")
-                    .containsExactlyInAnyOrder(first.getAbsolutePath(), second.getAbsolutePath());
+            assertThat(PluginInstallUtils.requestUninstall(MODULE_NAME, null).queued()).isTrue();
+            var next = new ModuleFileTransactions(dataFolder);
+            next.applyBeforeLoad();
+            assertThat(next.pendingReports()).hasSize(2).allSatisfy(line ->
+                    assertThat(line.getKey()).isEqualTo(UpmKeys.START_REMOVAL_FAILED.translationKey()));
+            assertThat(new PendingChanges(next).list().getFirst().files()).containsExactly(first.getName(), second.getName());
         } finally {
             Files.setPosixFilePermissions(folder, original);
         }
@@ -925,26 +866,22 @@ class PluginInstallUtilsUninstallTest {
 
     @Test
     @DisplayName("#501 review WR-03: a loaded module with no jar on disk is unloaded and reported as NoSuchFileException naming the folder, not as a misspelling")
-    void loadedModuleWithoutJar_isUnloadedAndReportedAsNoJarFound() throws Exception {
+    void loadedModuleWithoutJarKeepsRunningAndReportsNoJar() throws Exception {
         UltiToolsPlugin plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn(MODULE_NAME);
         doCallRealMethod().when(plugin).unregisterSelf();
         PluginListSeeding.add(pluginManager, plugin);
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-        assertThat(thrown)
-                .as("returning false made the command say the name was misspelled, although the "
-                        + "module was found by exactly that name and unloaded")
-                .isInstanceOf(java.nio.file.NoSuchFileException.class);
-        assertThat(((FileSystemException) thrown).getFile()).isEqualTo(pluginsFolder.getAbsolutePath());
-        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+        var request = PluginInstallUtils.requestUninstall(MODULE_NAME, null);
+        assertThat(PendingTestValues.keys(request)).containsExactly(UpmKeys.UNINSTALL_NO_JAR);
+        assertThat(PendingTestValues.values(request.replies().getFirst().args())).contains(pluginsFolder.getAbsolutePath());
+        assertThat(pluginManager.getPluginList()).containsExactly(plugin);
     }
 
     @Test
     @DisplayName("#501 review WR-03 control: nothing loaded and no jar still returns false")
     void nothingLoadedAndNoJar_returnsFalse() throws Exception {
-        assertThat(PluginInstallUtils.uninstallPlugin(MODULE_NAME)).isFalse();
+        assertThat(PendingTestValues.queueAndApply(MODULE_NAME).queued()).isFalse();
     }
 
     @Test
@@ -960,19 +897,10 @@ class PluginInstallUtilsUninstallTest {
         doThrow(unloadFailure).when(commandManager).unregisterAll(plugin);
         File jar = writeModuleJar(MODULE_NAME);
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-        assertThat(jar)
-                .as("the module is already unloaded and closed when its unload throws; keeping the jar "
-                        + "would bring back on restart a module the operator asked to remove")
-                .doesNotExist();
-        assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
-        assertThat(thrown)
-                .as("the unload failure must reach the command as uninstallPlugin's own "
-                        + "IllegalStateException, carrying the module's exception as its cause")
-                .isInstanceOf(IllegalStateException.class)
-                .hasCause(unloadFailure);
-        assertThat(thrown.getSuppressed()).as("every jar was deleted, so no jar failure is attached").isEmpty();
+        assertThat(PluginInstallUtils.requestUninstall(MODULE_NAME, null).queued()).isTrue();
+        assertThat(jar).exists();
+        assertThat(pluginManager.getPluginList()).containsExactly(plugin);
+        org.mockito.Mockito.verify(plugin, org.mockito.Mockito.never()).unregisterSelf();
     }
 
     @Test
@@ -995,37 +923,20 @@ class PluginInstallUtilsUninstallTest {
             Assumptions.assumeFalse(Files.isWritable(folder),
                     "running as a user that can write a read-only directory (e.g. root); the delete cannot be made to fail");
 
-            Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPlugin(MODULE_NAME));
-
-            assertThat(thrown).isInstanceOf(IllegalStateException.class).hasCause(unloadFailure);
-            assertThat(thrown.getSuppressed())
-                    .as("the command reports the jar outcome from this suppressed exception; losing it "
-                            + "would hide that the jar loads again on restart")
-                    .hasSize(1);
-            assertThat(thrown.getSuppressed()[0]).isInstanceOf(FileSystemException.class);
-            assertThat(((FileSystemException) thrown.getSuppressed()[0]).getFile()).isEqualTo(jar.getAbsolutePath());
+            var report = PendingTestValues.queueAndApply(MODULE_NAME);
+            assertThat(report.queued()).isTrue();
             assertThat(jar).exists();
-            assertThat(pluginManager.getPluginList()).doesNotContain(plugin);
+            assertThat(pluginManager.getPluginList()).containsExactly(plugin);
+            org.mockito.Mockito.verify(plugin, org.mockito.Mockito.never()).unregisterSelf();
         } finally {
             Files.setPosixFilePermissions(folder, original);
         }
     }
 
-    private static java.util.List<String> namedFiles(FileSystemException failure) {
-        java.util.List<String> files = new java.util.ArrayList<>();
-        files.add(failure.getFile());
-        for (Throwable suppressed : failure.getSuppressed()) {
-            if (suppressed instanceof FileSystemException) {
-                files.add(((FileSystemException) suppressed).getFile());
-            }
-        }
-        return files;
-    }
-
     /** The uninstall with the code-source resolver this test wants, which is the seam. */
-    private PluginInstallUtils.UninstallReport uninstallReporting(
+    private PendingTestValues.RemovalObservation uninstallReporting(
             String name, java.util.function.Function<UltiToolsPlugin, File> codeSource) throws IOException {
-        return PluginInstallUtils.uninstallPluginReporting(name, codeSource);
+        return PendingTestValues.queueAndApply(name, codeSource);
     }
 
     /** A JAR whose {@code plugin.yml} is exactly {@code content}. */

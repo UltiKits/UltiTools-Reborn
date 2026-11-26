@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
 
@@ -9,7 +8,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collections;
+import java.util.List;
 import java.util.logging.Level;
 
 import org.junit.jupiter.api.io.TempDir;
@@ -29,7 +28,7 @@ class ModuleRemovalMetadataTest {
         File modules = ModuleFileTransactions.modulesFolder(data);
         File jar = ModuleUpdateFixtures.moduleJar(new File(modules, "demo.jar"), "Demo", "1.0", "demo");
         ModuleFileTransactions transactions = new ModuleFileTransactions(data);
-        transactions.recordDeferredRemoval("Demo", Collections.singletonList(jar));
+        assertThat(PendingTestValues.queueRemoval(transactions, "Demo", null, jar).queued()).isTrue();
         File records = ModuleFileTransactions.transactionsFolder(data);
         File record = records.listFiles((dir, name) -> name.endsWith(".json"))[0];
         byte[] original = Files.readAllBytes(record.toPath());
@@ -42,16 +41,16 @@ class ModuleRemovalMetadataTest {
         assertThat(jar).exists();
         assertThat(Files.readAllBytes(record.toPath())).isEqualTo(original);
         assertThat(start.pendingReports()).hasSize(1);
-        assertThat(start.pendingReports().get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVAL_UNREADABLE);
+        assertThat(start.pendingReports().get(0).getKey()).isEqualTo(UpmKeys.START_REMOVAL_UNREADABLE.translationKey());
         assertThat(start.pendingReports().get(0).getLevel()).isEqualTo(Level.SEVERE);
-        assertThat(start.pendingReports().get(0).getArgs()[1].toString()).contains(attribute + " failed");
+        assertThat(start.pendingReports().get(0).getArgs()[2].toString()).contains(attribute + " failed");
 
         ModuleFileTransactions retry = new ModuleFileTransactions(data);
         retry.applyBeforeLoad();
         assertThat(jar).doesNotExist();
         assertThat(record).doesNotExist();
         assertThat(retry.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
-                .containsExactly(ModuleFileTransactions.Keys.REMOVED);
+                .containsExactly(UpmKeys.START_REMOVAL_REMOVED.translationKey());
     }
 
     @ParameterizedTest
@@ -62,17 +61,24 @@ class ModuleRemovalMetadataTest {
         File first = ModuleUpdateFixtures.moduleJar(new File(modules, "first.jar"), "First", "1.0", "first");
         File second = ModuleUpdateFixtures.moduleJar(new File(modules, "second.jar"), "Second", "1.0", "second");
         ModuleFileTransactions transactions = new ModuleFileTransactions(data);
-        transactions.recordDeferredRemoval("Demo", Collections.singletonList(first));
+        var loaded = ModuleUpdateFixtures.loadedModule("First", "1.0", "first");
+        var staged = transactions.stageUpdate("first", List.of(loaded), ignored -> first,
+                ModuleUpdateFixtures.catalogue("first", "1.1"), ModuleUpdateFixtures.downloading("First", "1.1", "first"));
+        assertThat(staged.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.STAGED);
         File records = ModuleFileTransactions.transactionsFolder(data);
         File record = records.listFiles((dir, name) -> name.endsWith(".json"))[0];
         byte[] original = Files.readAllBytes(record.toPath());
-        Throwable error;
+        PluginInstallUtils.PendingResult result;
 
         try (MockedStatic<Files> files = failingMetadata(second.toPath(), attribute)) {
-            error = catchThrowable(() -> transactions.recordDeferredRemoval("Demo", Collections.singletonList(second)));
+            result = PendingTestValues.queueRemoval(transactions, "First", "first", first, second);
         }
 
-        assertThat(error).isInstanceOf(IOException.class).hasMessageContaining(attribute + " failed");
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies()).singleElement().satisfies(reply -> {
+            assertThat(reply.key()).isEqualTo(UpmKeys.UNINSTALL_NOT_RECORDED);
+            assertThat(PendingTestValues.values(reply.args()).getLast()).asString().contains(attribute + " failed");
+        });
         assertThat(Files.readAllBytes(record.toPath())).isEqualTo(original);
         assertThat(first).exists();
         assertThat(second).exists();

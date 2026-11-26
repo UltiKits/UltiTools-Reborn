@@ -4,9 +4,6 @@ import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.moduleJar;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.namesIn;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.treeOf;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.catchThrowable;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -17,7 +14,6 @@ import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -26,7 +22,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
-import org.bukkit.command.CommandSender;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,7 +36,6 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.manager.PluginManager;
@@ -186,20 +180,18 @@ class ModuleRemovalDeferredTest {
         Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwx------"));
     }
 
-    private PluginInstallUtils.RemovalDeferredException uninstallThatCannotDelete() throws IOException {
+    private void uninstallThatCannotDelete() throws IOException {
         readOnlyModulesFolder();
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting(MODULE));
-        assertThat(thrown).isInstanceOf(PluginInstallUtils.RemovalDeferredException.class);
-        return (PluginInstallUtils.RemovalDeferredException) thrown;
+        assertThat(PluginInstallUtils.requestUninstall(MODULE, null).queued()).isTrue();
+        assertThat(jar).exists();
     }
 
     @Test
     @DisplayName("a JAR that cannot be deleted is recorded for the next start, and the failure names it and why")
     void undeletableJar_isRecordedForTheNextStart() throws IOException {
-        PluginInstallUtils.RemovalDeferredException deferred = uninstallThatCannotDelete();
-
-        assertThat(deferred.deferredFiles()).containsExactly(jar.getAbsolutePath());
-        assertThat(deferred.getReason()).contains("AccessDeniedException");
+        uninstallThatCannotDelete();
+        var pending = new PendingChanges(new ModuleFileTransactions(dataFolder));
+        assertThat(pending.list()).singleElement().satisfies(item -> assertThat(item.files()).containsExactly(jar.getName()));
         assertThat(jar).exists();
         List<String> tree = treeOf(ModuleFileTransactions.transactionsFolder(dataFolder));
         assertThat(tree).hasSize(1).allMatch(p -> p.startsWith("remove-") && p.endsWith(".json"));
@@ -219,7 +211,7 @@ class ModuleRemovalDeferredTest {
         List<ModuleFileTransactions.Report> reports = start.pendingReports();
         assertThat(reports).hasSize(1);
         assertThat(reports.get(0).getLevel()).isEqualTo(Level.INFO);
-        assertThat(reports.get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVED);
+        assertThat(reports.get(0).getKey()).isEqualTo(UpmKeys.START_REMOVAL_REMOVED.translationKey());
     }
 
     @Test
@@ -233,7 +225,7 @@ class ModuleRemovalDeferredTest {
         assertThat(jar).exists();
         assertThat(start.pendingReports()).hasSize(1);
         assertThat(start.pendingReports().get(0).getLevel()).isEqualTo(Level.SEVERE);
-        assertThat(start.pendingReports().get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVAL_FAILED);
+        assertThat(start.pendingReports().get(0).getKey()).isEqualTo(UpmKeys.START_REMOVAL_FAILED.translationKey());
         assertThat(treeOf(ModuleFileTransactions.transactionsFolder(dataFolder))).hasSize(1);
     }
 
@@ -250,7 +242,7 @@ class ModuleRemovalDeferredTest {
 
         assertThat(Files.readAllBytes(jar.toPath())).isEqualTo(replacement);
         assertThat(start.pendingReports()).hasSize(1);
-        assertThat(start.pendingReports().get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVAL_SKIPPED);
+        assertThat(start.pendingReports().get(0).getKey()).isEqualTo(UpmKeys.START_REMOVAL_SKIPPED.translationKey());
         assertThat(namesIn(modules)).containsExactly("removal-fixture-1.0.jar");
         assertThat(treeOf(ModuleFileTransactions.transactionsFolder(dataFolder))).isEmpty();
     }
@@ -274,11 +266,11 @@ class ModuleRemovalDeferredTest {
         List<ModuleFileTransactions.Report> reports = failingStart.pendingReports();
         assertThat(reports).hasSize(1);
         assertThat(reports.get(0).getLevel()).isEqualTo(Level.SEVERE);
-        assertThat(reports.get(0).getKey()).isNotEqualTo(ModuleFileTransactions.Keys.REMOVAL_SKIPPED);
-        assertThat(Arrays.asList(reports.get(0).getArgs())).contains(jar.getAbsolutePath());
-        assertThat(reports.get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVAL_UNREADABLE);
-        assertThat(reports.get(0).getArgs()).hasSize(2);
-        assertThat(reports.get(0).getArgs()[1].toString()).contains("AccessDeniedException");
+        assertThat(reports.get(0).getKey()).isNotEqualTo(UpmKeys.START_REMOVAL_SKIPPED.translationKey());
+        assertThat(((com.ultikits.ultitools.text.Arg.Unparsed) reports.get(0).getArgs()[1]).value()).isEqualTo(jar.getAbsolutePath());
+        assertThat(reports.get(0).getKey()).isEqualTo(UpmKeys.START_REMOVAL_UNREADABLE.translationKey());
+        assertThat(reports.get(0).getArgs()).hasSize(3);
+        assertThat(reports.get(0).getArgs()[2].toString()).contains("AccessDeniedException");
 
         readable(jar);
         ModuleFileTransactions laterStart = new ModuleFileTransactions(dataFolder);
@@ -288,7 +280,7 @@ class ModuleRemovalDeferredTest {
         assertThat(treeOf(ModuleFileTransactions.transactionsFolder(dataFolder))).isEmpty();
         assertThat(laterStart.pendingReports()).hasSize(1);
         assertThat(laterStart.pendingReports().get(0).getLevel()).isEqualTo(Level.INFO);
-        assertThat(laterStart.pendingReports().get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.REMOVED);
+        assertThat(laterStart.pendingReports().get(0).getKey()).isEqualTo(UpmKeys.START_REMOVAL_REMOVED.translationKey());
     }
 
     @Test
@@ -296,7 +288,7 @@ class ModuleRemovalDeferredTest {
     void oneUnreadableOfTwoRecordedJars_staysRecordedWithItsOriginalFields() throws IOException {
         File other = moduleJar(new File(modules, "removal-fixture-extra-1.0.jar"), "RemovalFixtureExtra", "1.0",
                 "removal-fixture-extra");
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval(MODULE, Arrays.asList(jar, other));
+        assertThat(PendingTestValues.queueRemoval(new ModuleFileTransactions(dataFolder), MODULE, null, jar, other).queued()).isTrue();
         JsonObject recordedBefore = jsonOf(onlyRecord());
         JsonObject otherBefore = removalNamed(recordedBefore, other.getName());
         unreadable(other);
@@ -314,8 +306,8 @@ class ModuleRemovalDeferredTest {
         assertThat(otherAfter.keySet()).isEqualTo(otherBefore.keySet());
         assertThat(otherAfter).isEqualTo(otherBefore);
         assertThat(start.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
-                .containsExactlyInAnyOrder(ModuleFileTransactions.Keys.REMOVAL_UNREADABLE,
-                        ModuleFileTransactions.Keys.REMOVED);
+                .containsExactlyInAnyOrder(UpmKeys.START_REMOVAL_UNREADABLE.translationKey(),
+                        UpmKeys.START_REMOVAL_REMOVED.translationKey());
     }
 
     @Test
@@ -323,26 +315,9 @@ class ModuleRemovalDeferredTest {
     void unrecordableDeletion_failureNamesOnlyTheModuleJar() throws IOException {
         neitherDeletableNorRecordable();
 
-        Throwable thrown = catchThrowable(() -> PluginInstallUtils.uninstallPluginReporting(MODULE));
-
-        assertThat(thrown).isInstanceOf(FileSystemException.class)
-                .isNotInstanceOf(PluginInstallUtils.RemovalDeferredException.class);
-        assertThat(namedFiles(thrown)).containsExactly(jar.getAbsolutePath());
+        var result = PluginInstallUtils.requestUninstall(MODULE, null);
+        assertThat(PendingTestValues.keys(result)).containsExactly(UpmKeys.UNINSTALL_NOT_RECORDED);
         assertThat(jar).exists();
-        // The record failure travels on its own carrier, with the original failure as its cause.
-        List<Throwable> carriers = new ArrayList<>();
-        for (Throwable suppressed : thrown.getSuppressed()) {
-            if (suppressed instanceof PluginInstallUtils.RemovalNotRecordedException) {
-                carriers.add(suppressed);
-            }
-        }
-        assertThat(carriers).hasSize(1);
-        assertThat(carriers.get(0)).isNotInstanceOf(FileSystemException.class);
-        assertThat(carriers.get(0).getCause()).isInstanceOf(java.nio.file.AccessDeniedException.class);
-        assertThat(((FileSystemException) carriers.get(0).getCause()).getFile())
-                .startsWith(ultikitsFolder().getAbsolutePath());
-        assertThat(((PluginInstallUtils.RemovalNotRecordedException) carriers.get(0)).getReason())
-                .startsWith("AccessDeniedException");
     }
 
     @Test
@@ -350,28 +325,14 @@ class ModuleRemovalDeferredTest {
     void unrecordableDeletion_replyAsksToDeleteOnlyTheModuleJar() throws IOException {
         neitherDeletableNorRecordable();
         List<String> messages = new ArrayList<>();
-        CommandSender sender = mock(CommandSender.class);
-        doAnswer(invocation -> messages.add(invocation.getArgument(0))).when(sender).sendMessage(anyString());
-
-        new PluginInstallCommands().uninstallPlugin(sender, MODULE);
-
-        List<String> deleteByHand = new ArrayList<>();
-        for (String message : messages) {
-            if (message.contains("请手动删除")) {
-                deleteByHand.add(message);
-            }
+        var result = PluginInstallUtils.requestUninstall(MODULE, null);
+        try (var text = new com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport("en")) {
+            var reply = result.replies().getLast();
+            var rendered = text.messages().render(reply.key(), java.util.Locale.ENGLISH,
+                    reply.args().toArray(com.ultikits.ultitools.text.Arg[]::new));
+            assertThat(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(rendered))
+                    .contains(MODULE, "Nothing changed.").doesNotContain("manually delete");
         }
-        assertThat(deleteByHand).hasSize(1);
-        assertThat(deleteByHand.get(0)).contains(jar.getAbsolutePath())
-                .doesNotContain(ultikitsFolder().getAbsolutePath());
-        // The record failure is said on a line of its own, with its reason and nothing to delete.
-        List<String> notRecorded = new ArrayList<>();
-        for (String message : messages) {
-            if (message.contains("这次删除也未能记录到下次启动")) {
-                notRecorded.add(message);
-            }
-        }
-        assertThat(notRecorded).hasSize(1);
-        assertThat(notRecorded.get(0)).contains("AccessDeniedException").doesNotContain("请手动删除");
+        assertThat(jar).exists();
     }
 }

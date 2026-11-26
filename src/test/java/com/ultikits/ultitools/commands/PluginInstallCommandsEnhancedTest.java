@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
@@ -17,6 +18,8 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.ultikits.ultitools.utils.UpmKeys;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -24,7 +27,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.AfterEach;
@@ -127,8 +132,8 @@ class PluginInstallCommandsEnhancedTest {
             // Setup default behaviors
             mockedUtils.when(() -> PluginInstallUtils.getPluginList(anyInt(), anyInt()))
                     .thenReturn(new ArrayList<>());
-            mockedUtils.when(() -> PluginInstallUtils.installReporting(anyString(), any()))
-                    .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
+            mockedUtils.when(() -> PluginInstallUtils.installReporting(anyString(), any(), any(CommandSender.class)))
+                    .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions(anyString()))
                     .thenReturn(Arrays.asList("1.0.0", "1.0.1", "1.1.0"));
             mockedUtils.when(() -> PluginInstallUtils.lookUpPluginVersions(anyString(), anyList()))
@@ -140,13 +145,16 @@ class PluginInstallCommandsEnhancedTest {
                         invocation.<List<String>>getArgument(1).addAll(versions);
                         return VersionLookup.found(invocation.getArgument(0));
                     });
-            mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(anyString(), anyList()))
-                    .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
+            mockedUtils.when(() -> PluginInstallUtils.requestUninstall(anyString(), any(CommandSender.class)))
+                    .thenReturn(PendingCommandTestSupport.remove("test-plugin", "module.jar"));
+            mockedUtils.when(() -> PluginInstallUtils.updateResult(anyString(), any())).thenCallRealMethod();
+            var stage = PendingCommandTestSupport.staged();
+            mockedUtils.when(() -> PluginInstallUtils.stageUpdate(anyString(), any(CommandSender.class)))
+                    .thenReturn(stage);
             
             executor = new PluginInstallCommands();
         } catch (Exception e) {
-            mockingAvailable = false;
-            executor = null;
+            throw new AssertionError("Could not initialize command fixture", e);
         }
         // Output-only tests keep thread-local static stubs on this thread. Real worker execution
         // and main-thread delivery are covered by CatalogueClientPagingTest.
@@ -462,8 +470,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallPluginWithVersion() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installReporting("test-plugin", "1.0.0"))
-                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
+        mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("test-plugin"), eq("1.0.0"), any(CommandSender.class)))
+                .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
         
         com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "test-plugin", "1.0.0"});
@@ -471,8 +479,8 @@ class PluginInstallCommandsEnhancedTest {
         
         String message = player.nextMessage();
         assertThat(message)
-            .contains("安装成功")
-            .contains("重启服务器");
+            .containsAnyOf("待生效清单", "pending changes")
+            .containsAnyOf("重启", "restart");
     }
 
     @Test
@@ -480,15 +488,15 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallPluginWithVersionFailure() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installReporting("bad-plugin", "1.0.0"))
-                .thenReturn(PluginInstallUtils.InstallResult.failed());
+        mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("bad-plugin"), eq("1.0.0"), any(CommandSender.class)))
+                .thenReturn(PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_FAILED));
         
         com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "bad-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
         
-        String message = player.nextMessage();
-        assertThat(message).contains("安装失败");
+        assertThat(player.nextMessage()).isEqualTo(ChatColor.RED + "Install Failed!");
+        assertThat(player.nextMessage()).isNull();
     }
 
     @Test
@@ -496,8 +504,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallLatestPlugin() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installReporting("latest-plugin", null))
-                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
+        mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("latest-plugin"), isNull(), any(CommandSender.class)))
+                .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
         
         com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "latest-plugin"});
@@ -505,8 +513,8 @@ class PluginInstallCommandsEnhancedTest {
         
         String message = player.nextMessage();
         assertThat(message)
-            .contains("安装成功")
-            .contains("重启服务器");
+            .containsAnyOf("待生效清单", "pending changes")
+            .containsAnyOf("重启", "restart");
     }
 
     @Test
@@ -514,15 +522,15 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallLatestPluginFailure() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installReporting("fail-plugin", null))
-                .thenReturn(PluginInstallUtils.InstallResult.failed());
+        mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("fail-plugin"), isNull(), any(CommandSender.class)))
+                .thenReturn(PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_FAILED));
         
         com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "fail-plugin"});
         server.getScheduler().performOneTick();
         
-        String message = player.nextMessage();
-        assertThat(message).contains("安装失败");
+        assertThat(player.nextMessage()).isEqualTo(ChatColor.RED + "Install Failed!");
+        assertThat(player.nextMessage()).isNull();
     }
 
     @Test
@@ -530,8 +538,8 @@ class PluginInstallCommandsEnhancedTest {
     void testInstallFromConsole() {
         if (!mockingAvailable) return;
         
-        mockedUtils.when(() -> PluginInstallUtils.installReporting("console-plugin", null))
-                .thenReturn(PluginInstallUtils.InstallResult.installed("installed.jar"));
+        mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("console-plugin"), isNull(), any(CommandSender.class)))
+                .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
         
         boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
                 new String[]{"install", "console-plugin"});
@@ -624,75 +632,38 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("Uninstall plugin - should succeed")
     void testUninstallPluginSuccess() throws IOException {
-        if (!mockingAvailable) return;
-        
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("remove-plugin"), anyList()))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
-        
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
-                new String[]{"uninstall", "remove-plugin"});
-        server.getScheduler().performOneTick();
-        
-        List<String> messages = collectAllMessages(player);
-        String fullMessage = String.join("\n", messages);
-        
-        // #501: uninstallPlugin returns true only after deleting the jar, so the success reply
-        // no longer points the operator at the plugins folder to delete it by hand.
-        assertThat(fullMessage)
-            .contains("卸载完成")
-            .doesNotContain("文件位置")
-            .doesNotContain("手动删除");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("remove-plugin", sender)).thenReturn(PendingCommandTestSupport.remove("remove-plugin", "module.jar"));
+        executor.uninstallPlugin(sender, "remove-plugin");
+        assertThat(player.nextMessage()).contains("module.jar");
     }
 
     @Test
     @DisplayName("Uninstall plugin - should handle not found")
     void testUninstallPluginNotFound() throws IOException {
-        if (!mockingAvailable) return;
-        
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("missing-plugin"), anyList()))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(false, Collections.emptyList()));
-        
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
-                new String[]{"uninstall", "missing-plugin"});
-        server.getScheduler().performOneTick();
-        
-        String message = player.nextMessage();
-        assertThat(message).contains("卸载失败");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("missing-plugin", sender)).thenReturn(PendingCommandTestSupport.reply(false, UpmKeys.UNINSTALL_NOT_FOUND));
+        executor.uninstallPlugin(sender, "missing-plugin");
+        assertThat(player.nextMessage()).isEqualTo(ChatColor.RED + "Uninstall Failed! Please check if the spelling is correct!");
+        assertThat(player.nextMessage()).isNull();
     }
 
     @Test
     @DisplayName("Uninstall plugin - should handle IOException")
     void testUninstallPluginIOException() throws IOException {
-        if (!mockingAvailable) return;
-        
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("io-error-plugin"), anyList()))
-                .thenThrow(new IOException("File access error"));
-        
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
-                new String[]{"uninstall", "io-error-plugin"});
-        server.getScheduler().performOneTick();
-        
-        List<String> messages = collectAllMessages(player);
-        String fullMessage = String.join("\n", messages);
-        
-        assertThat(fullMessage)
-            .contains("删除失败")
-            .contains("文件位置");
+        var sender = player;
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("io-error-plugin", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NOT_RECORDED, "io-error-plugin", "error", "read-only journal"));
+        executor.uninstallPlugin(sender, "io-error-plugin");
+        assertThat(player.nextMessage()).contains("read-only journal");
     }
 
     @Test
     @DisplayName("Uninstall from console")
     void testUninstallFromConsole() throws IOException {
-        if (!mockingAvailable) return;
-        
-        mockedUtils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("console-uninstall"), anyList()))
-                .thenReturn(PluginInstallUtils.UninstallReport.of(true, Collections.emptyList()));
-        
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
-                new String[]{"uninstall", "console-uninstall"});
-        server.getScheduler().performOneTick();
-        
-        assertThat(result).isTrue();
+        var sender = server.getConsoleSender();
+        mockedUtils.when(() -> PluginInstallUtils.requestUninstall("console-uninstall", sender)).thenReturn(PendingCommandTestSupport.remove("console-uninstall", "module.jar"));
+        executor.uninstallPlugin(sender, "console-uninstall");
+        assertThat(sender.nextMessage()).contains("module.jar");
     }
 
     // ==================== Helper Methods ====================

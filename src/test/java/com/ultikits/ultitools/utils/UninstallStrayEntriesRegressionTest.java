@@ -129,16 +129,16 @@ class UninstallStrayEntriesRegressionTest {
                     "the platform does not list open files (/proc/self/fd)");
         }
 
-        PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting("Fixture");
+        PendingTestValues.RemovalObservation report = PendingTestValues.queueAndApply("Fixture");
 
-        assertThat(report.jarsDeleted()).isTrue();
+        assertThat(report.queued()).isTrue();
         assertThat(module).doesNotExist();
-        assertThat(report.deletedFiles()).containsExactly(module.getAbsolutePath());
+        assertThat(report.files()).containsExactly(module.getAbsolutePath());
         assertThat(subfolder).isDirectory();
         assertThat(notes).exists();
         assertThat(backup).as("not a .jar: the loader never loads it").exists();
         assertThat(noPluginYml).exists();
-        assertThat(report.undeterminedEntries()).containsExactly(noPluginYml.getAbsolutePath());
+        assertThat(report.undetermined()).containsExactly(noPluginYml.getAbsolutePath());
         assertThat(openFilesUnderModules()).isEmpty();
     }
 }

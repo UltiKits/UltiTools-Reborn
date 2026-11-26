@@ -118,7 +118,7 @@ class ConfigRegistryReleaseTest {
             jar.putNextEntry(new java.util.jar.JarEntry("plugin.yml"));
             jar.write("name: ReleasedModule\n".getBytes(StandardCharsets.UTF_8)); jar.closeEntry();
         }
-        com.ultikits.ultitools.utils.PluginInstallUtils.uninstallPluginReporting("ReleasedModule");
+        plugins.unregister(hook);
         assertThat(hook.ran).isTrue(); assertThat(hook.bean.ran).isTrue();
         assertThat(disk()).contains("value: disk");
         assertThat(configs.getAllConfigEntities(hook)).isNull();
@@ -216,7 +216,7 @@ class ConfigRegistryReleaseTest {
             jar.write("name: ReleasedModule\n".getBytes(StandardCharsets.UTF_8)); jar.closeEntry();
         }
         java.util.List<String> reports = reportsDuring(
-                () -> com.ultikits.ultitools.utils.PluginInstallUtils.uninstallPluginReporting("ReleasedModule"));
+                () -> plugins.unregister(hook));
         assertThat(disk()).isEqualTo("value: disk\n");
         assertThat(reports).hasSize(1).allSatisfy(report -> assertThat(report).contains("release.yml", "'value'")
                 .doesNotContain("destroyed"));

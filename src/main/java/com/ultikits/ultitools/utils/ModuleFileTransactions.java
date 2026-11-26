@@ -22,6 +22,17 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.bukkit.Bukkit;
+import org.bukkit.command.CommandSender;
+
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Messages;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+
+import static com.ultikits.ultitools.text.Arg.string;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
@@ -38,7 +49,7 @@ import com.ultikits.ultitools.manager.ModuleApiLevels;
 
 /**
  * The files of the module subsystem and the transactions that change them: which folder modules
- * load from, and how {@code /upm update} replaces a module's JAR (#505, #513).
+ * load from, and how {@code /upm} installs, updates or uninstalls them at the next restart.
  *
  * <p><b>Observation, not prediction.</b> An update never decides before a restart whether the new
  * JAR will load. {@code /upm update} downloads the new JAR into the transactions folder,
@@ -65,15 +76,12 @@ import com.ultikits.ultitools.manager.ModuleApiLevels;
  * crash completes it rather than repeating it, and never deletes a file that is not the staged
  * JAR. Both versions are kept until the decision.
  *
- * <p><b>Deferred removal.</b> An uninstall whose JAR cannot be deleted while the server runs --
- * Windows holds every module JAR open through the shared module class loader -- records the file
- * ({@link #recordDeferredRemoval(String, List)}), and the next start deletes it before any module
- * loads, if it is still that file (#518). Only a file confirmed to be the recorded one is deleted; one
- * confirmed to be a different file is left alone and its entry dropped; one whose content cannot be
- * read at that start stays recorded, unchanged, for the next start to try again -- a failure to read
- * the file's content or metadata never cancels an uninstall the operator asked for. Size and
- * modification-time checks use checked NIO reads: an I/O failure is unknown identity, not a different
- * file. Recording also refuses an unreadable size or modification time rather than recording zero.
+ * <p><b>Restart-time removal.</b> An uninstall records the files without unloading the module or
+ * deleting JARs while it runs. At the next start, before any module loads, a file is deleted only
+ * if its size, modification time and SHA-256 still match. A different file is left alone and its
+ * entry dropped; an unreadable file or one that could not be deleted stays recorded for a later
+ * start. Size and modification-time checks use checked NIO reads so an I/O failure is not mistaken
+ * for a different file. A removal is not queued if its file identity cannot be captured.
  *
  * <p><b>Where the records live.</b> Under the server root, beside the credential store
  * ({@link #transactionsFolder(File)}), not under {@code plugins/}: the panel's file interface can
@@ -127,22 +135,51 @@ public final class ModuleFileTransactions {
      * The modules (by identify-string) whose update is being downloaded right now, each with the
      * module's name and old JAR file name an uninstall matches on; guarded by {@link #LOCK}.
      */
-    private static final java.util.Map<String, String[]> STAGING = new java.util.HashMap<>();
+    private static final java.util.Map<DownloadKey, Record> STAGING = new java.util.HashMap<>();
+    private record DownloadKey(File folder, String identifyString) { }
 
     /**
      * The downloads in {@link #STAGING} an uninstall cancelled while they ran: their record is never
      * written (round-9 review); guarded by {@link #LOCK}.
      */
-    private static final java.util.Set<String> CANCELLED = new java.util.HashSet<>();
+    private static final java.util.Set<DownloadKey> CANCELLED = new java.util.HashSet<>();
 
     private final File modulesFolder;
     private final File transactionsFolder;
     private final FileOps ops;
     private final CrashPoints crashPoints;
+    private static final AtomicLong GENERATION = new AtomicLong();
     private final List<Report> reports = new ArrayList<>();
+    private final List<StartOutcome> startOutcomes = new ArrayList<>();
+
+    /** A decision observed at this start; kept in memory until shutdown. */
+    @ApiStatus.Internal
+    public record StartOutcome(PendingChanges.Kind kind, String module, String fromVersion,
+                               String toVersion, Result result) {
+        /** The result of trying to apply a change. */
+        public enum Result { APPLIED, ROLLED_BACK, NOT_APPLIED, NEEDS_OPERATOR }
+    }
+
+    /** @return the start-up decisions, as an immutable snapshot */
+    public List<StartOutcome> startOutcomes() {
+        synchronized (LOCK) {
+            return List.copyOf(startOutcomes);
+        }
+    }
+
+    /** @return the number of additions and replacements made during this process */
+    public long pendingGeneration() {
+        return GENERATION.get();
+    }
+
+    private void outcome(Record record, StartOutcome.Result result) {
+        // Recovery uses oldVersion; fromVersion is optional for records written by older versions.
+        synchronized (LOCK) {
+            startOutcomes.add(new StartOutcome(kindOf(record), displayName(record),
+                    record.fromVersion == null ? record.oldVersion : record.fromVersion, record.newVersion, result));
+        }
+    }
     private final List<Record> appliedThisStart = new ArrayList<>();
-    /** The failure of a {@code FAILED} record {@link #checkExisting} just discarded; guarded by {@link #LOCK}. */
-    private String lastDiscardedFailure;
     /** The modules-folder file names a recorded deletion still has to remove after this start's removals. */
     private final java.util.Set<String> pendingRemovals = new java.util.HashSet<>();
 
@@ -150,8 +187,10 @@ public final class ModuleFileTransactions {
     private enum RollbackPhase {
         /** After the modules loaded and the module was not among them; the old version loads next start. */
         AFTER_LOAD,
-        /** Before loading, for an update the previous start applied but never decided. */
+        /** Before loading, for a change the previous start applied but never decided. */
         UNCONFIRMED,
+        /** Before loading, after the journal could not record an install that just moved. */
+        INSTALL_NOT_RECORDED,
         /** Before loading, finishing a rollback an earlier start decided but could not complete. */
         RESUMED
     }
@@ -162,7 +201,7 @@ public final class ModuleFileTransactions {
      * @param dataFolder the framework's data folder
      */
     public ModuleFileTransactions(File dataFolder) {
-        this(modulesFolder(dataFolder), transactionsFolder(dataFolder), FileOps.DEFAULT, CrashPoints.NONE);
+        this(modulesFolder(dataFolder), transactionsFolder(dataFolder), FileOps.DEFAULT, CrashPoints.fromSystemProperty());
     }
 
     /**
@@ -340,68 +379,344 @@ public final class ModuleFileTransactions {
     public StageResult stageUpdate(String identifyString, java.util.function.Supplier<List<UltiToolsPlugin>> loaded,
                                    Function<UltiToolsPlugin, File> codeSource, Catalogue catalogue,
                                    Downloader downloader, Function<UltiToolsPlugin, String> mainClassOf) {
+        return stageChange(identifyString, null, null, null, loaded, codeSource, catalogue, downloader, mainClassOf);
+    }
+
+    /**
+     * Stages a change to a specified version, or the latest compatible version when unspecified.
+     * A non-null install name identifies an explicit install request, even when it becomes an update.
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    StageResult stageChange(String identifyString, String requestedVersion, String installName,
+                            PendingChanges.Requester requester, java.util.function.Supplier<List<UltiToolsPlugin>> loaded,
+                            Function<UltiToolsPlugin, File> codeSource, Catalogue catalogue, Downloader downloader,
+                            Function<UltiToolsPlugin, String> mainClassOf) {
         String key = normalize(identifyString);
         if (key == null) {
-            return StageResult.failed(null, Keys.REASON_NO_IDENTIFY_STRING);
+            return StageResult.failed(null, UpmKeys.REASON_NO_IDENTIFY_STRING);
         }
+        boolean explicitInstall = installName != null;
+        var runningKey = new DownloadKey(transactionsFolder, key);
         Record record = new Record();
-        record.type = Record.UPDATE;
         record.key = key;
-        File work = workFolder(record);
-        Reservation reservation;
-        // Decisions under the lock; the network outside it. An uninstall on the main thread waits
-        // only for these checks and the record write, never for a download (gate-1 review).
-        // A denied file access (SecurityException) anywhere in staging is a failure result, never an
-        // exception out of the command (Codex, #561). While checking, nothing of this staging exists
-        // yet; once reserved, the work folder is this call's own and its staging is discarded.
+        record.requestedBy = requester;
+        record.requestedAt = System.currentTimeMillis();
+        record.newVersion = requestedVersion;
+        Record previous;
+        String previousFailure = null;
+        Reservation reservation = null;
         synchronized (LOCK) {
             try {
-                reservation = reserve(record, work, identifyString, loaded.get(), codeSource);
+                List<UltiToolsPlugin> modules = loaded.get();
+                UltiToolsPlugin module = modules.stream().filter(it -> key.equals(normalize(it.getIdentifyString())))
+                        .findFirst().orElse(null);
+                record.type = module == null ? Record.INSTALL : Record.UPDATE;
+                record.moduleName = module == null ? (explicitInstall ? installName : identifyString) : module.getPluginName();
+                record.oldVersion = module == null ? null : module.getVersion();
+                record.fromVersion = record.oldVersion;
+                File oldJar = module == null ? null : codeSource.apply(module);
+                record.oldName = oldJar == null ? null : oldJar.getName();
+                RemovedModule identity = identityOf(record);
+                StageResult refusal = refuseReservation(record, identity, identifyString);
+                if (refusal != null) {
+                    return refusal;
+                }
+                previous = findStored(identity, record).map(Stored::record).orElse(null);
+                if (previous != null) {
+                    if (Record.NEEDS_OPERATOR.equals(previous.state)) {
+                        return StageResult.failed(null, UpmKeys.REASON_NEEDS_OPERATOR, previous.failure,
+                                recordFileOf(previous).getAbsolutePath()).withModule(displayName(previous));
+                    }
+                    if (Record.FAILED.equals(previous.state)) {
+                        previousFailure = previous.failure;
+                        String error = discardFailed(previous);
+                        if (error != null) {
+                            return cleanupRefusal(previous, error);
+                        }
+                        previous = null;
+                    } else if (!Record.PENDING.equals(previous.state)) {
+                        return resultFor(StageResult.Outcome.UNFINISHED, previous, null, null);
+                    } else if (!explicitInstall && Record.REMOVE.equals(previous.type)) {
+                        return resultFor(StageResult.Outcome.PENDING_UNINSTALL, previous, null, null);
+                    }
+                }
+                if (module == null && !explicitInstall && (previous == null || !Record.INSTALL.equals(previous.type))) {
+                    return StageResult.failed(previousFailure, UpmKeys.REASON_NOT_LOADED, identifyString);
+                }
+                if (previous != null && module == null) {
+                    record.moduleName = previous.moduleName;
+                }
+                if (requestedVersion != null) {
+                    StageResult noDownload = decideVersion(record, previous, previousFailure, explicitInstall);
+                    if (noDownload != null) {
+                        return noDownload;
+                    }
+                }
+                File work = workFolder(record);
+                if (mayHoldFiles(new File(work, BACKUP_FOLDER))) {
+                    return StageResult.failed(previousFailure, UpmKeys.REASON_LEFTOVER_BACKUP,
+                            new File(work, BACKUP_FOLDER).getAbsolutePath());
+                }
+                if (module != null) {
+                    reservation = locate(key, identifyString, modules, codeSource, previousFailure);
+                    if (reservation.refusal != null) {
+                        return reservation.refusal;
+                    }
+                    record.oldSha256 = reservation.oldSha256;
+                }
+                STAGING.put(runningKey, record);
             } catch (SecurityException denied) {
-                return StageResult.failed(null, Keys.REASON_ACCESS_DENIED, describe(denied));
+                return StageResult.failed(previousFailure, UpmKeys.REASON_ACCESS_DENIED, describe(denied));
+            } catch (IOException failure) {
+                return StageResult.failed(previousFailure, UpmKeys.REASON_RECORD_UNREADABLE,
+                        recordFileOf(record).getAbsolutePath(), text(failure.getMessage()));
             }
-            if (reservation.refusal != null) {
-                return reservation.refusal;
-            }
-            STAGING.put(key, new String[]{reservation.module.getPluginName(), reservation.oldJar.getName()});
         }
-        record.oldSha256 = reservation.oldSha256;
+        File incoming = null;
         try {
-            return download(record, work, identifyString, reservation, catalogue, downloader, mainClassOf);
-        } catch (SecurityException denied) {
-            discardStaging(work);
-            return StageResult.failed(reservation.previousFailure, Keys.REASON_ACCESS_DENIED, describe(denied));
-        } finally {
+            String version = requestedVersion == null ? catalogue.latestVersion(identifyString) : requestedVersion;
+            String target = PluginInstallUtils.installedJarName(identifyString, version);
             synchronized (LOCK) {
-                STAGING.remove(key);
-                CANCELLED.remove(key);
+                if (CANCELLED.contains(runningKey)) {
+                    return cancelled(previousFailure);
+                }
+                record.newVersion = version;
+                record.targetName = target;
+                StageResult noDownload = decideTarget(record, previous, previousFailure, explicitInstall);
+                if (noDownload != null) {
+                    return noDownload;
+                }
+            }
+            String url = target == null ? null : catalogue.downloadLink(identifyString, version);
+            if (url == null) {
+                return StageResult.failed(previousFailure, UpmKeys.REASON_NO_DOWNLOAD, identifyString);
+            }
+            if (reservation != null) {
+                StageResult refusal = refuseBeforeDownload(identifyString, url, target, reservation, mainClassOf);
+                if (refusal != null) {
+                    return refusal;
+                }
+            }
+            // Keep the previous journal and staged bytes intact until the replacement is durable.
+            Files.createDirectories(transactionsFolder.toPath());
+            incoming = Files.createTempDirectory(transactionsFolder.toPath(), "incoming-").toFile();
+            File stagedFolder = new File(incoming, STAGED_FOLDER);
+            String error = fetch(downloader, url, target, incoming, stagedFolder);
+            File staged = new File(stagedFolder, target);
+            StageResult refusal = error == null ? verifyStaged(record, incoming, staged, version, previousFailure)
+                    : StageResult.failed(previousFailure, UpmKeys.REASON_DOWNLOAD_FAILED, error);
+            synchronized (LOCK) {
+                if (CANCELLED.contains(runningKey)) {
+                    return cancelled(previousFailure);
+                }
+                if (refusal != null) {
+                    return refusal;
+                }
+                // The lock and the download reservation prevent other writers from replacing this slot.
+                // If a caller revoked its predecessor by id while downloading, cancel rather than revive it.
+                if (previous != null && !exists(recordFileOf(previous))) {
+                    return StageResult.of(StageResult.Outcome.BUSY, displayName(record), null, null, previousFailure);
+                }
+                if (reservation == null) {
+                    String name = PluginYmlReader.readFromJarFile(staged).getName();
+                    if (name != null && !name.isBlank()) {
+                        record.moduleName = name;
+                    }
+                    Record match = findStored(identityOf(record), record).map(Stored::record).orElse(null);
+                    if (match != null && (previous == null || !idOf(match).equals(idOf(previous)))) {
+                        return StageResult.of(StageResult.Outcome.BUSY, displayName(record), null, null, previousFailure);
+                    }
+                }
+                record.state = Record.PENDING;
+                publishDownload(record, previous, staged);
+                // Show the durable entry, not the download reservation, as soon as it is published.
+                STAGING.remove(runningKey);
+            }
+            crashPoints.reached(CrashPoints.AFTER_RECORD_WRITTEN);
+            StageResult.Outcome queued = reservation == null
+                    ? previous == null ? StageResult.Outcome.QUEUED_INSTALL : StageResult.Outcome.REPLACED_INSTALL
+                    : previous == null ? StageResult.Outcome.STAGED : Record.REMOVE.equals(previous.type)
+                    ? StageResult.Outcome.CANCELLED_UNINSTALL : StageResult.Outcome.REPLACED_UPDATE;
+            return resultFor(queued, record, previous, previousFailure);
+        } catch (NoCompatibleVersionException e) {
+            return StageResult.failed(previousFailure, UpmKeys.REASON_NO_COMPATIBLE_UPDATE, identifyString,
+                    e.getFrameworkLevel(), ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, e.getFrameworkLevel());
+        } catch (SecurityException denied) {
+            return StageResult.failed(previousFailure, UpmKeys.REASON_ACCESS_DENIED, describe(denied));
+        } catch (IOException failure) {
+            return StageResult.failed(previousFailure, UpmKeys.REASON_RECORD_FAILED, describe(failure));
+        } finally {
+            if (incoming != null) {
+                discardStaging(incoming);
+            }
+            synchronized (LOCK) {
+                STAGING.remove(runningKey, record);
+                // Only this reservation can be cancelled while it is still registered.
+                if (!STAGING.containsKey(runningKey)) {
+                    CANCELLED.remove(runningKey);
+                }
             }
         }
     }
 
-    /**
-     * The checks staging makes before it downloads, under {@link #LOCK}: no download of this
-     * module running, no update already staged, no kept old JAR left without its record.
-     */
-    private Reservation reserve(Record record, File work, String identifyString, List<UltiToolsPlugin> loaded,
-                                Function<UltiToolsPlugin, File> codeSource) {
-        if (STAGING.containsKey(record.key)) {
-            return Reservation.refused(StageResult.of(StageResult.Outcome.BUSY, null, null, null, null));
+    private StageResult refuseReservation(Record record, RemovedModule identity, String identifyString) {
+        if (activeDownload(identity, true) != null) {
+            return StageResult.of(StageResult.Outcome.BUSY, displayName(record), null, null, null);
         }
-        StageResult refusal = checkExisting(record);
-        String previousFailure = refusal == null ? lastDiscardedFailure : refusal.getPreviousFailure();
-        lastDiscardedFailure = null;
-        if (refusal != null) {
-            return Reservation.refused(refusal);
+        if (!Record.INSTALL.equals(record.type) || record.newVersion == null) {
+            return null;
         }
-        File backups = new File(work, BACKUP_FOLDER);
-        if (mayHoldFiles(backups)) {
-            // A kept old JAR without its record: never adopted as this transaction's backup and
-            // never deleted by staging. The start-up log already reports it.
-            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_LEFTOVER_BACKUP,
-                    backups.getAbsolutePath()));
+        return refuseOccupiedInstallTarget(PluginInstallUtils.installedJarName(identifyString, record.newVersion), null);
+    }
+
+    private StageResult decideTarget(Record record, Record previous, String previousFailure, boolean explicitInstall) {
+        if (Record.INSTALL.equals(record.type)) {
+            StageResult occupied = refuseOccupiedInstallTarget(record.targetName, previousFailure);
+            if (occupied != null) {
+                return occupied;
+            }
         }
-        return locate(record.key, identifyString, loaded, codeSource, previousFailure);
+        return decideVersion(record, previous, previousFailure, explicitInstall);
+    }
+
+    private StageResult refuseOccupiedInstallTarget(String target, String previousFailure) {
+        // The generated basename is safe to probe, including a directory entry or link of that name.
+        if (target != null && exists(new File(modulesFolder, target))) {
+            return StageResult.failed(previousFailure, UpmKeys.INSTALL_REFUSED_TARGET_EXISTS, target);
+        }
+        return null;
+    }
+
+    private static StageResult cancelled(String previousFailure) {
+        return StageResult.failed(previousFailure, UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING);
+    }
+
+    private StageResult decideVersion(Record record, Record previous, String previousFailure, boolean explicitInstall) {
+        if (record.newVersion == null) {
+            return null;
+        }
+        if (explicitInstall && record.newVersion.equals(record.oldVersion)) {
+            if (previous == null) {
+                return resultFor(StageResult.Outcome.ALREADY_CURRENT, record, null, previousFailure);
+            }
+            String error = cancelPending(previous);
+            if (error != null) {
+                return cleanupRefusal(previous, error);
+            }
+            return resultFor(Record.REMOVE.equals(previous.type) ? StageResult.Outcome.CANCELLED_UNINSTALL_SAME
+                    : StageResult.Outcome.CANCELLED_UPDATE, record, previous, previousFailure);
+        }
+        if (previous != null && record.newVersion.equals(previous.newVersion)) {
+            return resultFor(StageResult.Outcome.ALREADY_STAGED, previous, null, previousFailure);
+        }
+        return null;
+    }
+
+    private static StageResult resultFor(StageResult.Outcome outcome, Record record, Record previous, String failure) {
+        return StageResult.of(outcome, displayName(record), record.oldVersion, record.newVersion, failure)
+                .withPreviousVersion(previous == null ? null : previous.newVersion);
+    }
+
+    private StageResult cleanupRefusal(Record previous, String error) {
+        return Record.NEEDS_OPERATOR.equals(previous.state)
+                ? StageResult.failed(null, UpmKeys.REASON_NEEDS_OPERATOR, previous.failure,
+                        recordFileOf(previous).getAbsolutePath()).withModule(displayName(previous))
+                : StageResult.failed(previous.failure, UpmKeys.REASON_PREVIOUS_UNRESTORED, error);
+    }
+
+    private void publishDownload(Record record, Record previous, File source) throws IOException {
+        checkReplacement(previous);
+        File destination;
+        try {
+            refuseLinkedFolders(record);
+            record.stagedName = record.targetName;
+            destination = stagedOf(record);
+            if (exists(destination)) {
+                // Even when two version strings sanitise to the same basename, never overwrite the
+                // previous record's bytes before replacing the journal that references them.
+                record.stagedName = "download-" + java.util.UUID.randomUUID() + ".jar";
+                destination = stagedOf(record);
+            }
+        } catch (RecordRefused refusal) {
+            throw new IOException(refusal.getMessage(), refusal);
+        }
+        Files.createDirectories(destination.getParentFile().toPath());
+        Files.move(source.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        try {
+            publish(record, previous);
+        } catch (IOException failure) {
+            deleteQuietly(destination);
+            if (previous == null || !idOf(previous).equals(idOf(record))) {
+                deleteTree(workFolder(record));
+            }
+            throw failure;
+        }
+        if (previous != null && idOf(previous).equals(idOf(record))) {
+            try {
+                deleteQuietly(stagedOf(previous));
+            } catch (RecordRefused refusal) {
+                LOGGER.log(Level.WARNING, "Could not clean the earlier staged JAR", refusal);
+            }
+        }
+    }
+
+    private void checkReplacement(Record previous) throws IOException {
+        if (previous == null) {
+            return;
+        }
+        purgeSuperseded(previous);
+        try {
+            checkPendingFiles(previous);
+        } catch (RecordRefused refusal) {
+            throw new IOException(refusal.getMessage(), refusal);
+        }
+    }
+
+    private void publish(Record record, Record previous) throws IOException {
+        if (previous != null && !idOf(record).equals(idOf(previous))) {
+            record.supersedes = idOf(previous);
+        }
+        writeRecord(record);
+        GENERATION.incrementAndGet();
+        if (record.supersedes != null) {
+            try {
+                purgeSuperseded(record);
+            } catch (IOException cleanup) {
+                // The new journal is authoritative even if cleanup could not finish; startup retries.
+                LOGGER.log(Level.WARNING, "An obsolete transaction could not be cleaned up", cleanup);
+            }
+        }
+    }
+
+    private void purgeSuperseded(Record record) throws IOException {
+        String previousId = record.supersedes;
+        if (previousId == null) {
+            return;
+        }
+        if (!previousId.matches("(?:install|update|remove)-[0-9a-f]{16}") || previousId.equals(idOf(record))) {
+            throw new IOException("unrecognised predecessor of " + idOf(record));
+        }
+        // The validated id is exactly a journal basename, never an arbitrary path.
+        File retiredFile = new File(transactionsFolder, previousId + RECORD_SUFFIX);
+        Files.deleteIfExists(retiredFile.toPath());
+        deleteTree(new File(transactionsFolder, previousId));
+        record.supersedes = null;
+        try {
+            writeRecord(record);
+        } catch (IOException failure) {
+            record.supersedes = previousId;
+            throw failure;
+        }
+    }
+
+    private static java.util.Set<String> supersededIds(List<Record> records) {
+        var ids = new java.util.HashSet<String>();
+        for (Record record : records) {
+            if (record.supersedes != null) {
+                ids.add(record.supersedes);
+            }
+        }
+        return ids;
     }
 
     /** The loaded module to update and the JAR in the modules folder it was loaded from. */
@@ -415,11 +730,11 @@ public final class ModuleFileTransactions {
             }
         }
         if (module == null) {
-            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_NOT_LOADED, identifyString));
+            return Reservation.refused(StageResult.failed(previousFailure, UpmKeys.REASON_NOT_LOADED, identifyString));
         }
         File oldJar = codeSource.apply(module);
         if (oldJar == null || !isDirectChild(modulesFolder, oldJar) || !isJarName(oldJar.getName())) {
-            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_NOT_IN_MODULES_FOLDER,
+            return Reservation.refused(StageResult.failed(previousFailure, UpmKeys.REASON_NOT_IN_MODULES_FOLDER,
                     oldJar == null ? "?" : oldJar.getAbsolutePath(), modulesFolder.getAbsolutePath()));
         }
         StageResult sharedOrAmbiguous = refuseSharedOrAmbiguous(module, oldJar, key, identifyString, loaded, codeSource,
@@ -429,7 +744,7 @@ public final class ModuleFileTransactions {
         }
         String oldSha256 = sha256Of(oldJar);
         if (oldSha256 == null) {
-            return Reservation.refused(StageResult.failed(previousFailure, Keys.REASON_OLD_JAR_UNREADABLE,
+            return Reservation.refused(StageResult.failed(previousFailure, UpmKeys.REASON_OLD_JAR_UNREADABLE,
                     oldJar.getAbsolutePath()));
         }
         return new Reservation(module, oldJar, oldSha256, previousFailure, null);
@@ -449,7 +764,7 @@ public final class ModuleFileTransactions {
                                                        String previousFailure) {
         String sharedWith = sharedWith(module, oldJar, loaded, codeSource);
         if (sharedWith != null) {
-            return StageResult.failed(previousFailure, Keys.REASON_SHARED_JAR, oldJar.getAbsolutePath(), sharedWith);
+            return StageResult.failed(previousFailure, UpmKeys.REASON_SHARED_JAR, oldJar.getAbsolutePath(), sharedWith);
         }
         List<String> declarers = new ArrayList<>();
         for (UltiToolsPlugin plugin : loaded) {
@@ -457,7 +772,7 @@ public final class ModuleFileTransactions {
                 declarers.add(plugin.getPluginName());
             }
         }
-        return declarers.size() > 1 ? StageResult.failed(previousFailure, Keys.REASON_AMBIGUOUS_IDENTIFY_STRING,
+        return declarers.size() > 1 ? StageResult.failed(previousFailure, UpmKeys.REASON_AMBIGUOUS_IDENTIFY_STRING,
                 identifyString, String.join(", ", declarers)) : null;
     }
 
@@ -487,72 +802,12 @@ public final class ModuleFileTransactions {
         return others.isEmpty() ? null : String.join(", ", others);
     }
 
-    /** What {@link #reserve} decided: the module and JAR to stage an update for, or the refusal. */
-    private static final class Reservation {
-        private final UltiToolsPlugin module;
-        private final File oldJar;
-        private final String oldSha256;
-        private final String previousFailure;
-        private final StageResult refusal;
-
-        Reservation(UltiToolsPlugin module, File oldJar, String oldSha256, String previousFailure,
-                    StageResult refusal) {
-            this.module = module;
-            this.oldJar = oldJar;
-            this.oldSha256 = oldSha256;
-            this.previousFailure = previousFailure;
-            this.refusal = refusal;
+    /** The loaded module and its JAR, or the reason it cannot be staged. */
+    private record Reservation(UltiToolsPlugin module, File oldJar, String oldSha256, String previousFailure,
+                               StageResult refusal) {
+        static Reservation refused(StageResult result) {
+            return new Reservation(null, null, null, null, result);
         }
-
-        static Reservation refused(StageResult refusal) {
-            return new Reservation(null, null, null, null, refusal);
-        }
-    }
-
-    /**
-     * The part of staging that touches the network and the staged file, run outside the lock; only
-     * the record write at its end takes the lock again.
-     */
-    @SuppressWarnings({"PMD.AvoidCatchingGenericException", "PMD.ExcessiveParameterList"})
-    private StageResult download(Record record, File work, String identifyString, Reservation reservation,
-                                 Catalogue catalogue, Downloader downloader,
-                                 Function<UltiToolsPlugin, String> mainClassOf) {
-        String previousFailure = reservation.previousFailure;
-        String latest;
-        String link;
-        try {
-            latest = catalogue.latestVersion(identifyString);
-            link = latest == null ? null : catalogue.downloadLink(identifyString, latest);
-        } catch (NoCompatibleVersionException e) {
-            // The catalogue has versions of this module, none of which this framework installs
-            // (plan 18-40): nothing to stage, said as such rather than as "no download".
-            return StageResult.failed(previousFailure, Keys.REASON_NO_COMPATIBLE_UPDATE, identifyString,
-                    e.getFrameworkLevel(), ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, e.getFrameworkLevel());
-        } catch (RuntimeException e) {
-            return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, describe(e));
-        }
-        String targetName = PluginInstallUtils.installedJarName(identifyString, latest);
-        StageResult beforeDownload = refuseBeforeDownload(identifyString, link, targetName, reservation, mainClassOf);
-        if (beforeDownload != null) {
-            return beforeDownload;
-        }
-        File stagedFolder = new File(work, STAGED_FOLDER);
-        String downloadFailure = fetch(downloader, link, targetName, work, stagedFolder);
-        if (downloadFailure != null) {
-            return StageResult.failed(previousFailure, Keys.REASON_DOWNLOAD_FAILED, downloadFailure);
-        }
-        StageResult refusal = verifyStaged(record, work, new File(stagedFolder, targetName), latest, previousFailure);
-        if (refusal != null) {
-            return refusal;
-        }
-
-        record.state = Record.PENDING;
-        record.moduleName = reservation.module.getPluginName();
-        record.oldName = reservation.oldJar.getName();
-        record.oldVersion = reservation.module.getVersion();
-        record.stagedName = targetName;
-        record.targetName = targetName;
-        return writeStaged(record, work, previousFailure);
     }
 
     /**
@@ -565,11 +820,11 @@ public final class ModuleFileTransactions {
     private StageResult refuseBeforeDownload(String identifyString, String link, String targetName,
                                              Reservation reservation, Function<UltiToolsPlugin, String> mainClassOf) {
         if (link == null || targetName == null) {
-            return StageResult.failed(reservation.previousFailure, Keys.REASON_NO_DOWNLOAD, identifyString);
+            return StageResult.failed(reservation.previousFailure, UpmKeys.REASON_NO_DOWNLOAD, identifyString);
         }
         List<String> copies = copiesLoadingFirst(reservation.oldJar, targetName, mainClassOf(reservation, mainClassOf));
         return copies.isEmpty() ? null : StageResult.failed(reservation.previousFailure,
-                Keys.REASON_OTHER_COPY_LOADS_FIRST, targetName, String.join(", ", copies));
+                UpmKeys.REASON_OTHER_COPY_LOADS_FIRST, targetName, String.join(", ", copies));
     }
 
     /**
@@ -640,7 +895,7 @@ public final class ModuleFileTransactions {
         String targetName = staged.getName();
         if (!staged.isFile() || !SecurityPolicy.isValidModuleJar(staged)) {
             discardStaging(work);
-            return StageResult.failed(previousFailure, Keys.REASON_INVALID_JAR, targetName);
+            return StageResult.failed(previousFailure, UpmKeys.REASON_INVALID_JAR, targetName);
         }
         String stagedVersion;
         String stagedHash;
@@ -649,11 +904,11 @@ public final class ModuleFileTransactions {
             stagedHash = readSha256(staged);
         } catch (IOException readError) {
             discardStaging(work);
-            return StageResult.failed(previousFailure, Keys.REASON_STAGED_UNREADABLE, targetName, describe(readError));
+            return StageResult.failed(previousFailure, UpmKeys.REASON_STAGED_UNREADABLE, targetName, describe(readError));
         }
         if (stagedVersion == null) {
             discardStaging(work);
-            return StageResult.failed(previousFailure, Keys.REASON_WRONG_IDENTITY, targetName, record.key);
+            return StageResult.failed(previousFailure, UpmKeys.REASON_WRONG_IDENTITY, targetName, record.key);
         }
         StageResult wrongVersion = refuseOtherVersion(work, targetName, stagedVersion, latest, previousFailure);
         if (wrongVersion != null) {
@@ -681,7 +936,7 @@ public final class ModuleFileTransactions {
             return null;
         }
         discardStaging(work);
-        return StageResult.failed(previousFailure, Keys.REASON_WRONG_VERSION, targetName, stagedVersion.trim(),
+        return StageResult.failed(previousFailure, UpmKeys.REASON_WRONG_VERSION, targetName, stagedVersion.trim(),
                 latest.trim());
     }
 
@@ -700,35 +955,15 @@ public final class ModuleFileTransactions {
         String declared = PluginYmlReader.readFromJarFile(staged).getApiVersion();
         if (declared == null || declared.trim().isEmpty()) {
             discardStaging(work);
-            return StageResult.failed(previousFailure, Keys.REASON_NO_API_LEVEL, staged.getName(), level, floor, level);
+            return StageResult.failed(previousFailure, UpmKeys.REASON_NO_API_LEVEL, staged.getName(), level, floor, level);
         }
         Integer moduleLevel = ModuleApiLevels.parse(declared);
         if (moduleLevel != null && ModuleApiLevels.isInstallable(moduleLevel, floor, level)) {
             return null;
         }
         discardStaging(work);
-        return StageResult.failed(previousFailure, Keys.REASON_INCOMPATIBLE_API_LEVEL, staged.getName(), declared.trim(),
+        return StageResult.failed(previousFailure, UpmKeys.REASON_INCOMPATIBLE_API_LEVEL, staged.getName(), declared.trim(),
                 level, floor, level);
-    }
-
-    /** Writes the {@code PENDING} record of a staged JAR, under the lock; the staging is discarded when it cannot be. */
-    private StageResult writeStaged(Record record, File work, String previousFailure) {
-        synchronized (LOCK) {
-            if (CANCELLED.contains(record.key)) {
-                // An uninstall of this module ran while it downloaded: the record is never written.
-                discardStaging(work);
-                return StageResult.failed(previousFailure, Keys.REASON_CANCELLED_WHILE_DOWNLOADING);
-            }
-            try {
-                writeRecord(record);
-            } catch (IOException e) {
-                discardStaging(work);
-                return StageResult.failed(previousFailure, Keys.REASON_RECORD_FAILED, describe(e));
-            }
-        }
-        crashPoints.reached(CrashPoints.AFTER_RECORD_WRITTEN);
-        return StageResult.of(StageResult.Outcome.STAGED, record.moduleName, record.oldVersion,
-                record.newVersion, previousFailure);
     }
 
     /**
@@ -751,157 +986,355 @@ public final class ModuleFileTransactions {
         }
     }
 
-    /**
-     * What an existing record of this module says about staging now, under the lock: {@code null}
-     * to go ahead (after discarding a {@code FAILED} record, whose failure is left in
-     * {@link #lastDiscardedFailure}), or the refusal to return.
-     */
-    private StageResult checkExisting(Record lookup) {
-        File existingFile = recordFileOf(lookup);
-        if (!exists(existingFile)) {
-            return null;
+    private DownloadKey activeDownload(RemovedModule identity, boolean includeCancelled) {
+        for (var download : STAGING.entrySet()) {
+            DownloadKey slot = download.getKey();
+            if (transactionsFolder.equals(slot.folder) && (includeCancelled || !CANCELLED.contains(slot))
+                    && matches(identity, download.getValue())) {
+                return slot;
+            }
         }
-        Record existing;
-        try {
-            existing = readRecord(existingFile);
-        } catch (IOException | JsonParseException e) {
-            return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE, existingFile.getAbsolutePath(), describe(e));
-        }
-        // The same validation as start-up: a record start-up would refuse is never reported as a
-        // staged update (round-7 review).
-        String problem = existing == null ? "empty record" : problemWith(existing, existingFile);
-        if (problem != null) {
-            return StageResult.failed(null, Keys.REASON_RECORD_UNREADABLE, existingFile.getAbsolutePath(), problem);
-        }
-        return existingOutcome(existing, existingFile);
-    }
-
-    /**
-     * What a valid existing record of this module means for staging now: an update already waiting,
-     * one in progress, one held for the operator (refused until the operator removes the record), or a
-     * {@code FAILED} one, discarded -- unless discarding it would touch a file the transaction cannot
-     * identify, which holds it for the operator instead.
-     */
-    private StageResult existingOutcome(Record existing, File existingFile) {
-        if (Record.NEEDS_OPERATOR.equals(existing.state)) {
-            return StageResult.failed(null, Keys.REASON_NEEDS_OPERATOR, existing.failure,
-                    existingFile.getAbsolutePath());
-        }
-        if (Record.PENDING.equals(existing.state)) {
-            return StageResult.of(StageResult.Outcome.ALREADY_STAGED, existing.moduleName, existing.oldVersion,
-                    existing.newVersion, null);
-        }
-        if (!Record.FAILED.equals(existing.state)) {
-            return StageResult.of(StageResult.Outcome.BUSY, existing.moduleName, existing.oldVersion,
-                    existing.newVersion, null);
-        }
-        String restoreError = discardFailed(existing);
-        if (Record.NEEDS_OPERATOR.equals(existing.state)) {
-            return StageResult.failed(null, Keys.REASON_NEEDS_OPERATOR, existing.failure,
-                    existingFile.getAbsolutePath());
-        }
-        if (restoreError != null) {
-            return StageResult.failed(existing.failure, Keys.REASON_PREVIOUS_UNRESTORED, restoreError);
-        }
-        lastDiscardedFailure = existing.failure;
         return null;
     }
 
-    /**
-     * Marks the downloads running now that belong to the uninstalled module -- by its
-     * identify-string, a name it was loaded under, or the JAR it was loaded from -- so staging
-     * discards them instead of writing their record. Their version is not known yet, so they are
-     * not among the versions a cancellation returns; staging's own reply says it was cancelled.
-     * Called under {@link #LOCK}.
-     */
-    private static void cancelDownloads(RemovedModule removed) {
-        for (java.util.Map.Entry<String, String[]> download : STAGING.entrySet()) {
-            if (removed.matches(download.getKey(), download.getValue()[0], download.getValue()[1])) {
-                CANCELLED.add(download.getKey());
-            }
-        }
-    }
+    private record Stored(Record record, String revision) { }
 
-    /**
-     * {@link #cancelStagedUpdates(RemovedModule)} for a module known by one runtime name only.
-     *
-     * @param moduleName the module's runtime name
-     * @return the versions whose updates were cancelled
-     */
-    List<String> cancelStagedUpdates(String moduleName) {
-        return cancelStagedUpdates(new RemovedModule(Collections.<String>emptyList(),
-                Collections.singletonList(moduleName), Collections.<String>emptyList()));
-    }
-
-    /**
-     * Cancels every update transaction of a module being uninstalled: its record and its working
-     * folder -- the staged JAR and any kept old JAR -- are deleted, so nothing brings the module
-     * back at the next start, and a download of its update still running is discarded. The modules
-     * folder is not touched; the uninstall owns that.
-     *
-     * <p>A transaction belongs to the module when its identify-string, the runtime name it was staged
-     * under, or the JAR it would replace is one the uninstall resolved (see {@link RemovedModule}). The
-     * uninstall resolves those before it touches the modules folder, so the match holds whatever
-     * happened to the files afterwards -- deleted, deferred, not deletable, or a folder that could not
-     * be listed (round-10 review).
-     *
-     * @param removed the uninstalled module, as the uninstall resolved it
-     * @return the versions whose updates were cancelled
-     */
-    public List<String> cancelStagedUpdates(RemovedModule removed) {
-        synchronized (LOCK) {
-            cancelDownloads(removed);
-            List<String> cancelled = new ArrayList<>();
-            List<File> recordFiles;
+    private List<Stored> liveRecords(Record direct) throws IOException {
+        var records = new ArrayList<Stored>();
+        for (File file : recordFiles()) {
             try {
-                recordFiles = recordFiles();
-            } catch (IOException e) {
-                // The next start cannot list the folder either, so it applies nothing and reports it.
-                LOGGER.log(Level.WARNING, "No staged update of " + removed + " could be cancelled", e);
-                return cancelled;
+                byte[] bytes = Files.readAllBytes(file.toPath());
+                Record record = GSON.fromJson(new String(bytes, StandardCharsets.UTF_8), Record.class);
+                String problem = record == null ? "empty record" : problemWith(record, file);
+                if (problem != null) {
+                    throw new IOException(problem);
+                }
+                records.add(new Stored(record, sha256(bytes).substring(0, 16)));
+            } catch (IOException | JsonParseException invalid) {
+                if (direct != null && file.equals(recordFileOf(direct))) {
+                    throw new IOException(invalid.getMessage(), invalid);
+                }
+                LOGGER.log(Level.FINE, "Could not list " + file, invalid);
             }
-            for (File recordFile : recordFiles) {
-                Record record;
-                try {
-                    record = readRecord(recordFile);
-                } catch (IOException | JsonParseException e) {
-                    LOGGER.log(Level.FINE, "Could not read " + recordFile, e);
-                    continue;
+        }
+        var superseded = supersededIds(records.stream().map(Stored::record).toList());
+        return records.stream().filter(stored -> !superseded.contains(idOf(stored.record))).toList();
+    }
+
+    private java.util.Optional<Stored> findStored(RemovedModule identity, Record direct) throws IOException {
+        return liveRecords(direct).stream().filter(stored -> matches(identity, stored.record)).findFirst();
+    }
+
+    private static RemovedModule identityOf(Record record) {
+        var files = new ArrayList<>(record.removals.stream().map(removal -> removal.name).toList());
+        files.add(record.oldName);
+        files.add(record.targetName);
+        return new RemovedModule(Collections.singletonList(record.key), Collections.singletonList(record.moduleName), files);
+    }
+
+    private static RemovedModule identityOf(String name) {
+        return new RemovedModule(List.of(name), List.of(name), List.of(name));
+    }
+
+    private static boolean matches(RemovedModule identity, Record record) {
+        return identity.matches(record.key, record.moduleName, record.oldName)
+                || identity.matches(null, null, record.targetName)
+                || record.removals.stream().anyMatch(removal -> identity.matches(null, null, removal.name));
+    }
+
+    private static String displayName(Record record) {
+        return record.moduleName == null || record.moduleName.isBlank() ? record.key : record.moduleName;
+    }
+
+    private static PendingChanges.Kind kindOf(Record record) {
+        return switch (record.type) {
+            case Record.INSTALL -> PendingChanges.Kind.INSTALL;
+            case Record.UPDATE -> PendingChanges.Kind.UPDATE;
+            default -> PendingChanges.Kind.UNINSTALL;
+        };
+    }
+
+    private static PendingChanges.State stateOf(Record record) {
+        return switch (record.state) {
+            case Record.PENDING -> PendingChanges.State.PENDING;
+            case Record.FAILED -> PendingChanges.State.FAILED;
+            case Record.NEEDS_OPERATOR -> PendingChanges.State.NEEDS_OPERATOR;
+            default -> PendingChanges.State.IN_PROGRESS;
+        };
+    }
+
+    private PendingChanges.PendingChange pendingView(Record record, String revision, boolean downloading) {
+        PendingChanges.Kind kind = kindOf(record);
+        List<String> files = kind == PendingChanges.Kind.UNINSTALL
+                ? record.removals.stream().map(removal -> removal.name).toList()
+                : record.targetName == null ? List.of() : List.of(record.targetName);
+        String module = displayName(record);
+        return new PendingChanges.PendingChange(idOf(record), revision, kind, module, record.fromVersion,
+                record.newVersion, files, record.requestedAt, record.requestedBy,
+                downloading ? PendingChanges.State.DOWNLOADING : stateOf(record), record.failure,
+                downloading ? null : recordFileOf(record), kind == PendingChanges.Kind.UNINSTALL
+                ? removalContent(record) : ModuleContent.NONE);
+    }
+
+    PendingChanges.Snapshot pendingSnapshot() {
+        synchronized (LOCK) {
+            var entries = new ArrayList<PendingChanges.PendingChange>();
+            try {
+                for (Stored stored : liveRecords(null)) {
+                    if (activeDownload(identityOf(stored.record), false) == null) {
+                        entries.add(pendingView(stored.record, stored.revision, false));
+                    }
                 }
-                if (record == null || !Record.UPDATE.equals(record.type)
-                        || !recordFile.getName().equals(recordFileOf(record).getName())) {
-                    continue;
-                }
-                if (!removed.matches(record.key, record.moduleName, record.oldName)) {
-                    continue;
-                }
-                if (cancelOne(record, recordFile)) {
-                    cancelled.add(record.newVersion);
+            } catch (IOException | SecurityException unreadable) {
+                LOGGER.log(Level.WARNING, "Could not list module transactions", unreadable);
+            }
+            for (var download : STAGING.entrySet()) {
+                if (transactionsFolder.equals(download.getKey().folder) && !CANCELLED.contains(download.getKey())) {
+                    entries.add(pendingView(download.getValue(), null, true));
                 }
             }
-            return cancelled;
+            entries.sort(Comparator.comparing(PendingChanges.PendingChange::requestedAt,
+                    Comparator.nullsFirst(Comparator.naturalOrder())).thenComparing(PendingChanges.PendingChange::id));
+            int size = entries.size();
+            return new PendingChanges.Snapshot(entries.subList(0, Math.min(size, PendingChanges.MAX_ITEMS)),
+                    Math.max(0, size - PendingChanges.MAX_ITEMS), pendingGeneration());
         }
     }
 
     /**
-     * Cancels one staged update: its working folder and record are deleted -- unless the record is
-     * held for the operator, or its folder holds a file the transaction cannot identify, which is then
-     * held for the operator rather than deleted (foreign-file rule). Called under {@link #LOCK}.
+     * Finds the catalogue identity of a queued change without consulting update scan results.
      *
-     * @return whether it was cancelled
+     * @param name a module name, catalogue identifier or JAR name
+     * @return the queued catalogue identifier, or null if the change cannot be identified
      */
-    private boolean cancelOne(Record record, File recordFile) {
-        if (Record.NEEDS_OPERATOR.equals(record.state)) {
-            return false;
+    public String pendingIdentifyString(String name) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        synchronized (LOCK) {
+            try {
+                RemovedModule identity = identityOf(name);
+                DownloadKey download = activeDownload(identity, false);
+                if (download != null) {
+                    return download.identifyString;
+                }
+                return findStored(identity, null).map(stored -> normalize(stored.record.key)).orElse(null);
+            } catch (IOException | SecurityException unreadable) {
+                LOGGER.log(Level.WARNING, "Could not read module transactions", unreadable);
+                return null;
+            }
+        }
+    }
+
+    PendingChanges.PendingChange findPending(String name) {
+        synchronized (LOCK) {
+            try {
+                var identity = identityOf(name);
+                DownloadKey download = activeDownload(identity, false);
+                if (download != null) {
+                    return pendingView(STAGING.get(download), null, true);
+                }
+                return findStored(identity, null).map(stored -> pendingView(stored.record, stored.revision, false))
+                        .orElse(null);
+            } catch (IOException | SecurityException failure) {
+                LOGGER.log(Level.WARNING, "Could not read module transactions", failure);
+                return null;
+            }
+        }
+    }
+
+    PendingChanges.RevokeResult revokePending(String id, String expectedRevision, boolean checkRevision) {
+        synchronized (LOCK) {
+            try {
+                for (var download : STAGING.entrySet()) {
+                    if (transactionsFolder.equals(download.getKey().folder) && !CANCELLED.contains(download.getKey())
+                            && idOf(download.getValue()).equals(id)) {
+                        if (checkRevision && expectedRevision != null) {
+                            return PendingChanges.RevokeResult.changed();
+                        }
+                        CANCELLED.add(download.getKey());
+                        return PendingChanges.RevokeResult.revoked(pendingView(download.getValue(), null, true));
+                    }
+                }
+                for (Stored stored : liveRecords(null)) {
+                    if (idOf(stored.record).equals(id)) {
+                        if (activeDownload(identityOf(stored.record), false) != null
+                                || checkRevision && !stored.revision.equals(expectedRevision)) {
+                            return PendingChanges.RevokeResult.changed();
+                        }
+                        var before = pendingView(stored.record, stored.revision, false);
+                        if (!before.revocable()) {
+                            return PendingChanges.RevokeResult.notRevocable(before);
+                        }
+                        String error = cancelPending(stored.record);
+                        return error == null ? PendingChanges.RevokeResult.revoked(before)
+                                : PendingChanges.RevokeResult.failed(error);
+                    }
+                }
+                return PendingChanges.RevokeResult.notFound();
+            } catch (IOException | SecurityException failure) {
+                return PendingChanges.RevokeResult.failed(describe(failure));
+            }
+        }
+    }
+
+    PendingChanges.RevokeResult revokeByModule(String name) {
+        synchronized (LOCK) {
+            var current = findPending(name);
+            return current == null ? PendingChanges.RevokeResult.notFound() : revokePending(current.id(), null, false);
+        }
+    }
+
+    static <T> T underLock(java.util.function.Supplier<T> work) {
+        synchronized (LOCK) {
+            return work.get();
+        }
+    }
+
+    PluginInstallUtils.PendingResult queueRemoval(String name, String key, String version, RemovedModule identity,
+                                                  List<File> files, List<String> undetermined, CommandSender sender,
+                                                  boolean running) {
+        var result = PluginInstallUtils.PendingResult.builder();
+        Record downloading = cancelDownload(identity);
+        if (downloading != null) {
+            result.add(UpmKeys.REVOKE_DONE_DOWNLOADING, string("module", displayName(downloading)));
         }
         try {
-            requireRecorded(record, may(backupOf(record), record.oldSha256), may(stagedOf(record), record.stagedSha256));
-        } catch (RecordRefused refused) {
-            LOGGER.log(Level.SEVERE, "The staged update of module " + record.moduleName + " was not cancelled: "
-                    + refused.getMessage() + "; its record " + recordFile.getAbsolutePath() + " is kept");
-            return false;
+            Record record = new Record();
+            record.type = Record.REMOVE;
+            record.removalIdentifyString = normalize(key);
+            record.key = record.removalIdentifyString == null ? name : record.removalIdentifyString;
+            record.moduleName = name;
+            record.fromVersion = version;
+            Record previous = findStored(identity, record).map(Stored::record).orElse(null);
+            return queueRemovalOf(record, previous, downloading, files, undetermined, sender, running, result);
+        } catch (IOException | SecurityException failure) {
+            return result.add(UpmKeys.UNINSTALL_NOT_RECORDED, string("module", name),
+                    string("error", describe(failure))).build();
         }
-        return deleteTree(workFolder(record)) && deleteQuietly(recordFile);
+    }
+
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    private PluginInstallUtils.PendingResult queueRemovalOf(Record record, Record previous, Record downloading,
+                                                            List<File> files, List<String> undetermined, CommandSender sender,
+                                                            boolean running, PluginInstallUtils.PendingResult.Builder result)
+            throws IOException {
+        Arg module = string("module", displayName(record));
+        if (previous != null) {
+            switch (previous.state) {
+                case Record.NEEDS_OPERATOR:
+                    return result.add(UpmKeys.UNINSTALL_REFUSED_HELD_FOR_OPERATOR, module,
+                            string("file", recordFileOf(previous).getAbsolutePath())).build();
+                case Record.FAILED:
+                    result.add(UpmKeys.PENDING_PREVIOUS_FAILED, module, string("failure", text(previous.failure)));
+                    String error = discardFailed(previous);
+                    if (error != null) {
+                        throw new IOException(error);
+                    }
+                    previous = null;
+                    break;
+                case Record.PENDING:
+                    if (Record.INSTALL.equals(previous.type) && !running) {
+                        String cancelError = cancelPending(previous);
+                        if (cancelError != null) {
+                            throw new IOException(cancelError);
+                        }
+                        return result.add(UpmKeys.UNINSTALL_CANCELLED_INSTALL, string("module", displayName(previous)),
+                                string("version", previous.newVersion)).build();
+                    }
+                    if (Record.REMOVE.equals(previous.type)) {
+                        return result.add(UpmKeys.UNINSTALL_ALREADY_QUEUED, module)
+                                .warning(displayName(previous), removalContent(previous)).build();
+                    }
+                    break;
+                default:
+                    return result.add(UpmKeys.PENDING_UNFINISHED, module).build();
+            }
+        }
+        if (files.isEmpty()) {
+            if (!running && downloading != null && Record.INSTALL.equals(downloading.type)) {
+                return result.build();
+            }
+            if (running) {
+                result.add(UpmKeys.UNINSTALL_NO_JAR, module, string("folder", modulesFolder.getAbsolutePath()));
+            } else {
+                result.add(UpmKeys.UNINSTALL_NOT_FOUND);
+            }
+            return result.undetermined(undetermined).build();
+        }
+        for (File file : files) {
+            record.removals.add(captureRemoval(file));
+        }
+        record.state = Record.PENDING;
+        record.requestedAt = System.currentTimeMillis();
+        record.requestedBy = PendingChanges.Requester.from(sender);
+        checkReplacement(previous);
+        publish(record, previous);
+        result.queued().add(UpmKeys.UNINSTALL_QUEUED, module,
+                string("files", String.join(", ", record.removals.stream().map(r -> r.name).toList())));
+        if (previous != null && Record.UPDATE.equals(previous.type)) {
+            result.add(UpmKeys.UNINSTALL_ALSO_CANCELLED_UPDATE, module, string("version", previous.newVersion));
+        }
+        return result.warning(displayName(record), removalContent(record)).undetermined(undetermined).build();
+    }
+
+    private static ModuleContent removalContent(Record record) {
+        return ModuleContentLedgers.contentOf(record.removalIdentifyString, displayName(record));
+    }
+
+    private Record cancelDownload(RemovedModule identity) {
+        DownloadKey download = activeDownload(identity, false);
+        if (download == null) {
+            return null;
+        }
+        CANCELLED.add(download);
+        return STAGING.get(download);
+    }
+
+    private Removal captureRemoval(File file) throws IOException {
+        if (!isDirectChild(modulesFolder, file) || !isJarName(file.getName())) {
+            throw new IOException(file.getAbsolutePath() + " is not a JAR in " + modulesFolder.getAbsolutePath());
+        }
+        Removal removal = new Removal();
+        removal.name = file.getName();
+        removal.size = Files.size(file.toPath());
+        removal.lastModified = Files.getLastModifiedTime(file.toPath()).toMillis();
+        removal.sha256 = readSha256(file);
+        return removal;
+    }
+
+    private void checkPendingFiles(Record record) throws RecordRefused {
+        refuseLinkedFolders(record);
+        if (Record.INSTALL.equals(record.type)) {
+            requireRecorded(record, may(stagedOf(record), record.stagedSha256));
+        } else if (Record.UPDATE.equals(record.type)) {
+            requireRecorded(record, may(backupOf(record)), may(stagedOf(record), record.stagedSha256));
+        }
+    }
+
+    private String cancelPending(Record record) {
+        try {
+            checkPendingFiles(record);
+        } catch (RecordRefused refusal) {
+            return refusal.getMessage();
+        }
+        return removePendingRecord(record);
+    }
+
+    private String removePendingRecord(Record record) {
+        try {
+            purgeSuperseded(record);
+            // Unlink the authoritative journal first. A scratch directory left after that cannot apply.
+            Files.delete(recordFileOf(record).toPath());
+        } catch (IOException | SecurityException failure) {
+            return describe(failure);
+        }
+        deleteTree(workFolder(record));
+        return null;
+    }
+
+    static String text(String value) {
+        return value == null ? "?" : value;
     }
 
     /**
@@ -942,134 +1375,6 @@ public final class ModuleFileTransactions {
         }
     }
 
-    /**
-     * Records module JARs an uninstall could not delete now, so the next start deletes them before
-     * any module loads (#518). On Windows the shared module class loader holds every module JAR
-     * open for the life of the server, so this is the only point at which such a JAR can go.
-     *
-     * <p>Each file is recorded with its size, modification time and SHA-256; the next start deletes
-     * it only if it is still that file, so an install under the same name since -- or a copy put
-     * back -- is never deleted. An install through {@code /upm} also forgets the record
-     * ({@link #forgetDeferredRemoval(String)}).
-     *
-     * @param moduleName the module being uninstalled, as the operator named it
-     * @param files      the JARs still on disk, each directly in the modules folder
-     * @throws IOException when the record cannot be written, or a file is not in the modules folder
-     *                     or cannot be read
-     */
-    public void recordDeferredRemoval(String moduleName, List<File> files) throws IOException {
-        deniedAsIo(transactionsFolder, () -> recordDeferredRemovalChecked(moduleName, files));
-    }
-
-    /** {@link #recordDeferredRemoval(String, List)}, before a denied file access is made a checked failure. */
-    private void recordDeferredRemovalChecked(String moduleName, List<File> files) throws IOException {
-        synchronized (LOCK) {
-            Record record = new Record();
-            record.type = Record.REMOVE;
-            record.key = moduleName;
-            File recordFile = recordFileOf(record);
-            if (exists(recordFile)) {
-                record.removals.addAll(mergeableRemovals(recordFile));
-            }
-            for (File file : files) {
-                if (!isDirectChild(modulesFolder, file)) {
-                    throw new IOException(file.getAbsolutePath() + " is not in the modules folder "
-                            + modulesFolder.getAbsolutePath());
-                }
-                String hash = sha256Of(file);
-                if (hash == null) {
-                    throw new IOException(file.getAbsolutePath() + " could not be read");
-                }
-                Removal removal = new Removal();
-                removal.name = file.getName();
-                removal.size = Files.size(file.toPath());
-                removal.lastModified = Files.getLastModifiedTime(file.toPath()).toMillis();
-                removal.sha256 = hash;
-                record.removals.removeIf(r -> removal.name.equals(r.name));
-                record.removals.add(removal);
-            }
-            record.state = Record.PENDING;
-            record.moduleName = moduleName;
-            writeRecord(record);
-        }
-    }
-
-    /**
-     * Forgets a recorded deletion of a file name an install is writing again, so the next start does
-     * not delete the new install -- even when it is byte-for-byte the JAR that was recorded.
-     *
-     * @param fileName the file name the install wrote into the modules folder
-     * @throws IOException when a record cannot be read or rewritten
-     */
-    public void forgetDeferredRemoval(String fileName) throws IOException {
-        deniedAsIo(transactionsFolder, () -> forgetDeferredRemovalChecked(fileName));
-    }
-
-    /** {@link #forgetDeferredRemoval(String)}, before a denied file access is made a checked failure. */
-    private void forgetDeferredRemovalChecked(String fileName) throws IOException {
-        synchronized (LOCK) {
-            for (File recordFile : recordFiles()) {
-                Record record = removalRecordIn(recordFile);
-                if (record == null || !record.removals.removeIf(removal -> fileName.equals(removal.name))) {
-                    continue;
-                }
-                if (record.removals.isEmpty()) {
-                    Files.deleteIfExists(recordFile.toPath());
-                } else {
-                    writeRecord(record);
-                }
-            }
-        }
-    }
-
-    /**
-     * The entries of an earlier removal record of the same module, to merge into a new one; none when
-     * it cannot be read or fails the validation start-up applies ({@link #problemWith}: for example a
-     * null entry), and it is then replaced, with a warning naming it (Codex round 18, #561).
-     */
-    private List<Removal> mergeableRemovals(File recordFile) {
-        Record existing;
-        try {
-            existing = readRecord(recordFile);
-        } catch (IOException unreadable) {
-            // An unreadable earlier record of this module cannot be merged; the new one replaces it.
-            LOGGER.log(Level.WARNING, "Replacing an unreadable update record while recording a deletion: "
-                    + recordFile.getAbsolutePath(), unreadable);
-            return Collections.emptyList();
-        }
-        String problem = existing == null ? null : problemWith(existing, recordFile);
-        if (problem != null) {
-            LOGGER.log(Level.WARNING, "Replacing an update record that cannot be carried out (" + problem
-                    + ") while recording a deletion: " + recordFile.getAbsolutePath());
-            return Collections.emptyList();
-        }
-        return existing == null || existing.removals == null ? Collections.<Removal>emptyList() : existing.removals;
-    }
-
-    /**
-     * The removal record in {@code recordFile}, or {@code null} when it holds none: a record of another
-     * type, or one that cannot be read or fails the validation start-up applies ({@link #problemWith}:
-     * for example a null entry). A record that cannot be used is warned about, naming it, and never
-     * stops the others being cleared (round-5 review; Codex round 18, #561).
-     */
-    private Record removalRecordIn(File recordFile) {
-        Record record;
-        try {
-            record = readRecord(recordFile);
-        } catch (IOException unreadable) {
-            LOGGER.log(Level.WARNING, "Skipped an unreadable update record while clearing a recorded deletion: "
-                    + recordFile.getAbsolutePath(), unreadable);
-            return null;
-        }
-        String problem = record == null ? "empty record" : problemWith(record, recordFile);
-        if (problem != null) {
-            LOGGER.log(Level.WARNING, "Skipped an update record that cannot be carried out (" + problem
-                    + ") while clearing a recorded deletion: " + recordFile.getAbsolutePath());
-            return null;
-        }
-        return Record.REMOVE.equals(record.type) ? record : null;
-    }
-
     // ------------------------------------------------------------------------------------------
     // Start-up -- before the module class loader is built, and after the modules load
     // ------------------------------------------------------------------------------------------
@@ -1107,11 +1412,18 @@ public final class ModuleFileTransactions {
         // update whose old JAR an uninstall removed, or still has to remove, must see that before
         // it moves anything.
         pendingRemovals.clear();
+        var candidates = new ArrayList<>(removals);
+        candidates.addAll(updates);
+        var superseded = supersededIds(candidates);
         for (Record record : removals) {
-            applyGuarded(record);
+            if (!superseded.contains(idOf(record))) {
+                applyGuarded(record);
+            }
         }
         for (Record record : updates) {
-            applyGuarded(record);
+            if (!superseded.contains(idOf(record))) {
+                applyGuarded(record);
+            }
         }
         sweepOrphanWorkFolders(ids);
     }
@@ -1125,11 +1437,13 @@ public final class ModuleFileTransactions {
     private void applyGuarded(Record record) {
         String entryState = record.state;
         try {
+            purgeSuperseded(record);
             applyRecord(record);
         } catch (NeedsOperator held) {
             // Already recorded and reported by requireRecorded.
             appliedThisStart.remove(record);
-        } catch (RecordRefused refused) {
+        } catch (IOException | RecordRefused refused) {
+            outcome(record, StartOutcome.Result.NOT_APPLIED);
             report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(), refused.getMessage());
         } catch (RuntimeException unexpected) {
             failUnexpectedly(record, entryState, unexpected);
@@ -1161,21 +1475,32 @@ public final class ModuleFileTransactions {
                 error.addSuppressed(again);
             }
         }
+        outcome(record, StartOutcome.Result.NOT_APPLIED);
         report(Level.SEVERE, Keys.TRANSACTION_ERROR, recordFileOf(record).getAbsolutePath(), describe(error));
     }
 
     private void applyRecord(Record record) throws RecordRefused {
+        if (Record.NEEDS_OPERATOR.equals(record.state)) {
+            outcome(record, StartOutcome.Result.NEEDS_OPERATOR);
+            report(Level.SEVERE, Keys.NEEDS_OPERATOR, displayName(record), record.failure,
+                    recordFileOf(record).getAbsolutePath());
+            return;
+        }
         if (Record.REMOVE.equals(record.type)) {
             applyRemoval(record);
             return;
         }
-        if (!Record.UPDATE.equals(record.type)) {
+        if (!Record.UPDATE.equals(record.type) && !Record.INSTALL.equals(record.type)) {
             throw new RecordRefused("unknown record type " + record.type);
         }
         refuseLinkedFolders(record);
         switch (record.state) {
             case Record.PENDING:
-                applyUpdate(record);
+                if (Record.INSTALL.equals(record.type)) {
+                    applyInstall(record);
+                } else {
+                    applyUpdate(record);
+                }
                 break;
             case Record.APPLIED:
                 // The previous start swapped the files and ended before it observed anything.
@@ -1191,12 +1516,12 @@ public final class ModuleFileTransactions {
                 finishRollback(record, RollbackPhase.RESUMED);
                 break;
             case Record.FAILED:
-                restoreAfterFailure(record);
-                break;
-            case Record.NEEDS_OPERATOR:
-                // Held for the operator: nothing is moved or deleted, and every start says so again.
-                report(Level.SEVERE, Keys.NEEDS_OPERATOR, record.moduleName, record.failure,
-                        recordFileOf(record).getAbsolutePath());
+                // A failed install with its JAR still staged never moved a file into modules/.
+                // Keep the failure visible until the next request, without reporting it at every start.
+                if (!Record.INSTALL.equals(record.type) || !present(stagedOf(record))) {
+                    restoreAfterFailure(record);
+                    outcome(record, StartOutcome.Result.NOT_APPLIED);
+                }
                 break;
             default:
                 throw new RecordRefused("unknown state " + record.state);
@@ -1223,24 +1548,28 @@ public final class ModuleFileTransactions {
                         // The kept old JAR may be deleted only once the decision is on disk. The
                         // record still says APPLIED, so the next start restores the old version as
                         // unconfirmed -- deleting the old JAR now would leave it nothing to restore.
+                        outcome(record, StartOutcome.Result.NOT_APPLIED);
                         continue;
                     }
                     crashPoints.reached(CrashPoints.AFTER_DECISION_RECORDED);
                     finishCommit(record);
                 } else {
                     record.state = Record.ROLLING_BACK;
-                    persist(record);
-                    crashPoints.reached(CrashPoints.AFTER_DECISION_RECORDED);
+                    if (persist(record)) {
+                        crashPoints.reached(CrashPoints.AFTER_DECISION_RECORDED);
+                    }
                     finishRollback(record, RollbackPhase.AFTER_LOAD);
                 }
             } catch (NeedsOperator held) {
                 // Already recorded and reported by requireRecorded.
                 continue;
             } catch (RecordRefused refused) {
+                outcome(record, StartOutcome.Result.NOT_APPLIED);
                 report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(),
                         refused.getMessage());
             } catch (RuntimeException unexpected) {
                 // One transaction's problem never ends the start, and never hides a load failure.
+                outcome(record, StartOutcome.Result.NOT_APPLIED);
                 report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(),
                         describe(unexpected));
             }
@@ -1251,13 +1580,33 @@ public final class ModuleFileTransactions {
      * Writes the lines this start collected, translated.
      *
      * @param logger where to write them
-     * @param i18n   the translation to apply to each line's key
+     * @param i18n   legacy translation lookup
+     * @param messages the text engine, or null if it could not be initialized
      */
-    public void flushReports(Logger logger, Function<String, String> i18n) {
+    public void flushReports(Logger logger, Function<String, String> i18n, Messages messages) {
         for (Report report : reports) {
-            logger.log(report.getLevel(), String.format(i18n.apply(report.getKey()), report.getArgs()));
+            String line;
+            if (report.messageKey == null) {
+                line = String.format(i18n.apply(report.getKey()), report.getArgs());
+            } else if (messages != null) {
+                line = PlainTextComponentSerializer.plainText().serialize(
+                        messages.render(report.messageKey, Bukkit.getConsoleSender(), report.messageArgs));
+            } else {
+                line = report.messageKey.translationKey() + " " + Arrays.stream(report.messageArgs)
+                        .map(arg -> switch (arg) {
+                            case Arg.Unparsed value -> value.value();
+                            case Arg.Numeric number -> number.value().toString();
+                            case Arg.Moment moment -> moment.value().toString();
+                            case Arg.Localized text -> text.value().toString();
+                        }).collect(java.util.stream.Collectors.joining(", "));
+            }
+            logger.log(report.getLevel(), line);
         }
         reports.clear();
+    }
+
+    private void report(Level level, MessageKey key, Arg... args) {
+        reports.add(new Report(level, key, args));
     }
 
     /**
@@ -1267,6 +1616,80 @@ public final class ModuleFileTransactions {
      */
     List<Report> pendingReports() {
         return Collections.unmodifiableList(new ArrayList<>(reports));
+    }
+
+    private void applyInstall(Record record) throws RecordRefused {
+        File staged = stagedOf(record);
+        File target = confined(modulesFolder, record.targetName);
+        if (present(staged) && present(target)) {
+            record.state = Record.FAILED;
+            record.failure = "a file already exists: " + target.getAbsolutePath();
+            persist(record);
+            outcome(record, StartOutcome.Result.NOT_APPLIED);
+            reportInstall(Level.SEVERE, UpmKeys.START_INSTALL_TARGET_EXISTS, record,
+                    string("file", target.getName()), string("folder", modulesFolder.getAbsolutePath()));
+            return;
+        }
+        try {
+            if (present(staged) && isStagedJar(staged, record)) {
+                Files.createDirectories(modulesFolder.toPath());
+                ops.move(staged.toPath(), target.toPath());
+                crashPoints.reached(CrashPoints.AFTER_INSTALL_MOVED);
+            } else if (present(staged) || !isStagedJar(target, record)) {
+                throw new IOException("the checked staged JAR is missing or its SHA-256 has changed");
+            }
+        } catch (IOException | SecurityException failure) {
+            failInstall(record, failure);
+            return;
+        }
+        record.state = Record.APPLIED;
+        if (!persist(record)) {
+            finishInstallRollback(record, RollbackPhase.INSTALL_NOT_RECORDED);
+            return;
+        }
+        crashPoints.reached(CrashPoints.AFTER_INSTALL_APPLIED_RECORDED);
+        appliedThisStart.add(record);
+    }
+
+    private void failInstall(Record record, Throwable failure) {
+        record.state = Record.FAILED;
+        record.failure = describe(failure);
+        persist(record);
+        outcome(record, StartOutcome.Result.NOT_APPLIED);
+        if (isAcrossFileSystems(failure)) {
+            reportInstall(Level.SEVERE, UpmKeys.START_INSTALL_CROSS_FILE_SYSTEM, record,
+                    string("folder", modulesFolder.getAbsolutePath()), string("work", transactionsFolder.getAbsolutePath()));
+        } else {
+            reportInstall(Level.SEVERE, UpmKeys.START_INSTALL_FAILED, record, string("error", record.failure));
+        }
+    }
+
+    private void reportInstall(Level level, MessageKey key, Record record, Arg... details) {
+        Arg[] args = Arrays.copyOf(details, details.length + 2);
+        args[details.length] = string("module", displayName(record));
+        args[details.length + 1] = string("version", record.newVersion);
+        report(level, key, args);
+    }
+
+    private void finishInstallRollback(Record record, RollbackPhase phase) throws RecordRefused {
+        File target = confined(modulesFolder, record.targetName);
+        requireRecorded(record, may(target, record.stagedSha256), may(stagedOf(record), record.stagedSha256));
+        String error = returnStagedJar(record);
+        if (error == null && (!deleteTree(workFolder(record)) || !deleteQuietly(recordFileOf(record)))) {
+            error = "could not clean the transaction folder or record";
+        }
+        if (error != null) {
+            outcome(record, StartOutcome.Result.NOT_APPLIED);
+            reportInstall(Level.SEVERE, UpmKeys.START_INSTALL_ROLLBACK_DEFERRED, record, string("error", error));
+            return;
+        }
+        outcome(record, StartOutcome.Result.ROLLED_BACK);
+        MessageKey message = switch (phase) {
+            case UNCONFIRMED -> UpmKeys.START_INSTALL_UNCONFIRMED;
+            case INSTALL_NOT_RECORDED -> UpmKeys.START_INSTALL_NOT_RECORDED;
+            case AFTER_LOAD, RESUMED -> UpmKeys.START_INSTALL_ROLLED_BACK;
+        };
+        reportInstall(Level.WARNING, message, record);
     }
 
     @SuppressWarnings("PMD.AvoidCatchingGenericException") // a refusal of any kind fails the apply, never the start
@@ -1390,6 +1813,7 @@ public final class ModuleFileTransactions {
         }
         deleteTree(work);
         deleteQuietly(recordFileOf(record));
+        outcome(record, StartOutcome.Result.NOT_APPLIED);
         report(Level.WARNING, Keys.UPDATE_ABANDONED, record.moduleName, record.newVersion, old.getAbsolutePath());
         return true;
     }
@@ -1424,6 +1848,7 @@ public final class ModuleFileTransactions {
     private void failApply(Record record, File file, Throwable error, Report specific) throws RecordRefused {
         String restoreError = undoApply(record);
         record.state = Record.FAILED;
+        outcome(record, StartOutcome.Result.NOT_APPLIED);
         if (restoreError == null && specific != null) {
             record.failure = file.getAbsolutePath() + ": " + describe(error);
             persist(record);
@@ -1468,6 +1893,15 @@ public final class ModuleFileTransactions {
      *         place (or there was none), otherwise what failed
      */
     private String undoApply(Record record) throws RecordRefused {
+        if (Record.REMOVE.equals(record.type)) {
+            return null;
+        }
+        if (Record.INSTALL.equals(record.type)) {
+            // A failed install may have been refused because its target was already occupied.
+            // In that case the staged copy still proves nothing was ever moved into modules/.
+            requireRecorded(record, may(stagedOf(record), record.stagedSha256));
+            return returnStagedJar(record);
+        }
         File target = confined(modulesFolder, record.targetName);
         File old = confined(modulesFolder, record.oldName);
         requireRecorded(record, may(target, record.stagedSha256), may(stagedOf(record), record.stagedSha256),
@@ -1549,6 +1983,7 @@ public final class ModuleFileTransactions {
         record.state = Record.NEEDS_OPERATOR;
         record.failure = detail;
         persist(record);
+        outcome(record, StartOutcome.Result.NEEDS_OPERATOR);
         report(Level.SEVERE, Keys.NEEDS_OPERATOR, record.moduleName, detail, recordFileOf(record).getAbsolutePath());
         throw new NeedsOperator(detail);
     }
@@ -1595,7 +2030,9 @@ public final class ModuleFileTransactions {
      */
     private void restoreAfterFailure(Record record) throws RecordRefused {
         String restoreError = undoApply(record);
-        if (restoreError != null) {
+        if (restoreError != null && Record.INSTALL.equals(record.type)) {
+            reportInstall(Level.SEVERE, UpmKeys.START_INSTALL_ROLLBACK_DEFERRED, record, string("error", restoreError));
+        } else if (restoreError != null) {
             report(Level.SEVERE, Keys.RESTORE_FAILED, record.moduleName, backupOf(record).getAbsolutePath(),
                     confined(modulesFolder, record.oldName).getAbsolutePath(), restoreError);
         }
@@ -1640,16 +2077,14 @@ public final class ModuleFileTransactions {
         } catch (RecordRefused refused) {
             return refused.getMessage();
         }
-        deleteTree(workFolder(record));
-        deleteQuietly(recordFileOf(record));
-        return null;
+        return removePendingRecord(record);
     }
 
     private boolean isLoadedFrom(Record record, File target, List<UltiToolsPlugin> loaded,
                                  Function<UltiToolsPlugin, File> codeSource) {
         String targetPath = canonicalPath(target);
         for (UltiToolsPlugin plugin : loaded) {
-            if (!record.key.equals(normalize(plugin.getIdentifyString()))) {
+            if (!Record.INSTALL.equals(record.type) && !record.key.equals(normalize(plugin.getIdentifyString()))) {
                 continue;
             }
             File source = codeSource.apply(plugin);
@@ -1662,10 +2097,23 @@ public final class ModuleFileTransactions {
     }
 
     private void finishCommit(Record record) throws RecordRefused {
+        if (Record.INSTALL.equals(record.type)) {
+            requireRecorded(record, may(stagedOf(record), record.stagedSha256),
+                    must(confined(modulesFolder, record.targetName), record.stagedSha256));
+            outcome(record, StartOutcome.Result.APPLIED);
+            if (!deleteTree(workFolder(record)) || !deleteQuietly(recordFileOf(record))) {
+                reportInstall(Level.WARNING, UpmKeys.START_INSTALL_CLEANUP_DEFERRED, record,
+                        string("folder", workFolder(record).getAbsolutePath()));
+            } else {
+                reportInstall(Level.INFO, UpmKeys.START_INSTALL_COMMITTED, record);
+            }
+            return;
+        }
         // The commit deletes the kept old JAR: it must be the recorded one, and the new JAR it commits
         // to must still be the staged one at the new JAR's name (Codex round 19, foreign-file rule).
         requireRecorded(record, may(backupOf(record), record.oldSha256), may(stagedOf(record), record.stagedSha256),
                 must(confined(modulesFolder, record.targetName), record.stagedSha256));
+        outcome(record, StartOutcome.Result.APPLIED);
         if (!deleteTree(workFolder(record)) || !deleteQuietly(recordFileOf(record))) {
             // Kept as COMMITTING: the next start finishes it. The module is updated either way.
             report(Level.WARNING, Keys.CLEANUP_DEFERRED, record.moduleName, workFolder(record).getAbsolutePath());
@@ -1681,6 +2129,10 @@ public final class ModuleFileTransactions {
      */
     @SuppressWarnings("PMD.AvoidCatchingGenericException")
     private void finishRollback(Record record, RollbackPhase phase) throws RecordRefused {
+        if (Record.INSTALL.equals(record.type)) {
+            finishInstallRollback(record, phase);
+            return;
+        }
         File target = confined(modulesFolder, record.targetName);
         File old = confined(modulesFolder, record.oldName);
         File backup = backupOf(record);
@@ -1692,7 +2144,9 @@ public final class ModuleFileTransactions {
             // Nothing is kept to put back. Either an earlier attempt already put it back (then the
             // new JAR is gone too, and only the record is left to clean up), or the kept JAR went
             // missing -- and removing the new JAR then would leave no version at all, so it stays.
-            if (isStagedJar(target, record)) {
+            boolean noBackup = isStagedJar(target, record);
+            outcome(record, noBackup ? StartOutcome.Result.NOT_APPLIED : StartOutcome.Result.ROLLED_BACK);
+            if (noBackup) {
                 report(Level.WARNING, Keys.ROLLBACK_NO_BACKUP, record.moduleName, backup.getAbsolutePath(),
                         target.getAbsolutePath());
             }
@@ -1710,6 +2164,7 @@ public final class ModuleFileTransactions {
             }
             ops.move(backup.toPath(), old.toPath());
         } catch (IOException | RuntimeException e) {
+            outcome(record, StartOutcome.Result.NOT_APPLIED);
             report(Level.SEVERE, phase == RollbackPhase.AFTER_LOAD ? Keys.ROLLBACK_DEFERRED
                     : Keys.ROLLBACK_FAILED_BEFORE_LOAD, record.moduleName, record.newVersion, record.oldVersion,
                     describe(e));
@@ -1717,6 +2172,7 @@ public final class ModuleFileTransactions {
         }
         deleteTree(workFolder(record));
         deleteQuietly(recordFileOf(record));
+        outcome(record, StartOutcome.Result.ROLLED_BACK);
         if (phase == RollbackPhase.AFTER_LOAD) {
             report(Level.WARNING, Keys.ROLLED_BACK, record.moduleName, record.newVersion, record.oldVersion,
                     record.oldVersion);
@@ -1749,6 +2205,7 @@ public final class ModuleFileTransactions {
         }
         List<Removal> remaining = new ArrayList<>();
         List<String> deleted = new ArrayList<>();
+        boolean skipped = false;
         for (int i = 0; i < recorded.size(); i++) {
             Removal removal = recorded.get(i);
             File file = targets.get(i);
@@ -1757,27 +2214,33 @@ public final class ModuleFileTransactions {
             }
             RecordedIdentity identity = recordedIdentity(removal, file);
             if (identity.readError != null) {
-                report(Level.SEVERE, Keys.REMOVAL_UNREADABLE, file.getAbsolutePath(), describe(identity.readError));
+                report(Level.SEVERE, UpmKeys.START_REMOVAL_UNREADABLE, string("module", displayName(record)),
+                        string("file", file.getAbsolutePath()), string("error", describe(identity.readError)));
                 remaining.add(removal);
                 pendingRemovals.add(removal.name);
                 continue;
             }
             if (!identity.same) {
-                report(Level.WARNING, Keys.REMOVAL_SKIPPED, file.getAbsolutePath());
+                skipped = true;
+                report(Level.WARNING, UpmKeys.START_REMOVAL_SKIPPED, string("module", displayName(record)),
+                        string("file", file.getAbsolutePath()));
                 continue;
             }
             try {
                 ops.delete(file.toPath());
-                deleted.add(file.getAbsolutePath());
+                deleted.add(file.getName());
             } catch (IOException | RuntimeException e) {
-                report(Level.SEVERE, Keys.REMOVAL_FAILED, file.getAbsolutePath(), describe(e));
+                report(Level.SEVERE, UpmKeys.START_REMOVAL_FAILED, string("module", displayName(record)),
+                        string("file", file.getAbsolutePath()), string("error", describe(e)));
                 remaining.add(removal);
                 pendingRemovals.add(removal.name);
             }
         }
         if (!deleted.isEmpty()) {
-            report(Level.INFO, Keys.REMOVED, String.join(", ", deleted));
+            report(Level.INFO, UpmKeys.START_REMOVAL_REMOVED, string("module", displayName(record)),
+                    string("files", String.join(", ", deleted)));
         }
+        outcome(record, remaining.isEmpty() && !skipped ? StartOutcome.Result.APPLIED : StartOutcome.Result.NOT_APPLIED);
         if (remaining.isEmpty()) {
             deleteQuietly(recordFileOf(record));
         } else {
@@ -1928,7 +2391,8 @@ public final class ModuleFileTransactions {
      * validation start-up and staging share.
      */
     private String problemWith(Record record, File recordFile) {
-        if (record.type == null || record.key == null || record.state == null
+        if (!(Record.INSTALL.equals(record.type) || Record.UPDATE.equals(record.type) || Record.REMOVE.equals(record.type))
+                || record.key == null || record.state == null
                 || !recordFile.getName().equals(recordFileOf(record).getName())) {
             return "unrecognised record";
         }
@@ -1949,9 +2413,12 @@ public final class ModuleFileTransactions {
             }
             return null;
         }
+        if (Record.UPDATE.equals(record.type) && (record.oldName == null || record.oldVersion == null
+                || record.oldSha256 == null)) {
+            return record.oldName == null ? "oldName" : record.oldVersion == null ? "oldVersion" : "oldSha256";
+        }
         String[][] fields = {
-            {"moduleName", record.moduleName}, {"oldName", record.oldName}, {"oldVersion", record.oldVersion},
-            {"oldSha256", record.oldSha256}, {"stagedName", record.stagedName}, {"targetName", record.targetName},
+            {"moduleName", record.moduleName}, {"stagedName", record.stagedName}, {"targetName", record.targetName},
             {"newVersion", record.newVersion}, {"stagedSha256", record.stagedSha256}};
         for (String[] field : fields) {
             if (field[1] == null) {
@@ -2291,6 +2758,14 @@ public final class ModuleFileTransactions {
         return message == null ? error.getClass().getSimpleName() : error.getClass().getSimpleName() + ": " + message;
     }
 
+    private static String sha256(byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException unavailable) {
+            throw new IllegalStateException("SHA-256 is required", unavailable);
+        }
+    }
+
     private static String sha256(String text) {
         return ResourceHashSidecar.sha256(text.getBytes(StandardCharsets.UTF_8));
     }
@@ -2420,6 +2895,29 @@ public final class ModuleFileTransactions {
         String AFTER_NEW_MOVED = "after-new-moved";
         String AFTER_APPLIED_RECORDED = "after-applied-recorded";
         String AFTER_DECISION_RECORDED = "after-decision-recorded";
+        String AFTER_INSTALL_MOVED = "after-install-moved";
+        String AFTER_INSTALL_APPLIED_RECORDED = "after-install-applied-recorded";
+
+        static CrashPoints fromSystemProperty() {
+            String armed = System.getProperty("ultitools.upm.testCrashAt");
+            if (armed == null) {
+                return NONE;
+            }
+            return switch (armed) {
+                case BEFORE_RECORD_MOVED, AFTER_RECORD_WRITTEN, AFTER_OLD_MOVED, AFTER_NEW_MOVED,
+                        AFTER_APPLIED_RECORDED, AFTER_DECISION_RECORDED, AFTER_INSTALL_MOVED,
+                        AFTER_INSTALL_APPLIED_RECORDED -> point -> {
+                    if (armed.equals(point)) {
+                        LOGGER.severe("Test crash point reached: " + point);
+                        Runtime.getRuntime().halt(86);
+                    }
+                };
+                default -> {
+                    LOGGER.warning("Ignoring unknown ultitools.upm.testCrashAt test crash point.");
+                    yield NONE;
+                }
+            };
+        }
 
         void reached(String point);
     }
@@ -2445,6 +2943,7 @@ public final class ModuleFileTransactions {
     /** The persisted record of one transaction. Field names are the on-disk format. */
     @SuppressWarnings("PMD.DataClass")
     static final class Record {
+        static final String INSTALL = "INSTALL";
         static final String UPDATE = "UPDATE";
         static final String REMOVE = "REMOVE";
         static final String PENDING = "PENDING";
@@ -2468,6 +2967,13 @@ public final class ModuleFileTransactions {
         String newVersion;
         String stagedSha256;
         String failure;
+        Long requestedAt;
+        PendingChanges.Requester requestedBy;
+        String fromVersion;
+        // Unlike key, this is never a fallback module name.
+        String removalIdentifyString;
+        // A replacement of another kind can be durable before its predecessor is unlinked.
+        String supersedes;
         List<Removal> removals = new ArrayList<>();
     }
 
@@ -2545,11 +3051,23 @@ public final class ModuleFileTransactions {
         private final Level level;
         private final String key;
         private final Object[] args;
+        private final MessageKey messageKey;
+        private final Arg[] messageArgs;
+
+        Report(Level level, MessageKey key, Arg... args) {
+            this.level = level;
+            this.key = key.translationKey();
+            this.args = args.clone();
+            this.messageKey = key;
+            this.messageArgs = args.clone();
+        }
 
         Report(Level level, String key, Object... args) {
             this.level = level;
             this.key = key;
             this.args = args.clone();
+            this.messageKey = null;
+            this.messageArgs = null;
         }
 
         /** @return the log level */
@@ -2568,12 +3086,57 @@ public final class ModuleFileTransactions {
         }
     }
 
+    private static Arg[] namedArgs(MessageKey key, Object[] values) {
+        String names = reasonParameterNames(key);
+        String[] tags = names.isEmpty() ? new String[0] : names.split(" ");
+        if (tags.length != values.length) {
+            throw new IllegalArgumentException("Wrong argument count for " + key);
+        }
+        Arg[] result = new Arg[tags.length];
+        for (int i = 0; i < tags.length; i++) {
+            result[i] = values[i] instanceof Number number ? Arg.number(tags[i], number)
+                    : string(tags[i], values[i] == null ? "?" : values[i].toString());
+        }
+        return result;
+    }
+
+    private static String reasonParameterNames(MessageKey key) {
+        return switch (key.path()) {
+            case "upm.reason.no_identify_string" -> "";
+            case "upm.reason.not_loaded" -> "module";
+            case "upm.reason.not_in_modules_folder" -> "file folder";
+            case "upm.reason.shared_jar" -> "file modules";
+            case "upm.reason.old_jar_unreadable" -> "file";
+            case "upm.reason.ambiguous_identify_string" -> "module modules";
+            case "upm.reason.no_download" -> "module";
+            case "upm.reason.incompatible_api_level" -> "file declared level floor max";
+            case "upm.reason.no_api_level" -> "file level floor max";
+            case "upm.reason.no_compatible_update" -> "module level floor max";
+            case "upm.reason.other_copy_loads_first" -> "file files";
+            case "upm.reason.download_failed" -> "error";
+            case "upm.reason.invalid_jar", "upm.install.refused.target_exists" -> "file";
+            case "upm.reason.wrong_identity" -> "file module";
+            case "upm.reason.staged_unreadable" -> "file error";
+            case "upm.reason.wrong_version" -> "file declared version";
+            case "upm.reason.cancelled_while_downloading" -> "";
+            case "upm.reason.needs_operator" -> "failure file";
+            case "upm.reason.record_failed" -> "error";
+            case "upm.reason.access_denied" -> "error";
+            case "upm.reason.record_unreadable" -> "file error";
+            case "upm.reason.leftover_backup" -> "folder";
+            case "upm.reason.previous_unrestored" -> "error";
+            default -> throw new IllegalArgumentException("Not an update reason: " + key);
+        };
+    }
+
     /** What {@link #stageUpdate} did. */
     public static final class StageResult {
         /** The outcome. */
         public enum Outcome {
             /** Downloaded and recorded; takes effect at the next start. */
             STAGED,
+            QUEUED_INSTALL, REPLACED_INSTALL, REPLACED_UPDATE, CANCELLED_UPDATE,
+            CANCELLED_UNINSTALL, CANCELLED_UNINSTALL_SAME, ALREADY_CURRENT, PENDING_UNINSTALL, UNFINISHED,
             /** An update of this module is already staged; nothing changed. */
             ALREADY_STAGED,
             /** An earlier update of this module is still being finished at the next start; nothing changed. */
@@ -2583,16 +3146,17 @@ public final class ModuleFileTransactions {
         }
 
         private final Outcome outcome;
-        private final String moduleName;
+        private String moduleName;
         private final String oldVersion;
         private final String newVersion;
         private final String previousFailure;
-        private final String reasonKey;
-        private final Object[] reasonArgs;
+        private final MessageKey reasonKey;
+        private final Arg[] reasonArgs;
+        private String previousVersion;
 
         @SuppressWarnings("PMD.ExcessiveParameterList")
         private StageResult(Outcome outcome, String moduleName, String oldVersion, String newVersion,
-                            String previousFailure, String reasonKey, Object[] reasonArgs) {
+                            String previousFailure, MessageKey reasonKey, Arg[] reasonArgs) {
             this.outcome = outcome;
             this.moduleName = moduleName;
             this.oldVersion = oldVersion;
@@ -2605,11 +3169,27 @@ public final class ModuleFileTransactions {
         static StageResult of(Outcome outcome, String moduleName, String oldVersion, String newVersion,
                               String previousFailure) {
             return new StageResult(outcome, moduleName, oldVersion, newVersion, previousFailure, null,
-                    new Object[0]);
+                    new Arg[0]);
         }
 
-        static StageResult failed(String previousFailure, String reasonKey, Object... reasonArgs) {
-            return new StageResult(Outcome.FAILED, null, null, null, previousFailure, reasonKey, reasonArgs);
+        static StageResult failed(String previousFailure, MessageKey reasonKey, Object... values) {
+            return new StageResult(Outcome.FAILED, null, null, null, previousFailure, reasonKey,
+                    namedArgs(reasonKey, values));
+        }
+
+        StageResult withModule(String module) {
+            moduleName = module;
+            return this;
+        }
+
+        StageResult withPreviousVersion(String version) {
+            previousVersion = version;
+            return this;
+        }
+
+        /** @return the earlier pending version when an operation replaced or cancelled it */
+        public String getPreviousVersion() {
+            return previousVersion;
         }
 
         /** @return the outcome */
@@ -2643,12 +3223,12 @@ public final class ModuleFileTransactions {
         }
 
         /** @return the catalogue key of the reason nothing was staged, or {@code null} */
-        public String getReasonKey() {
+        public MessageKey getReasonKey() {
             return reasonKey;
         }
 
         /** @return the reason's format arguments */
-        public Object[] getReasonArgs() {
+        public Arg[] getReasonArgs() {
             return reasonArgs.clone();
         }
     }
@@ -2685,48 +3265,9 @@ public final class ModuleFileTransactions {
         public static final String UPDATE_ABANDONED = "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。";
         public static final String NEEDS_OPERATOR =
                 "模块 %s 的更新已暂停，等待处理：%s。在这些文件与更新记录一致之前，更新不会移动或删除任何文件，/upm update 和 /upm uninstall 也会拒绝该模块。请检查这些文件（需要的 JAR 可从更新目录中取回），然后删除更新记录 %s 及其同名文件夹，以放弃这次更新。";
-        public static final String REMOVED = "已删除卸载时未能删除的模块 JAR：%s。";
-        public static final String REMOVAL_FAILED = "卸载时记录的模块 JAR %s 仍无法删除（%s）；本次启动会再次加载它，下次启动会再试。";
-        public static final String REMOVAL_SKIPPED = "卸载时记录的模块 JAR %s 自卸载后已被替换，未删除。";
-        /** Args: the JAR's path, the read error. */
-        public static final String REMOVAL_UNREADABLE =
-                "卸载时记录的模块 JAR %s 无法读取，无法确认它仍是记录的文件（%s）；未删除，本次启动会再次加载它，下次启动会再试。";
         public static final String RECORD_REFUSED = "更新记录 %s 已拒绝执行：%s";
         public static final String RECORD_UNREADABLE = "更新记录 %s 无法读取，已跳过：%s";
         public static final String RECORD_WRITE_FAILED = "更新记录 %s 无法写入：%s";
-        public static final String REASON_NO_IDENTIFY_STRING = "该模块没有 identify-string";
-        public static final String REASON_NOT_LOADED = "没有已加载的模块声明 identify-string %s";
-        public static final String REASON_NOT_IN_MODULES_FOLDER = "模块的 JAR %s 不在模块目录 %s 中";
-        public static final String REASON_SHARED_JAR = "它的 JAR %s 同时也是已加载模块 %s 的 JAR，更新会把该模块一起替换";
-        public static final String REASON_OLD_JAR_UNREADABLE = "模块当前的 JAR %s 无法读取";
-        public static final String REASON_AMBIGUOUS_IDENTIFY_STRING =
-                "identify-string %s 同时由位于不同 JAR 的多个已加载模块声明（%s），无法确定要更新哪一个";
-        public static final String REASON_NO_DOWNLOAD = "云端没有 %s 的可下载版本";
-        /** Args: the staged file name, its declared api-version as written, framework level, floor, framework level. */
-        public static final String REASON_INCOMPATIBLE_API_LEVEL =
-                "下载的 %s 声明 api-version %s，本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块";
-        /** Args: the staged file name, framework level, floor, framework level. */
-        public static final String REASON_NO_API_LEVEL =
-                "下载的 %s 没有声明 api-version，本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块";
-        /** Args: the identify-string, framework level, floor, framework level. */
-        public static final String REASON_NO_COMPATIBLE_UPDATE =
-                "云端没有 %s 可以安装在本服务器上的版本（本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块）";
-        public static final String REASON_OTHER_COPY_LOADS_FIRST =
-                "下次启动时会由该模块的另一份副本代替新 JAR %s 加载：模块目录中的以下 JAR 声明了同一个主类，且文件名排在它之前：%s；请先移走它们，再执行 /upm update";
-        public static final String REASON_DOWNLOAD_FAILED = "下载失败：%s";
-        public static final String REASON_INVALID_JAR = "下载的文件 %s 不是有效的模块 JAR";
-        public static final String REASON_WRONG_IDENTITY = "下载的 %s 没有声明 identify-string %s 和版本号";
-        /** Args: the staged file name, the metadata or content read error. */
-        public static final String REASON_STAGED_UNREADABLE = "无法读取下载的 %s（%s）";
-        public static final String REASON_WRONG_VERSION = "下载的 %s 声明的版本是 %s，不是云端给出的最新版本 %s";
-        public static final String REASON_CANCELLED_WHILE_DOWNLOADING = "下载期间该模块已被卸载，本次更新已取消";
-        public static final String REASON_NEEDS_OPERATOR =
-                "该模块的更新已暂停，等待处理（%s）；请按启动日志处理后删除更新记录 %s 及其同名文件夹";
-        public static final String REASON_RECORD_FAILED = "更新记录无法写入：%s";
-        public static final String REASON_ACCESS_DENIED = "文件访问被拒绝：%s";
-        public static final String REASON_RECORD_UNREADABLE = "该模块已有的更新记录 %s 无法读取：%s";
-        public static final String REASON_LEFTOVER_BACKUP = "%s 中有上一次更新留下、没有记录的旧版本 JAR；请先检查并移走它";
-        public static final String REASON_PREVIOUS_UNRESTORED = "上一次更新留下的旧版本 JAR 无法移回模块目录：%s";
 
         private Keys() {
         }

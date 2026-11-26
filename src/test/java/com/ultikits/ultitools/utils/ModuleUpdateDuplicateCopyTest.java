@@ -120,8 +120,8 @@ class ModuleUpdateDuplicateCopyTest {
         ModuleFileTransactions.StageResult result = stage();
 
         assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_OTHER_COPY_LOADS_FIRST);
-        assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "a-demo-0.9.jar");
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_OTHER_COPY_LOADS_FIRST);
+        assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "a-demo-0.9.jar");
         assertThat(downloads).as("refused before the download").isEmpty();
         assertThat(snapshot()).as("no record, no staged file, no file touched").isEqualTo(before);
     }
@@ -136,8 +136,8 @@ class ModuleUpdateDuplicateCopyTest {
 
         ModuleFileTransactions.StageResult result = stage();
 
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_OTHER_COPY_LOADS_FIRST);
-        assertThat(result.getReasonArgs()).as("the copy after the new JAR is not in the refusal")
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_OTHER_COPY_LOADS_FIRST);
+        assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).as("the copy after the new JAR is not in the refusal")
                 .containsExactly("demo-1.1.jar", "a-demo-0.9.jar, b-demo.jar");
         assertThat(downloads).isEmpty();
         assertThat(snapshot()).isEqualTo(before);
@@ -150,8 +150,8 @@ class ModuleUpdateDuplicateCopyTest {
 
         ModuleFileTransactions.StageResult result = stage();
 
-        assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_OTHER_COPY_LOADS_FIRST);
-        assertThat(result.getReasonArgs()).containsExactly("demo-1.1.jar", "Demo-0.9.jar");
+        assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_OTHER_COPY_LOADS_FIRST);
+        assertThat(PendingTestValues.values(List.of(result.getReasonArgs()))).containsExactly("demo-1.1.jar", "Demo-0.9.jar");
         assertThat(downloads).isEmpty();
     }
 
@@ -229,7 +229,7 @@ class ModuleUpdateDuplicateCopyTest {
     @DisplayName("once the operator removes the named copy, the next /upm update proceeds without a restart")
     void removedCopy_noLongerRefuses() throws IOException {
         File stray = copy("a-demo-0.9.jar", MAIN);
-        assertThat(stage().getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_OTHER_COPY_LOADS_FIRST);
+        assertThat(stage().getReasonKey()).isEqualTo(UpmKeys.REASON_OTHER_COPY_LOADS_FIRST);
 
         Files.delete(stray.toPath());
         ModuleFileTransactions.StageResult retried = stage();
@@ -249,8 +249,8 @@ class ModuleUpdateDuplicateCopyTest {
                 catalogue("demo", "1.1"), (link, name, folder) -> downloads.add(name));
         ModuleFileTransactions.StageResult unrecorded = stage(module -> null);
 
-        assertThat(fromOverload.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_OTHER_COPY_LOADS_FIRST);
-        assertThat(unrecorded.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_OTHER_COPY_LOADS_FIRST);
+        assertThat(fromOverload.getReasonKey()).isEqualTo(UpmKeys.REASON_OTHER_COPY_LOADS_FIRST);
+        assertThat(unrecorded.getReasonKey()).isEqualTo(UpmKeys.REASON_OTHER_COPY_LOADS_FIRST);
         assertThat(downloads).isEmpty();
         assertThat(snapshot()).isEqualTo(before);
     }

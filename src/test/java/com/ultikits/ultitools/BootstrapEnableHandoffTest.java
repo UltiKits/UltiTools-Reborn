@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.mockStatic;
@@ -24,13 +25,19 @@ import java.util.logging.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import com.ultikits.ultitools.bootstrap.BootstrapResult;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.manager.ModuleJarAdmission;
+import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
@@ -103,6 +110,7 @@ class BootstrapEnableHandoffTest {
     }
 
     @Test
+    @ExtendWith(CommandTestExtension.class)
     void moduleLoadingObservesTheSameTransactionsThatBootstrapApplied() throws Exception {
         BootstrapResult prepared = mock(BootstrapResult.class);
         ModuleFileTransactions transactions = mock(ModuleFileTransactions.class);
@@ -119,8 +127,45 @@ class BootstrapEnableHandoffTest {
             framework.initPluginModules();
             verify(managers.constructed().get(0)).init(loader);
             verify(transactions).observeAfterLoad(eq(Collections.emptyList()), any());
-            verify(transactions).flushReports(any(), any());
+            verify(transactions).flushReports(any(), any(), any(Messages.class));
             assertThat(field(framework, "moduleFileTransactions")).isSameAs(transactions);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void unavailableMessagesOrFailingReportsCannotMaskTheModuleLoadFailure(boolean missingMessages) throws IOException {
+        var prepared = mock(BootstrapResult.class);
+        var transactions = mock(ModuleFileTransactions.class);
+        var loader = mock(ModuleClassLoader.class);
+        when(prepared.transactions()).thenReturn(transactions);
+        when(prepared.admission()).thenReturn(new ModuleJarAdmission());
+        when(prepared.classLoader()).thenReturn(loader);
+        var framework = mock(UltiTools.class, CALLS_REAL_METHODS);
+        when(framework.getDataFolder()).thenReturn(temporary.resolve("plugins/UltiTools").toFile());
+        when(framework.getLogger()).thenReturn(Logger.getAnonymousLogger());
+        framework.consumeBootstrap(prepared);
+        var loadFailure = new IOException("injected module load failure");
+        var reportFailure = new IllegalStateException("injected report failure");
+        if (!missingMessages) {
+            doThrow(reportFailure).when(transactions).flushReports(any(), any(), eq(null));
+        }
+        try (MockedConstruction<PluginManager> managers = mockConstruction(PluginManager.class,
+                     (manager, context) -> doThrow(loadFailure).when(manager).init(loader));
+             var runtime = mockStatic(CommandRuntime.class)) {
+            if (missingMessages) {
+                runtime.when(CommandRuntime::messages).thenThrow(new IllegalStateException("injected unavailable Messages"));
+            }
+
+            assertThatThrownBy(framework::initPluginModules).isInstanceOf(PluginModuleException.class)
+                    .hasCause(loadFailure).satisfies(failure -> {
+                        if (!missingMessages) {
+                            assertThat(failure.getSuppressed()).containsExactly(reportFailure);
+                        }
+                    });
+            assertThat(managers.constructed()).hasSize(1);
+            verify(transactions).observeAfterLoad(eq(Collections.emptyList()), any());
+            verify(transactions).flushReports(any(), any(), eq(null));
         }
     }
 

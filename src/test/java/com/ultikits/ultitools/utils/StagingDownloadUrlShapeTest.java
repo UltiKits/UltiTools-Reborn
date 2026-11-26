@@ -13,7 +13,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Collections;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -128,7 +127,6 @@ class StagingDownloadUrlShapeTest {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static Bound boundByStageUpdate(MockedStatic<UltiTools> ultiTools, File dataFolder,
                                             UltiToolsPlugin loaded) {
         AtomicReference<Bound> bound = new AtomicReference<>();
@@ -140,9 +138,10 @@ class StagingDownloadUrlShapeTest {
         when(instance.getDataFolder()).thenReturn(dataFolder);
         ultiTools.when(UltiTools::getInstance).thenReturn(instance);
         try (MockedConstruction<ModuleFileTransactions> ignored = mockConstruction(ModuleFileTransactions.class,
-                (mock, context) -> when(mock.stageUpdate(anyString(), any(Supplier.class), any(), any(), any(), any()))
+                (mock, context) -> when(mock.stageChange(anyString(), any(), any(), any(),
+                                any(), any(), any(), any(), any()))
                         .thenAnswer(invocation -> {
-                            bound.set(new Bound(invocation.getArgument(3), invocation.getArgument(4)));
+                            bound.set(new Bound(invocation.getArgument(6), invocation.getArgument(7)));
                             return ModuleFileTransactions.StageResult.of(
                                     ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null, null);
                         }))) {

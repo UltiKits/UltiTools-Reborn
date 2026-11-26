@@ -1,14 +1,11 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -23,6 +20,11 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
+import com.ultikits.ultitools.utils.UpmKeys;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
@@ -32,6 +34,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("/upm uninstall reply for a deletion deferred to the next start (#518)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class ModuleRemovalDeferredCommandTest {
 
     private MockedStatic<PluginInstallUtils> utils;
@@ -45,8 +48,8 @@ class ModuleRemovalDeferredCommandTest {
         MockBukkit.mock();
         TestHelper.mockUltiToolsInstance();
         sender = mock(CommandSender.class);
-        org.mockito.Mockito.doAnswer(invocation -> messages.add(invocation.getArgument(0)))
-                .when(sender).sendMessage(anyString());
+        org.mockito.Mockito.doAnswer(invocation -> messages.add(CommandMessageTestSupport.plain(invocation.getArgument(0))))
+                .when(sender).sendMessage(any(Component.class));
         utils = mockStatic(PluginInstallUtils.class);
         executor = new PluginInstallCommands();
     }
@@ -60,51 +63,18 @@ class ModuleRemovalDeferredCommandTest {
     @Test
     @DisplayName("the reply names the file and says it is deleted at the next start before modules load")
     void deferredDeletion_isReportedAsSuch() {
-        PluginInstallUtils.RemovalDeferredException deferred = PluginInstallUtils.RemovalDeferredException.of(
-                Collections.singletonList("/srv/plugins/UltiTools/plugins/demo-1.0.jar"),
-                "FileSystemException: The process cannot access the file because it is being used by another process");
-        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList())).thenAnswer(invocation -> {
-            // The uninstall cancels the module's update on this outcome too, before the failure leaves it.
-            invocation.<List<String>>getArgument(1).add("1.1");
-            throw deferred;
-        });
-
+        utils.when(() -> PluginInstallUtils.requestUninstall("Demo", sender))
+                .thenReturn(PendingCommandTestSupport.remove("Demo", "Demo.jar"));
         executor.uninstallPlugin(sender, "Demo");
-
-        String all = String.join("\n", messages);
-        assertThat(all).contains("以下模块 JAR 暂时无法删除（被占用或不可写：FileSystemException")
-                .contains("已记录：下次启动会在加载模块之前删除它们，仍无法删除时会在启动日志中报告：/srv/plugins/UltiTools/plugins/demo-1.0.jar")
-                .doesNotContain("请手动删除");
-        // A deferred deletion is an uninstall that went ahead: the cancelled update is reported too.
-        assertThat(all).contains("已取消模块 Demo 已暂存、尚未应用的更新（版本 1.1）");
+        assertThat(messages).singleElement().asString().contains("Demo.jar", "/upm revoke Demo");
     }
 
     @Test
     @DisplayName("ultitools.upm.uninstall.deferred-unrecorded: a deletion that could not be recorded either lists only the JAR to delete, and the record failure on its own line")
     void unrecordedDeletion_replyListsTheJarAndTheRecordFailureSeparately() {
-        java.nio.file.FileSystemException deleteFailure = new java.nio.file.FileSystemException(
-                "/srv/plugins/UltiTools/plugins/demo-1.0.jar", null, "Access denied");
-        deleteFailure.addSuppressed(PluginInstallUtils.RemovalNotRecordedException.of(
-                new java.nio.file.AccessDeniedException("/srv/.ultikits/upm-transactions")));
-        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList())).thenThrow(deleteFailure);
-
+        utils.when(() -> PluginInstallUtils.requestUninstall("Demo", sender))
+                .thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NOT_RECORDED, "Demo", "error", "write denied"));
         executor.uninstallPlugin(sender, "Demo");
-
-        List<String> deleteByHand = new ArrayList<>();
-        List<String> notRecorded = new ArrayList<>();
-        for (String message : messages) {
-            if (message.contains("请手动删除")) {
-                deleteByHand.add(message);
-            }
-            if (message.contains("这次删除也未能记录到下次启动")) {
-                notRecorded.add(message);
-            }
-        }
-        assertThat(deleteByHand).hasSize(1);
-        assertThat(deleteByHand.get(0)).contains("/srv/plugins/UltiTools/plugins/demo-1.0.jar")
-                .doesNotContain(".ultikits");
-        assertThat(notRecorded).hasSize(1);
-        assertThat(notRecorded.get(0)).contains("AccessDeniedException: /srv/.ultikits/upm-transactions")
-                .doesNotContain("请手动删除");
+        assertThat(messages).singleElement().asString().contains("Demo", "write denied");
     }
 }
