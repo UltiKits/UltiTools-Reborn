@@ -110,7 +110,7 @@ class I18nKeyContractTest {
     private Map<String, String> collectLiteralKeys() throws IOException {
         Map<String, String> keys = new LinkedHashMap<>();
         List<Path> files = sourceFiles();
-        assertThat(files).isNotEmpty();
+        assertThat(files.size()).as("control: the source tree was found").isGreaterThan(200);
         for (Path file : files) {
             collectLiteralKeys(file.getFileName().toString(), Files.readString(file), keys);
         }

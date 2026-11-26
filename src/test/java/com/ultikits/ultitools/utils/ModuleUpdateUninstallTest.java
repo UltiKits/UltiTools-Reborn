@@ -1,6 +1,6 @@
 package com.ultikits.ultitools.utils;
 
-import static com.ultikits.ultitools.utils.UpmReportAssertions.unparsedValues;
+import static com.ultikits.ultitools.utils.UpmReportAssertions.namedArguments;
 
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.catalogue;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.downloading;
@@ -171,7 +171,9 @@ class ModuleUpdateUninstallTest {
     @Test
     @DisplayName("uninstall refuses instead of overwriting its earlier invalid journal")
     void recordingOverARecordWithANullRemoval_isRefused() throws IOException {
-        assertNewUninstallRefusesToReplace(withNullRemoval("Demo"), UpmKeys.START_RECORD_REFUSED.translationKey());
+        File record = withNullRemoval("Demo");
+        assertThat(attemptToReplaceRemovalRecord(record).queued()).isFalse();
+        assertUnusableRecordIsKeptAtStart(record, UpmKeys.START_RECORD_REFUSED.translationKey());
     }
 
     @Test
@@ -180,17 +182,17 @@ class ModuleUpdateUninstallTest {
         File record = PendingTestValues.legacyRemoval(dataFolder, "Demo", oldJar);
         Files.writeString(record.toPath(), "{ not json");
 
-        assertNewUninstallRefusesToReplace(record, UpmKeys.START_RECORD_UNREADABLE.translationKey());
+        assertThat(attemptToReplaceRemovalRecord(record).queued()).isFalse();
+        assertUnusableRecordIsKeptAtStart(record, UpmKeys.START_RECORD_UNREADABLE.translationKey());
     }
 
-    private void assertNewUninstallRefusesToReplace(File record, String startKey) throws IOException {
+    private PluginInstallUtils.PendingResult attemptToReplaceRemovalRecord(File record) throws IOException {
         byte[] original = Files.readAllBytes(record.toPath());
         var result = PendingTestValues.queueRemoval(new ModuleFileTransactions(dataFolder), "Demo", null, oldJar);
 
-        assertThat(result.queued()).isFalse();
         assertThat(PendingTestValues.keys(result)).containsExactly(UpmKeys.UNINSTALL_NOT_RECORDED);
         assertThat(Files.readAllBytes(record.toPath())).isEqualTo(original);
-        assertUnusableRecordIsKeptAtStart(record, startKey);
+        return result;
     }
 
     private void assertUnusableRecordIsKeptAtStart(File badRecord, String key) throws IOException {
@@ -200,7 +202,7 @@ class ModuleUpdateUninstallTest {
 
         assertThat(start.pendingReports()).singleElement().satisfies(report -> {
             assertThat(report.getKey()).isEqualTo(key);
-            assertThat(unparsedValues(report)).contains(badRecord.getAbsolutePath());
+            assertThat(namedArguments(report)).contains("file=" + badRecord.getAbsolutePath());
         });
         assertThat(Files.readAllBytes(badRecord.toPath())).isEqualTo(original);
         assertThat(oldJar).exists();

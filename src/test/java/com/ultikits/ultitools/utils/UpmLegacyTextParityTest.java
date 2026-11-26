@@ -283,20 +283,22 @@ class UpmLegacyTextParityTest {
     @Test
     void commandAndStartArgumentsRemainLiteral() {
         String raw = "<red>x<click:run_command:/op x>y&cz";
-        assertLiteral("upm.list.entry.intro", string("description", raw), "   Intro:" + raw,
-                TextColor.color(0x7f7f7f));
-        assertLiteral("upm.start.record.refused", string("reason", raw),
+        Component reply = renderAndAssertLiteral("upm.list.entry.intro", string("description", raw),
+                "   Intro:" + raw, TextColor.color(0x7f7f7f));
+        Component report = renderAndAssertLiteral("upm.start.record.refused", string("reason", raw),
                 "Update record demo.json was refused and not carried out: " + raw, null, string("file", "demo.json"));
+        assertThat(Stream.of(reply, report).flatMap(UpmLegacyTextParityTest::descendants))
+                .allSatisfy(part -> assertThat(part.clickEvent()).isNull());
     }
 
-    private static void assertLiteral(String path, Arg value, String expected, TextColor colour, Arg... other) {
+    private static Component renderAndAssertLiteral(String path, Arg value, String expected, TextColor colour, Arg... other) {
         List<LogRecord> warnings = new ArrayList<>();
         Arg[] args = Stream.concat(Stream.of(value), Arrays.stream(other)).toArray(Arg[]::new);
         Component actual = render(Locale.ENGLISH, path, warnings, args);
         assertThat(warnings).isEmpty();
         assertThat(PLAIN.serialize(actual)).isEqualTo(expected);
         assertThat(colourRuns(actual)).containsExactly(new Run(expected, colour));
-        assertThat(descendants(actual)).allSatisfy(part -> assertThat(part.clickEvent()).isNull());
+        return actual;
     }
 
     private static Stream<Component> descendants(Component node) {

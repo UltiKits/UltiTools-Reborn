@@ -7,7 +7,8 @@ import java.util.List;
 final class UpmReportAssertions {
     private UpmReportAssertions() { /* Test helper only. */ }
 
-    static List<String> unparsedValues(ModuleFileTransactions.Report report) {
-        return Arrays.stream(report.getArgs()).map(Arg.Unparsed.class::cast).map(Arg.Unparsed::value).toList();
+    static List<String> namedArguments(ModuleFileTransactions.Report report) {
+        return Arrays.stream(report.getArgs()).map(Arg.Unparsed.class::cast)
+                .map(arg -> arg.name() + "=" + arg.value()).toList();
     }
 }

@@ -135,9 +135,13 @@ class UpmCatalogueRepliesTest {
                     ? "Module demo was not found on UltiCloud." : "UltiCloud 上没有找到模块 demo。");
             fixture.assertVersionLine(catalogue, VersionLookup.failed("unavailable"), en(language)
                     ? "Could not fetch the version list!" : "获取版本列表失败！");
-            fixture.assertVersionLine(catalogue, VersionLookup.found(null), en(language)
+            catalogue.when(() -> PluginInstallUtils.lookUpPluginVersions(eq("demo"), any()))
+                    .thenReturn(VersionLookup.found(null));
+            fixture.commands.listVersions(fixture.sender, "demo");
+            assertThat(fixture.lines()).containsExactly(en(language)
                     ? "No version of demo can be installed on this server. This UltiTools-API is at API level 701 and installs only modules declaring api-version 700 to 701."
                     : "demo 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 701，只安装声明 api-version 700 到 701 的模块。");
+            assertThat(fixture.replies.getFirst().color()).isEqualTo(NamedTextColor.RED);
         }
     }
 
@@ -173,8 +177,11 @@ class UpmCatalogueRepliesTest {
             when(fixture.updates.isCheckComplete()).thenReturn(true);
             fixture.assertCheckLine(en(language) ? "No updates available." : "没有可用的更新。", NamedTextColor.GREEN);
             when(fixture.updates.getUnconfirmed()).thenReturn(List.of("Demo", "Other"));
-            fixture.assertCheckLine(en(language) ? "Update check incomplete: could not confirm the latest version of Demo, Other."
-                    : "更新检查未完成：无法确认 Demo, Other 的最新版本。", NamedTextColor.YELLOW);
+            fixture.commands.checkUpdates(fixture.sender);
+            assertThat(fixture.lines()).containsExactly(en(language)
+                    ? "Update check incomplete: could not confirm the latest version of Demo, Other."
+                    : "更新检查未完成：无法确认 Demo, Other 的最新版本。");
+            assertThat(fixture.replies.getFirst().color()).isEqualTo(NamedTextColor.YELLOW);
         }
     }
 
