@@ -547,8 +547,8 @@ final class CloudSession {
 
     /**
      * The hello's capabilities from the operator's {@link Capability} switches (S-65, without the
-     * error-report and module entries 22-21 adds): {@code power} and {@code link} are always
-     * declared, {@code backups} never.
+     * error-report and module entries 22-21 adds): {@code power}, {@code link}, and {@code upm:pending}
+     * are always declared, {@code backups} never.
      *
      * @return the capability names, in a stable order
      */
@@ -565,6 +565,7 @@ final class CloudSession {
         addIf(names, Capability.SERVER_PROPERTIES, "properties:read", "properties:write");
         names.add("power");
         names.add("link");
+        names.add(AgentCapabilities.UPM_PENDING);
         return names;
     }
 

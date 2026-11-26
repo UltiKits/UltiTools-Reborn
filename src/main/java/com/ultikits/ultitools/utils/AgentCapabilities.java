@@ -24,8 +24,9 @@ import com.ultikits.ultitools.entities.Capability;
  * {@code properties:read}, {@code properties:write}. {@code power} is always declared, so the panel can show "turned
  * off by the operator" from {@code settings.powerActionsEnabled} while the handler refuses with
  * {@code power_disabled}; {@code link} is always declared, because a player link carries no action that is dangerous
- * to the server. {@code backups} is never declared. Module names {@code modules:<id>@<X.Y.Z>} follow, sorted, and the
- * whole list never exceeds {@link #MAX_NAMES}.
+ * to the server. {@code upm:pending} is always declared for listing and revoking pending module changes, with no
+ * operator switch. {@code backups} is never declared. Module names {@code modules:<id>@<X.Y.Z>} follow, sorted, and
+ * the whole list never exceeds {@link #MAX_NAMES}.
  * <p>
  * <b>Per request (S-66).</b> The hello list changes only on the next connection, so {@link #enabled(String)} reads the
  * switch again for every request; a switch turned off after the handshake refuses the request with
@@ -46,6 +47,7 @@ final class AgentCapabilities {
     private static final String ERRORS = "errors";
     private static final String POWER = "power";
     private static final String LINK = "link";
+    static final String UPM_PENDING = "upm:pending";
     private static final String MODULE_PREFIX = "modules:";
     private static final String UNAVAILABLE = "This capability is not available on this server.";
 
@@ -111,6 +113,7 @@ final class AgentCapabilities {
         }
         names.add(POWER);
         names.add(LINK);
+        names.add(UPM_PENDING);
         List<String> modules = moduleNames.get();
         if (modules != null) {
             for (String module : new TreeSet<>(modules)) {
@@ -142,7 +145,7 @@ final class AgentCapabilities {
         if (contractCapability == null) {
             return false;
         }
-        if (POWER.equals(contractCapability) || LINK.equals(contractCapability)
+        if (POWER.equals(contractCapability) || LINK.equals(contractCapability) || UPM_PENDING.equals(contractCapability)
                 || AgentProtocol.MODULE_CAPABILITY_SENTINEL.equals(contractCapability)
                 || contractCapability.startsWith(MODULE_PREFIX)) {
             return true;

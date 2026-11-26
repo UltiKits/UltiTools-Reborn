@@ -308,6 +308,10 @@ upm:
     wrong_identity: "the downloaded <file> does not declare identify-string <module> and a version"
     wrong_version: "the download <file> declares version <declared>, not the latest version <version> the catalogue offered"
   revoke:
+    action:
+      install: "install"
+      uninstall: "uninstall"
+      update: "update"
     done:
       downloading: "<green>Cancelled the download for <module>; it will not be added to the pending changes."
       install: "<green>Undone: <module> <to> will not be installed."
@@ -319,6 +323,7 @@ upm:
       failed: "<red>The change of <module> could not be applied at the last restart and cannot be undone: <failure>."
       in_progress: "<red>The change of <module> is unfinished from the last start and cannot be undone now; the next start finishes it."
       needs_operator: "<red>The change of <module> needs manual attention and cannot be undone here: <failure>. Record: <file>."
+    panel_log: "Panel user #<user_id> revoked the pending <action> of <module>."
   start:
     install:
       not_recorded: "The install of module <module> <version> was rolled back before loading because its transaction record could not be written. Install it again with /upm install."

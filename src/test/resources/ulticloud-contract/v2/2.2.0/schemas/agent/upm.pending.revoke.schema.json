@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.2.0/agent/upm.pending.revoke.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "upm.pending.revoke"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^(install|update|remove)-[0-9a-f]{16}$"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{16}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor": {
+          "type": "object",
+          "properties": {
+            "userId": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "userId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "actor"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "payload"
+  ],
+  "additionalProperties": false
+}

@@ -27,22 +27,22 @@ class ContractSyncTest {
     private static final Path LOCK = ROOT.getParent().resolve("contract.lock.json");
     private static final Path CATALOGUE_ROOT = Paths.get("src/test/resources", ContractFixtures.CATALOGUE_ROOT);
     private static final Path CATALOGUE_LOCK = CATALOGUE_ROOT.getParent().resolve("contract.lock.json");
-    /** Both frozen exports come from the merge that includes protocol 2.1.0 and catalogue 1.1.0. */
-    private static final String SOURCE_COMMIT = "73f651e70a235b7418cee7f9c5a62d8fcfe3cab8";
+    private static final String PROTOCOL_SOURCE_COMMIT = "9e11f309b838f6d4e6b5f0e4f5b5efda1591078a";
+    private static final String CATALOGUE_SOURCE_COMMIT = "73f651e70a235b7418cee7f9c5a62d8fcfe3cab8";
     private static final String PROTOCOL_MANIFEST_SHA256 =
-            "8555f80b793d8b057ed2d93b9a6d9e1faf75e03dd4970cf91e8d5020b0a2d187";
+            "994ced7b056c8ae98ebb832774bbf48b5e28a11eb54f36fb9caa0fe3b318e8ee";
     private static final String CATALOGUE_MANIFEST_SHA256 =
             "66ff7bef1410e6a523d9a9ef3891b7f38f8eed848a5a25e3e84f4cc30fc0089a";
 
     @Test
     void frozenTreeMatchesLockAndJavaVersion() throws Exception {
         JsonObject lock = lock();
-        assertThat(lock.get("contractVersion").getAsString()).isEqualTo("2.1.0");
+        assertThat(lock.get("contractVersion").getAsString()).isEqualTo("2.2.0");
         assertThat(lock.get("manifestSha256").getAsString()).isEqualTo(PROTOCOL_MANIFEST_SHA256);
-        assertThat(lock.get("sourceCommit").getAsString()).isEqualTo(SOURCE_COMMIT);
+        assertThat(lock.get("sourceCommit").getAsString()).isEqualTo(PROTOCOL_SOURCE_COMMIT);
         assertThat(lock.get("sourceRef").getAsString()).isEqualTo("main");
         assertThat(lock.get("sourcePath").getAsString())
-                .isEqualTo("packages/contracts/generated/protocol/v2/2.1.0");
+                .isEqualTo("packages/contracts/generated/protocol/v2/2.2.0");
         verify(ROOT, lock, javaVersion());
         assertThat(ContractFixtures.legacyUuidCases()).hasSize(26);
     }
@@ -87,7 +87,7 @@ class ContractSyncTest {
         assertThat(lock.get("manifestSha256").getAsString()).as("pinned frozen MANIFEST hash")
                 .isEqualTo(CATALOGUE_MANIFEST_SHA256);
         assertThat(lock.get("contractVersion").getAsString()).isEqualTo("1.1.0");
-        assertThat(lock.get("sourceCommit").getAsString()).isEqualTo(SOURCE_COMMIT);
+        assertThat(lock.get("sourceCommit").getAsString()).isEqualTo(CATALOGUE_SOURCE_COMMIT);
         assertThat(lock.get("sourcePath").getAsString())
                 .isEqualTo("packages/contracts/generated/rest-v1/catalogue/1.1.0");
         assertThat(lock.get("sourceRef").getAsString()).isEqualTo("main");

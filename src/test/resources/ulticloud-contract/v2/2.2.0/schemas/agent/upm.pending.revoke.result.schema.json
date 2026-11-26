@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ultikits.com/protocol/v2/2.2.0/agent/upm.pending.revoke.result.schema.json",
+  "type": "object",
+  "properties": {
+    "v": {
+      "type": "number",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "type": {
+      "type": "string",
+      "const": "upm.pending.revoke.result"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8640000000000000
+    },
+    "replyTo": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "revoked": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^(install|update|remove)-[0-9a-f]{16}$"
+                    },
+                    "revision": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{16}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "install",
+                        "update",
+                        "uninstall"
+                      ]
+                    },
+                    "module": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "fromVersion": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "toVersion": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "files": {
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 5,
+                        "maxLength": 255,
+                        "pattern": "^[^/\\\\]+\\.jar$"
+                      }
+                    },
+                    "requestedAt": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 8640000000000000
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "requestedBy": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "console",
+                                "player",
+                                "remote"
+                              ]
+                            },
+                            "name": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 64
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "downloading",
+                        "failed",
+                        "needs_operator",
+                        "in_progress"
+                      ]
+                    },
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "warnings": {
+                      "maxItems": 4,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "warning": {
+                            "type": "string",
+                            "enum": [
+                              "custom_content"
+                            ]
+                          },
+                          "kinds": {
+                            "minItems": 1,
+                            "maxItems": 16,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 32,
+                                  "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                                },
+                                "count": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 100000
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "count"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "warning",
+                          "kinds"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "revision",
+                    "kind",
+                    "module",
+                    "fromVersion",
+                    "toVersion",
+                    "files",
+                    "requestedAt",
+                    "requestedBy",
+                    "state",
+                    "failure",
+                    "warnings"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "revoked"
+              ],
+              "additionalProperties": false
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
+          "required": [
+            "status",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "pending_not_found",
+                "pending_changed",
+                "pending_not_revocable",
+                "write_denied",
+                "internal_error"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "details": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 200
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "status",
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "type",
+    "ts",
+    "replyTo",
+    "payload"
+  ],
+  "additionalProperties": false
+}

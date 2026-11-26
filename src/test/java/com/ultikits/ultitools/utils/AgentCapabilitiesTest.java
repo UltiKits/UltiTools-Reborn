@@ -44,11 +44,11 @@ class AgentCapabilitiesTest {
     }
 
     @Test
-    @DisplayName("the shipped defaults declare exactly the nine default names")
+    @DisplayName("the shipped defaults declare exactly the ten default names")
     void shippedDefaultsDeclareTheDefaultNames() {
         shippedDefaults();
         assertThat(capabilities.helloCapabilities()).containsExactly("telemetry", "logs", "events:players",
-                "events:commands", "errors", "files:read", "config:read", "power", "link");
+                "events:commands", "errors", "files:read", "config:read", "power", "link", "upm:pending");
         assertThat(capabilities.helloCapabilities()).doesNotContain("commands", "players:actions", "files:write",
                 "files:delete", "config:write", "properties:read", "properties:write", "backups");
     }
@@ -94,7 +94,7 @@ class AgentCapabilitiesTest {
     void eachSwitchAddsExactlyItsNames(Capability capability, List<String> names) {
         errors.set(false);
         List<String> before = capabilities.helloCapabilities();
-        assertThat(before).containsExactly("power", "link");
+        assertThat(before).containsExactly("power", "link", "upm:pending");
         on.add(capability);
         List<String> after = new ArrayList<>(capabilities.helloCapabilities());
         after.removeAll(before);
@@ -122,10 +122,11 @@ class AgentCapabilitiesTest {
     }
 
     @Test
-    @DisplayName("power, link, modules and the module sentinel are always allowed; backups never")
+    @DisplayName("power, link, pending changes, modules and the module sentinel are always allowed; backups never")
     void alwaysAndNever() {
         assertThat(capabilities.enabled("power")).isTrue();
         assertThat(capabilities.enabled("link")).isTrue();
+        assertThat(capabilities.enabled("upm:pending")).isTrue();
         assertThat(capabilities.enabled(AgentProtocol.MODULE_CAPABILITY_SENTINEL)).isTrue();
         assertThat(capabilities.enabled("modules:ultimail@1.2.0")).isTrue();
         assertThat(capabilities.enabled("backups")).isFalse();
@@ -148,6 +149,12 @@ class AgentCapabilitiesTest {
         }
         names = capabilities.helloCapabilities();
         assertThat(names).hasSize(64);
-        assertThat(names).contains("power", "link", "modules:m00@1.0.0").doesNotContain("modules:m79@1.0.0");
+        assertThat(names).contains("power", "link", "upm:pending", "modules:m00@1.0.0", "modules:m53@1.0.0")
+                .doesNotContain("modules:m54@1.0.0", "modules:m79@1.0.0");
+    }
+
+    @Test
+    void helloWithoutInstalledFeaturesAlsoDeclaresPendingChanges() {
+        assertThat(CloudSession.frameworkCapabilities()).contains("upm:pending");
     }
 }

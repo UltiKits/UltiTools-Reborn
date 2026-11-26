@@ -29,11 +29,14 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
  * types again when the worker runs them, since a request queued before the disable may run after it). A request that
  * hands its change to another thread takes a permit of its own for that work and returns it when the work ends, from
  * whichever thread ends it (22-23 second verification): {@link ModuleRequestHandler} for the module responder's
- * worker, {@link PlayerLinkChannel} for the link handler thread. The command handler reads the same flag through
- * {@code Bindings#disabling} on the server thread; work handed to the server thread is not waited for, since it can
- * only run in a later tick and Bukkit cancels it when UltiTools disables.
+ * worker, {@link PlayerLinkChannel} for the link handler thread. {@link PendingChangesHandler} takes its own permit
+ * on the serial worker for {@code upm.pending.revoke}, which is not in the refusal table below. If refused, it
+ * replies with {@code upm.pending.revoke.result} and {@code internal_error}; {@code upm.pending.list} is read-only
+ * and takes no permit. The command handler reads the same flag through {@code Bindings#disabling} on the server
+ * thread; work handed to the server thread is not waited for, since it can only run in a later tick and Bukkit
+ * cancels it when UltiTools disables.
  * <p>
- * <b>Covered types and their refusal</b> (every other request type keeps working until the connection closes):
+ * <b>Types covered by the router and their refusal:</b>
  * <ul>
  *   <li>{@code command.execute}, {@code server.power}: acknowledged first through the shared ledger (so a redelivery
  *       after a restart is acknowledged and never run), then {@code command.result} / {@code server.power.result}

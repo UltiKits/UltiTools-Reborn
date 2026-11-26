@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "ts": 1761274800000,
+  "type": "upm.pending.list.result",
+  "payload": {
+    "status": "error",
+    "code": "internal_error",
+    "message": "无法读取待生效清单"
+  },
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW"
+}

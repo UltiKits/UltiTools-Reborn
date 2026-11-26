@@ -13,10 +13,9 @@ import com.ultikits.ultitools.websocket.CloudRequest;
 import com.ultikits.ultitools.websocket.CloudRequestHandler;
 
 /**
- * One dedicated worker thread for the file and {@code server.properties} requests of one connection (plan 22-21 fix
- * round). Those handlers do blocking disk I/O -- a {@code files.list} of a directory with tens of thousands of
- * entries takes seconds -- so they must not run on the connection's own thread, where every heartbeat, ack and other
- * request would wait behind them.
+ * One dedicated worker thread per connection for file, {@code server.properties} and pending module change requests
+ * ({@code upm.pending.list} and {@code upm.pending.revoke}). These handlers can block on disk I/O, so running them on
+ * the connection's own thread would delay heartbeats, acknowledgements and other requests.
  * <p>
  * <b>Order.</b> One thread and a FIFO queue: the wrapped requests are handled one at a time, in arrival order, so a
  * {@code files.write} followed by a {@code files.read} of the same path still reads what was written.
@@ -37,6 +36,8 @@ import com.ultikits.ultitools.websocket.CloudRequestHandler;
  * {@code properties.update}) asks the gate again when it starts here, because it may have been queued before
  * {@code UltiTools#onDisable} began: refused, it is answered with its shutting-down failure and never runs; let in, it
  * keeps the gate's permit until it is answered, so {@code onDisable} waits for it before the action log closes.
+ * {@code upm.pending.revoke} takes its permit inside {@link PendingChangesHandler}; {@code upm.pending.list} is
+ * read-only and does not take one.
  */
 final class SerialRequestWorker {
 

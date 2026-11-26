@@ -1,0 +1,16 @@
+{
+  "expect": "invalid_message",
+  "why": "撤销结果不接受 file_changed 错误码",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "ts": 1761274800000,
+    "type": "upm.pending.revoke.result",
+    "payload": {
+      "status": "error",
+      "code": "file_changed",
+      "message": "文件已改变"
+    },
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW"
+  }
+}

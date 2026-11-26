@@ -198,7 +198,7 @@ class InboundWiringTest {
     }
 
     @Test
-    @DisplayName("the hello declares the switched-on names, power, link and the answering module")
+    @DisplayName("the hello declares the switched-on names, power, link, pending changes and the answering module")
     void helloDeclaresTheSwitches() throws Exception {
         connect();
         JsonObject hello = reply("hello", 1);
@@ -206,7 +206,7 @@ class InboundWiringTest {
         hello.getAsJsonObject("payload").getAsJsonArray("capabilities").forEach(e -> declared.add(e.getAsString()));
         assertThat(declared).containsExactly("telemetry", "logs", "events:players", "events:commands", "errors",
                 "commands", "players:actions", "files:read", "config:read", "files:write", "config:write",
-                "properties:read", "properties:write", "power", "link", "modules:ultimail@1.2.0");
+                "properties:read", "properties:write", "power", "link", "upm:pending", "modules:ultimail@1.2.0");
         assertThat(hello.getAsJsonObject("payload").getAsJsonObject("settings").get("powerActionsEnabled")
                 .getAsBoolean()).isFalse();
     }

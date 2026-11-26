@@ -1,0 +1,55 @@
+{
+  "expect": "invalid_message",
+  "why": "单项文件数不得超过 16",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "ts": 1761274800000,
+    "type": "upm.pending.list.result",
+    "payload": {
+      "status": "ok",
+      "data": {
+        "entries": [
+          {
+            "id": "install-0123456789abcdef",
+            "revision": "0123456789abcdef",
+            "kind": "install",
+            "module": "UltiMail",
+            "fromVersion": null,
+            "toVersion": "7.0.0",
+            "files": [
+              "x0.jar",
+              "x1.jar",
+              "x2.jar",
+              "x3.jar",
+              "x4.jar",
+              "x5.jar",
+              "x6.jar",
+              "x7.jar",
+              "x8.jar",
+              "x9.jar",
+              "x10.jar",
+              "x11.jar",
+              "x12.jar",
+              "x13.jar",
+              "x14.jar",
+              "x15.jar",
+              "x16.jar"
+            ],
+            "requestedAt": 1761274800000,
+            "requestedBy": {
+              "kind": "console",
+              "name": null
+            },
+            "state": "pending",
+            "failure": null,
+            "warnings": []
+          }
+        ],
+        "lastStart": [],
+        "truncated": false
+      }
+    },
+    "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW"
+  }
+}

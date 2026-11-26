@@ -66,7 +66,7 @@ class UpgradeRejectionTest {
     void fixtureDirectoriesAreComplete() {
         assertThat(validSamples()).extracting(UpgradeRejectionTest::statusOf).containsExactlyInAnyOrder(401, 402, 426, 429);
         assertThat(invalidSamples()).hasSize(6);
-        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/v2/2.1.0")).as("control").isDirectory();
+        assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/v2/2.2.0")).as("control").isDirectory();
         assertThat(java.nio.file.Paths.get("src/test/resources/ulticloud-contract/provisional"))
                 .as("the Wave A stand-in samples are gone").doesNotExist();
     }

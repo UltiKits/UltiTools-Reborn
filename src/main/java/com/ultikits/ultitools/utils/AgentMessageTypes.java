@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.Set;
 
 final class AgentMessageTypes {
-    static final String CONTRACT_VERSION = "2.1.0";
+    static final String CONTRACT_VERSION = "2.2.0";
     enum Direction { UP, DOWN, BOTH }
     enum ReplyTo { REQUIRED, FORBIDDEN, OPTIONAL }
 
@@ -78,6 +78,10 @@ final class AgentMessageTypes {
         add(specs, "player.link.completed", Direction.DOWN, ReplyTo.REQUIRED, null, false, false);
         add(specs, "player.link.completed.result", Direction.UP, ReplyTo.REQUIRED, null, false, false);
         add(specs, "player.link.expired", Direction.DOWN, ReplyTo.REQUIRED, null, false, false);
+        add(specs, "upm.pending.list", Direction.DOWN, ReplyTo.FORBIDDEN, "upm:pending", false, false);
+        add(specs, "upm.pending.list.result", Direction.UP, ReplyTo.REQUIRED, null, false, false);
+        add(specs, "upm.pending.revoke", Direction.DOWN, ReplyTo.FORBIDDEN, "upm:pending", false, false);
+        add(specs, "upm.pending.revoke.result", Direction.UP, ReplyTo.REQUIRED, null, false, false);
         SPECS = Collections.unmodifiableMap(specs);
     }
 

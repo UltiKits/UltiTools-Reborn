@@ -1,0 +1,17 @@
+{
+  "expect": "invalid_message",
+  "why": "记录 id 不接受大写十六进制",
+  "frame": {
+    "v": 2,
+    "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+    "ts": 1761274800000,
+    "type": "upm.pending.revoke",
+    "payload": {
+      "id": "install-0123456789ABCDEF",
+      "revision": "0123456789abcdef",
+      "actor": {
+        "userId": 1
+      }
+    }
+  }
+}

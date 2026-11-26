@@ -1,0 +1,32 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "ts": 1761274800000,
+  "type": "upm.pending.list.result",
+  "payload": {
+    "status": "ok",
+    "data": {
+      "entries": [
+        {
+          "id": "install-0123456789abcdef",
+          "revision": "0123456789abcdef",
+          "kind": "install",
+          "module": "UltiMail",
+          "fromVersion": null,
+          "toVersion": "7.0.0",
+          "files": [
+            "UltiMail-7.0.0.jar"
+          ],
+          "requestedAt": null,
+          "requestedBy": null,
+          "state": "in_progress",
+          "failure": null,
+          "warnings": []
+        }
+      ],
+      "lastStart": [],
+      "truncated": false
+    }
+  },
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW"
+}

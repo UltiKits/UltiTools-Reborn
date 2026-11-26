@@ -1,0 +1,45 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "ts": 1761274800000,
+  "type": "upm.pending.list.result",
+  "payload": {
+    "status": "ok",
+    "data": {
+      "entries": [
+        {
+          "id": "remove-0123456789abcdef",
+          "revision": "0123456789abcdef",
+          "kind": "uninstall",
+          "module": "UltiMail",
+          "fromVersion": "6.5.0",
+          "toVersion": null,
+          "files": [
+            "UltiMail-6.5.0.jar"
+          ],
+          "requestedAt": 1761274800000,
+          "requestedBy": {
+            "kind": "console",
+            "name": null
+          },
+          "state": "pending",
+          "failure": null,
+          "warnings": [
+            {
+              "warning": "custom_content",
+              "kinds": [
+                {
+                  "kind": "unknown",
+                  "count": null
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "lastStart": [],
+      "truncated": false
+    }
+  },
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW"
+}

@@ -225,6 +225,12 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.reason.wrong_identity");
     public static final MessageKey REASON_WRONG_VERSION =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.reason.wrong_version");
+    public static final MessageKey REVOKE_ACTION_INSTALL =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.action.install");
+    public static final MessageKey REVOKE_ACTION_UNINSTALL =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.action.uninstall");
+    public static final MessageKey REVOKE_ACTION_UPDATE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.action.update");
     public static final MessageKey REVOKE_DONE_DOWNLOADING =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.done.downloading");
     public static final MessageKey REVOKE_DONE_INSTALL =
@@ -243,6 +249,8 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.not_revocable.in_progress");
     public static final MessageKey REVOKE_NOT_REVOCABLE_NEEDS_OPERATOR =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.not_revocable.needs_operator");
+    public static final MessageKey REVOKE_PANEL_LOG =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.panel_log");
     public static final MessageKey START_INSTALL_CLEANUP_DEFERRED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.install.cleanup_deferred");
     public static final MessageKey START_INSTALL_COMMITTED =

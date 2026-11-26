@@ -953,7 +953,9 @@ successfully with an empty module set.
 
 ## Module changes wait for a restart (as of 7.0.0)
 
-`/upm install`, `/upm update` and `/upm uninstall` record changes for the next start instead of changing running modules. Use `/upm pending` to see them and the results of this start, or `/upm revoke <module>` to undo one entry before restarting. Viewing and revoking through UltiCloud will be available with the follow-up panel integration.
+`/upm install`, `/upm update` and `/upm uninstall` record changes for the next start instead of changing running modules. Use `/upm pending` to see them and the results of this start, or `/upm revoke <module>` to undo one entry before restarting. When the server is connected to UltiCloud, its owner can view pending changes and revoke them individually in the panel; there is no server-side switch for this feature. As with `/upm revoke`, entries that failed to apply at the last start, need manual attention on the server, or were left unfinished by the last start cannot be revoked in the panel.
+
+**Known limitation — panel revocation timeouts.** A revocation queued behind a long-running request on the same connection may still run after the panel reports a timeout. Refresh the pending list before deciding whether to retry.
 
 - A module has one pending entry. Installing a different version of a running module queues an update.
 - Installing the exact running version is a no-op, or cancels a pending update or uninstall.
@@ -994,6 +996,10 @@ If the content is still needed, revoke the uninstall before restarting. Transact
 The `/upm list`, `versions`, `check`, `update`, and `help` replies and the start-up log lines for module updates and transaction records now use the framework's `upm.*` message catalogue. The wording is unchanged. Commands reply in the sender's configured locale; start-up logs use the server's fallback locale. Operators can override the bundled messages in `plugins/UltiTools/messages/<locale>.yml`. The console's `/upm list` now uses the same colours as the player's list where they share a line, except for the uncoloured separator. Each list row is sent as a separate message. If start-up exits before the text engine is ready, transaction reports log only the namespaced message key and its argument values. Installation refusals for licensing or integrity checks now use the message catalogue in the server's fallback locale.
 
 **中文补充：** 安装、更新、卸载先记入待生效清单，运行中的模块不变。用 `/upm pending` 查看，用 `/upm revoke <模块>` 逐项撤销。同一模块只保留一项；安装当前版本会取消待更新或待卸载，卸载尚未生效的安装会抵消安装，卸载也会替换待更新，并取消同一模块仍在进行的下载，即使已有卸载记录。失败项不能撤销，下次请求该模块时会报告。7.0 新装不再像 6.x 那样覆盖同名文件；请移走或删除该文件后重试。卸载不再当场停用，急需停止请重启。新装暂存时核对身份与版本；加载失败（包括引导钩子抛异常）会还原并记录。记录写不进时，启动会尝试在加载前还原；无法还原则会明确警告。卸载时文件身份不符就放弃该文件的删除；模块仍可加载，需要时重新执行卸载命令。每位 OP 本次运行首次上线提示，新增或替换后下次上线可再提示。卸载前若仍需要自定义附魔、数据包或标签，请撤销；附魔会在物品区块加载保存后丢失，数据包配方和进度消失，标签分类失效。事务记录没有调用 `fsync`，断电或系统崩溃可能丢失最近排队的请求，重启后请用 `/upm pending` 核对。目录需在同一文件系统；Windows 上被占用的 JAR 可能要下次启动移除；不支持降级到 6.x。
+
+服务器连接 UltiCloud 时，所有者可以在面板查看并逐项撤销，无需在服务器上开启额外开关。与 `/upm revoke` 一样，上次启动未能应用、需要在服务器上手动处理或上次启动未处理完的条目，都不能从面板撤销。
+
+**已知限制——面板撤销超时。** 如果撤销排在同一连接上一个长时间运行的请求之后，面板即使先显示超时，撤销也可能稍后执行。请先刷新待生效清单，再决定是否重试。
 
 `/upm list`、`versions`、`check`、`update`、`help` 的回复及模块更新与事务记录的启动日志改用 `upm.*` 消息目录，原文不变；命令回复按发送者语言，日志按服务器回退语言，服主可在 `plugins/UltiTools/messages/<语言>.yml` 覆盖，控制台列表也带颜色（分隔线除外），列表改为逐行发送。若启动在文字引擎就绪前提前退出，事务报告只记录带命名空间的消息键和参数值。因许可证或完整性检查而拒绝安装时，日志改用消息目录，并按服务器回退语言输出。
 
