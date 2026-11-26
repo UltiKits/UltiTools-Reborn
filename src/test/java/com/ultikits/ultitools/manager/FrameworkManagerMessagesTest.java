@@ -82,16 +82,16 @@ class FrameworkManagerMessagesTest {
             bukkit.when(Bukkit::getLogger).thenReturn(logger(logs));
             var manager = new PluginManager();
             var field = PluginManager.class.getDeclaredField("moduleJarIndex");
-            field.setAccessible(true);
+            field.setAccessible(true); // NOPMD - test-only reflective access
             var index = (ModuleJarIndex) field.get(manager);
             index.record("fixture.Main", new File("a.jar"));
             index.record("fixture.Main", new File("b.jar"));
             index.recordSupplier("fixture.Main", new File("a.jar"));
             var duplicate = PluginManager.class.getDeclaredMethod("warnOnDuplicateModuleJars");
-            duplicate.setAccessible(true);
+            duplicate.setAccessible(true); // NOPMD - test-only reflective access
             duplicate.invoke(manager);
             var missing = PluginManager.class.getDeclaredMethod("logMissingRequiredPlugins", String.class, List.class);
-            missing.setAccessible(true);
+            missing.setAccessible(true); // NOPMD - test-only reflective access
             missing.invoke(null, "Probe", List.of("Vault"));
             assertThat(logs).containsExactly(code.equals("en")
                     ? "[UltiTools-API] These JAR files all declare the same module main class fixture.Main: a.jar, b.jar. The module's classes load only from a.jar; the other copies are not loaded. Keep only one of them."
@@ -113,7 +113,7 @@ class FrameworkManagerMessagesTest {
             when(module.getPluginName()).thenReturn("Probe");
             var method = PluginManager.class.getDeclaredMethod("keepRunning", UltiToolsPlugin.class, ReloadReport.class,
                     String.class, Integer.class, Map.class, Set.class, String.class);
-            method.setAccessible(true);
+            method.setAccessible(true); // NOPMD - test-only reflective access
             var report = new ReloadReport();
             method.invoke(null, module, report, "fixture.Config#cooldown", null, new HashMap<>(), new HashSet<>(), "detail");
             assertThat(report.getPartialReasons()).containsExactly(code.equals("en")

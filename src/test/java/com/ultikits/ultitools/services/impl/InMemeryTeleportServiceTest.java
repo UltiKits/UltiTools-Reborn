@@ -247,7 +247,7 @@ class InMemeryTeleportServiceTest {
     @Test
     void immediateAndDelayedTeleportKeepTheNativeSoundAndTitleParameters() {
         org.bukkit.entity.Player player = mock(org.bukkit.entity.Player.class);
-        when(player.locale()).thenReturn(java.util.Locale.ENGLISH);
+        when(player.locale()).thenReturn(Locale.ENGLISH);
         when(player.getUniqueId()).thenReturn(UUID.randomUUID());
         Location location = new Location(server.addSimpleWorld("native-sound"), 1, 64, 1);
         when(player.getLocation()).thenReturn(location);
@@ -256,12 +256,12 @@ class InMemeryTeleportServiceTest {
         InMemeryTeleportService.processDelayTeleportTick(player, location, 0);
         org.mockito.ArgumentCaptor<org.bukkit.Sound> sounds =
                 org.mockito.ArgumentCaptor.forClass(org.bukkit.Sound.class);
-        org.mockito.Mockito.verify(player, org.mockito.Mockito.times(2)).playSound(
+        verify(player, times(2)).playSound(
                 org.mockito.ArgumentMatchers.eq(location), sounds.capture(),
                 org.mockito.ArgumentMatchers.eq(1f), org.mockito.ArgumentMatchers.eq(0f));
         assertThat(sounds.getAllValues()).containsOnly(org.bukkit.Sound.ENTITY_ENDERMAN_TELEPORT);
         var titles = org.mockito.ArgumentCaptor.forClass(net.kyori.adventure.title.Title.class);
-        org.mockito.Mockito.verify(player).showTitle(titles.capture());
+        verify(player).showTitle(titles.capture());
         assertThat(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(titles.getValue().title()))
                 .isEqualTo("Teleport Succeed!");
         assertThat(titles.getValue().times().stay()).isEqualTo(Duration.ofMillis(2500));

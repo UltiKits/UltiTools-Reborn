@@ -81,11 +81,11 @@ class FrameworkStorageMessagesTest {
             update.setLatestVersion("2.0");
             field(manager, "frameworkUpdate", update);
             var mapField = UpdateManager.class.getDeclaredField("moduleUpdates");
-            mapField.setAccessible(true);
+            mapField.setAccessible(true); // NOPMD - test-only reflective access
             @SuppressWarnings("unchecked") var updates = (Map<String, UpdateInfo>) mapField.get(manager);
             updates.put("Probe", update);
             var results = UpdateManager.class.getDeclaredMethod("logResults", List.class);
-            results.setAccessible(true);
+            results.setAccessible(true); // NOPMD - test-only reflective access
             results.invoke(manager, List.of("Missing"));
             assertThat(lines).contains(code.equals("en") ? "[UltiTools-API] UltiTools-API update available: 2.0 (current: 1.0)" : "[UltiTools-API] UltiTools-API有新版本 2.0 可用（当前：1.0）",
                     code.equals("en") ? "[UltiTools-API] Download URL: https://github.com/UltiKits/UltiTools-Reborn/releases/latest" : "[UltiTools-API] 下载地址：https://github.com/UltiKits/UltiTools-Reborn/releases/latest",
@@ -129,7 +129,7 @@ class FrameworkStorageMessagesTest {
 
     private static void field(Object target, String name, Object value) throws Exception {
         var field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test-only reflective access
         field.set(target, value);
     }
 

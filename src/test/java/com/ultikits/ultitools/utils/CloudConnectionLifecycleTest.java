@@ -467,8 +467,8 @@ class CloudConnectionLifecycleTest {
         org.bukkit.configuration.file.YamlConfiguration env = new org.bukkit.configuration.file.YamlConfiguration();
         env.set("version", "6.3.1-SNAPSHOT");
         try (var scheduling = org.mockito.Mockito.mockStatic(com.ultikits.ultitools.scheduling.internal.FrameworkScheduling.class);
-             var catalogue = new com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport("en");
-             var messageScope = com.ultikits.ultitools.text.internal.FrameworkMessages.overrideForTests(catalogue.messages(), java.util.Locale.ENGLISH);
+             var catalogue = new CommandMessageTestSupport("en");
+             var messageScope = FrameworkMessages.overrideForTests(catalogue.messages(), Locale.ENGLISH);
              org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = org.mockito.Mockito.mockStatic(org.bukkit.Bukkit.class);
              org.mockito.MockedStatic<UltiTools> tools = org.mockito.Mockito.mockStatic(UltiTools.class,
                      org.mockito.Mockito.CALLS_REAL_METHODS);

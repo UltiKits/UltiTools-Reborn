@@ -84,7 +84,7 @@ import com.ultikits.ultitools.utils.TestHelper;
 @ExtendWith(CommandTestExtension.class)
 class ConfigBindingReloadReportTest {
 
-    private com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport textSupport;
+    private CommandMessageTestSupport textSupport;
     private AutoCloseable textScope;
     private BindingTimingConfig config;
     private PluginManager pluginManager;
@@ -496,7 +496,7 @@ class ConfigBindingReloadReportTest {
             textScope.close();
             textSupport.close();
         }
-        textSupport = new com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport(language);
+        textSupport = new CommandMessageTestSupport(language);
         textScope = com.ultikits.ultitools.text.internal.FrameworkMessages.overrideForTests(
                 textSupport.messages(), java.util.Locale.forLanguageTag(language));
     }

@@ -164,7 +164,7 @@ class UltiToolsFrameworkCatalogueReloadTest {
         when(managers.getContext()).thenReturn(context);
         when(context.getBean(TextEngine.class)).thenReturn(engine);
         var field = UltiTools.class.getDeclaredField("pluginManager");
-        field.setAccessible(true);
+        field.setAccessible(true); // NOPMD - test-only reflective access
         field.set(plugin, modules);
         doCallRealMethod().when(plugin).reloadPluginsAndReport();
         return plugin;

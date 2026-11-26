@@ -883,7 +883,7 @@ class DataStoreManagerTest {
             when(json.getStoreType()).thenReturn("json");
             DataStoreManager.register(json);
             var init = UltiTools.class.getDeclaredMethod("initDataStore");
-            init.setAccessible(true);
+            init.setAccessible(true); // NOPMD - test-only reflective access
 
             try (var scope = FrameworkMessages.overrideForTests(messages, Locale.ENGLISH)) {
                 assertDoesNotThrow(() -> init.invoke(plugin));
