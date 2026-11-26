@@ -50,6 +50,7 @@ import org.junit.jupiter.api.Timeout;
 import java.util.concurrent.TimeUnit;
 import org.mockito.MockedStatic;
 
+import com.google.gson.JsonObject;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.ultikits.ultitools.command.engine.CommandTestSupport;
 import com.ultikits.ultitools.UltiTools;
@@ -59,6 +60,7 @@ import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.utils.LegacyTextBaseline;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.VersionLookup;
 
@@ -1188,29 +1190,24 @@ class PluginInstallCommandsTest {
 
     /**
      * The replies {@code /upm install} gives when the API-level check refuses a module (plan 18-40),
-     * read through {@code lang/en.json} as a server with {@code language: en} reads them: each one
-     * names the module, the level where known, this framework's level and the accepted range.
+     * compared with the frozen English baseline: each one names the module, the level where
+     * known, this framework's level and the accepted range.
      */
     @Nested
-    @DisplayName("API-level refusals reply with the reason, in English under language: en (18-40)")
+    @DisplayName("API-level refusals reply with the reason, in English (18-40)")
     class ApiLevelReplies {
 
-        private Map<String, String> english;
+        private JsonObject english;
 
         @BeforeEach
         void englishCatalogue() throws IOException {
-            try (java.io.Reader reader = new java.io.InputStreamReader(
-                    PluginInstallCommandsTest.class.getResourceAsStream("/lang/en.json"),
-                    java.nio.charset.StandardCharsets.UTF_8)) {
-                english = new com.google.gson.Gson().fromJson(reader,
-                        new com.google.gson.reflect.TypeToken<Map<String, String>>() { }.getType());
-            }
+            english = LegacyTextBaseline.read(Locale.ENGLISH);
             player.setLocale(Locale.US);
         }
 
         private String englishOf(String key, Object... args) {
-            assertThat(english).as("lang/en.json carries " + key).containsKey(key);
-            return String.format(english.get(key), args);
+            assertThat(english.has(key)).as("the frozen English baseline carries " + key).isTrue();
+            return String.format(english.get(key).getAsString(), args);
         }
 
         private String reply(String... args) {

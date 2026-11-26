@@ -12,6 +12,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -22,8 +23,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
@@ -114,7 +117,11 @@ class UltiToolsPluginPartialReloadTest {
     void partialReasonIsReturnedAndLogged() throws Exception {
         PartialFixturePlugin plugin = reloadSafePlugin(PartialFixturePlugin.class, "PartialModule");
 
-        ReloadReport report = plugin.reloadWithReport();
+        ReloadReport report;
+        try (var catalogue = new CommandMessageTestSupport("en");
+             var scope = FrameworkMessages.overrideForTests(catalogue.messages(), Locale.ENGLISH)) {
+            report = plugin.reloadWithReport();
+        }
 
         assertThat(report.getPartialReasons()).containsExactly("scoreboard service did not restart");
         assertThat(recordsAt(Level.INFO)).as("no plain success line for a partial reload").isEmpty();
@@ -129,7 +136,11 @@ class UltiToolsPluginPartialReloadTest {
     void legacyOverrideBehavesAsBefore() throws Exception {
         LegacyFixturePlugin plugin = reloadSafePlugin(LegacyFixturePlugin.class, "LegacyModule");
 
-        ReloadReport report = plugin.reloadWithReport();
+        ReloadReport report;
+        try (var catalogue = new CommandMessageTestSupport("en");
+             var scope = FrameworkMessages.overrideForTests(catalogue.messages(), Locale.ENGLISH)) {
+            report = plugin.reloadWithReport();
+        }
 
         assertThat(plugin.onReloadRan).as("the default onReload(ReloadReport) calls onReload()").isTrue();
         assertThat(report.isPartial()).isFalse();
