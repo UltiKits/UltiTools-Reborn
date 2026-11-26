@@ -302,7 +302,8 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   and `@CmdParam(suggest = …)` without a matching provider method look up names only if they match
   `[a-z0-9_-]+(\.[a-z0-9_-]+)*` and are at most 128 characters. A matching key in the server fallback
   language or the module's source language renders as plain text. Other spellings and missing keys
-  stay literal: comments keep their token and warn once per field; descriptions and hints keep their
+  stay literal: comments keep their token and warn once per field per configuration load (at startup and on
+  each reload); descriptions and hints keep their
   original text. A single lowercase word such as `amount` is also a valid path and resolves if the
   module has a top-level message with that name. Use a full sentence for literal descriptions and
   hints, or an explicit dotted key for translations.
@@ -330,7 +331,7 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 时区在启动和配置重载时解析，玩家语言每次投递时读取。
 模块的注释令牌、命令描述及无对应方法的补全提示，只有名称符合 `[a-z0-9_-]+(\.[a-z0-9_-]+)*`
 且最多 128 个字符，才会按服务器后备语言、再按模块源语言查找模块 `messages/` 中的纯文本。
-不符合规则或找不到键时，描述和提示照原文显示，注释保留令牌并按字段告警一次。
+不符合规则或找不到键时，描述和提示照原文显示，注释保留令牌；每次加载配置（启动以及每次重载）时，每个字段最多告警一次。
 `amount` 之类的单个小写词也是合法路径；若与目录中的顶层消息同名，就会被解析。
 不需要翻译的描述和提示建议写成完整句子，需要翻译时用带点的键。
 6.x 的令牌译文须搬到 `messages/<locale>.yml`；若措辞有变，须把 6.x 的旧文字列入

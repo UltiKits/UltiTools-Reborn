@@ -843,14 +843,19 @@ public abstract class UltiToolsPlugin implements IPlugin, Configurable {
         } catch (Exception | Error e) {
             // Exception, not RuntimeException: a hook can throw a checked exception it does not
             // declare (Lombok @SneakyThrows); it gets the failure line too. Rethrown unchanged.
-            LOGGER.log(Level.SEVERE, FrameworkMessages.plain(ManagerKeys.RELOAD_MODULE_FAILED,
-                    Arg.string("module", getPluginName()), Arg.string("error", describeFailure(e))), e);
+            if (LOGGER.isLoggable(Level.SEVERE)) {
+                LOGGER.log(Level.SEVERE, FrameworkMessages.plain(ManagerKeys.RELOAD_MODULE_FAILED,
+                        Arg.string("module", getPluginName()), Arg.string("error", describeFailure(e))), e);
+            }
             throw e;
         }
         if (report.isPartial()) {
-            LOGGER.log(Level.WARNING, FrameworkMessages.plain(ManagerKeys.RELOAD_PARTIAL,
-                    Arg.string("module", getPluginName()), Arg.string("reasons", String.join("; ", report.getPartialReasons()))));
-        } else {
+            if (LOGGER.isLoggable(Level.WARNING)) {
+                LOGGER.log(Level.WARNING, FrameworkMessages.plain(ManagerKeys.RELOAD_PARTIAL,
+                        Arg.string("module", getPluginName()),
+                        Arg.string("reasons", String.join("; ", report.getPartialReasons()))));
+            }
+        } else if (LOGGER.isLoggable(Level.INFO)) {
             LOGGER.log(Level.INFO, FrameworkMessages.plain(ManagerKeys.RELOAD_MODULE_DONE,
                     Arg.string("module", getPluginName())));
         }
