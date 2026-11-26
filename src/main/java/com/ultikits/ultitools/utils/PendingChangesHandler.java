@@ -5,6 +5,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.utils.ModuleFileTransactions.StartOutcome;
 import com.ultikits.ultitools.utils.PendingChanges.Kind;
@@ -255,6 +257,15 @@ final class PendingChangesHandler implements CloudRequestHandler {
         };
     }
 
+    private static MessageKey revokeActionKey(Kind kind) {
+        return switch (kind) {
+            case INSTALL -> UpmKeys.REVOKE_ACTION_INSTALL;
+            case UPDATE -> UpmKeys.REVOKE_ACTION_UPDATE;
+            case UNINSTALL -> UpmKeys.REVOKE_ACTION_UNINSTALL;
+            default -> throw new IllegalArgumentException("Unknown pending change kind: " + kind);
+        };
+    }
+
     private static String stateName(State state) {
         return switch (state) {
             case PENDING -> "pending";
@@ -299,7 +310,7 @@ final class PendingChangesHandler implements CloudRequestHandler {
                 PendingChange before = result.before();
                 logger.get().info(FrameworkMessages.plain(UpmKeys.REVOKE_PANEL_LOG,
                         Arg.string("user_id", Long.toString(userId)), Arg.string("module", before.module()),
-                        Arg.string("action", kindName(before.kind()))));
+                        Arg.text("action", Text.of(revokeActionKey(before.kind())))));
                 JsonObject data = new JsonObject();
                 data.add("revoked", entryData(before));
                 channel.replyOk(replyTo, REVOKE_RESULT, data);

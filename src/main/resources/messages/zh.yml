@@ -299,6 +299,10 @@ upm:
     wrong_identity: "下载的 <file> 没有声明 identify-string <module> 和版本号"
     wrong_version: "下载的 <file> 声明的版本是 <declared>，不是云端给出的最新版本 <version>"
   revoke:
+    action:
+      install: "安装"
+      uninstall: "卸载"
+      update: "更新"
     done:
       downloading: "<green>已取消 <module> 正在进行的下载，它不会加入待生效清单。"
       install: "<green>已撤销：不会安装 <module> <to>。"

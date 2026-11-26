@@ -24,8 +24,9 @@ import com.ultikits.ultitools.entities.Capability;
  * {@code properties:read}, {@code properties:write}. {@code power} is always declared, so the panel can show "turned
  * off by the operator" from {@code settings.powerActionsEnabled} while the handler refuses with
  * {@code power_disabled}; {@code link} is always declared, because a player link carries no action that is dangerous
- * to the server. {@code backups} is never declared. Module names {@code modules:<id>@<X.Y.Z>} follow, sorted, and the
- * whole list never exceeds {@link #MAX_NAMES}.
+ * to the server. {@code upm:pending} is always declared for listing and revoking pending module changes, with no
+ * operator switch. {@code backups} is never declared. Module names {@code modules:<id>@<X.Y.Z>} follow, sorted, and
+ * the whole list never exceeds {@link #MAX_NAMES}.
  * <p>
  * <b>Per request (S-66).</b> The hello list changes only on the next connection, so {@link #enabled(String)} reads the
  * switch again for every request; a switch turned off after the handshake refuses the request with

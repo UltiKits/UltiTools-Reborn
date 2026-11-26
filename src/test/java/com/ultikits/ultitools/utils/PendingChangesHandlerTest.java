@@ -5,8 +5,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.contract.ContractFixtures;
 import com.ultikits.ultitools.stub.UltiCloudStub;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.utils.ModuleFileTransactions.StartOutcome;
 import com.ultikits.ultitools.utils.ModuleFileTransactions.StartOutcome.Result;
 import com.ultikits.ultitools.utils.PendingChanges.Kind;
@@ -27,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -228,11 +231,7 @@ class PendingChangesHandlerTest {
     @Test
     void largeEscapedMultibyteListKeepsTheLongestPrefixWithinTheWireBudget() {
         String file = "界".repeat(248) + "\" \u0001.jar";
-        var kinds = new ModuleContent(IntStream.range(0, 16)
-                .mapToObj(i -> new ModuleContentKind("kind_" + i, 1)).toList());
-        List<PendingChange> entries = IntStream.range(0, 200).mapToObj(i -> new PendingChange(
-                "remove-%016x".formatted(i), REVISION, Kind.UNINSTALL, "Module " + (100 + i), "1", null,
-                Collections.nCopies(16, file), null, null, State.PENDING, null, null, kinds)).toList();
+        List<PendingChange> entries = largeEntries(200, file);
         outcomes = List.of(new StartOutcome(Kind.UPDATE, "Demo", "1", "2", Result.ROLLED_BACK));
         list(entries, 0);
         JsonObject frame = onlyReply(LIST + ".result");
@@ -243,17 +242,74 @@ class PendingChangesHandlerTest {
         assertThat(data.get("truncated").getAsBoolean()).isTrue();
         assertThat(included).extracting(item -> item.getAsJsonObject().get("id").getAsString())
                 .containsExactlyElementsOf(entries.subList(0, included.size()).stream().map(PendingChange::id).toList());
-        assertThat(wire.getFirst().getBytes(StandardCharsets.UTF_8).length).isLessThanOrEqualTo(limits.maxFrameBytes());
-        included.add(included.get(0));
-        assertThat(frame.toString().getBytes(StandardCharsets.UTF_8).length).isGreaterThan(limits.maxFrameBytes());
+        assertThat(replyBytes()).isLessThanOrEqualTo(limits.maxFrameBytes());
+
+        wire.clear();
+        included.add(listedEntry(entries.get(included.size())));
+        String extended = new Envelope(frame.get("id").getAsString(), LIST + ".result", FRAME_TIME, REQUEST_ID,
+                frame.getAsJsonObject("payload")).toJson();
+        assertThat(extended.getBytes(StandardCharsets.UTF_8).length).isGreaterThan(limits.maxFrameBytes());
+    }
+
+    @Test
+    void acceptsAnExactFrameBudgetAndTruncatesOneByteOver() {
+        List<PendingChange> entries = largeEntries(6, "界".repeat(251) + ".jar");
+        list(entries, 0);
+        List<String> ids = entries.stream().map(PendingChange::id).toList();
+        assertThat(entryIds(listedData())).containsExactlyElementsOf(ids);
+        int completeBytes = replyBytes();
+
+        JsonObject exact = listAtFrameLimit(entries, completeBytes);
+        assertThat(exact.get("truncated").getAsBoolean()).isFalse();
+        assertThat(entryIds(exact)).containsExactlyElementsOf(ids);
+        assertThat(replyBytes()).isEqualTo(completeBytes);
+
+        JsonObject oneByteOver = listAtFrameLimit(entries, completeBytes - 1);
+        assertThat(oneByteOver.get("truncated").getAsBoolean()).isTrue();
+        // The JSON token true is one byte shorter than false, so the full prefix still fits.
+        assertThat(entryIds(oneByteOver)).containsExactlyElementsOf(ids);
+        assertThat(replyBytes()).isEqualTo(completeBytes - 1);
+
+        JsonObject trimmed = listAtFrameLimit(entries, completeBytes - 2);
+        assertThat(trimmed.get("truncated").getAsBoolean()).isTrue();
+        assertThat(entryIds(trimmed)).containsExactlyElementsOf(ids.subList(0, ids.size() - 1));
+        assertThat(replyBytes()).isLessThanOrEqualTo(limits.maxFrameBytes());
+    }
+
+    private JsonObject listAtFrameLimit(List<PendingChange> entries, int maxBytes) {
+        limits = negotiatedFrameLimit(maxBytes);
+        wire.clear();
+        list(entries, 0);
+        return listedData();
+    }
+
+    private static List<String> entryIds(JsonObject listData) {
+        return listData.getAsJsonArray("entries").asList().stream()
+                .map(entry -> entry.getAsJsonObject().get("id").getAsString()).toList();
+    }
+
+    private static List<PendingChange> largeEntries(int count, String file) {
+        var kinds = new ModuleContent(IntStream.range(0, 16)
+                .mapToObj(i -> new ModuleContentKind("kind_" + i, 1)).toList());
+        return IntStream.range(0, count).mapToObj(i -> new PendingChange(
+                "remove-%016x".formatted(i), REVISION, Kind.UNINSTALL, "Module " + (100 + i), "1", null,
+                Collections.nCopies(16, file), null, null, State.PENDING, null, null, kinds)).toList();
+    }
+
+    private int replyBytes() {
+        return wire.getFirst().getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    private static CloudLimits negotiatedFrameLimit(int maxFrameBytes) {
+        JsonObject welcome = ContractFixtures.validFrames("welcome").getFirst().frame()
+                .getAsJsonObject("payload").getAsJsonObject("limits");
+        welcome.addProperty("maxFrameBytes", maxFrameBytes);
+        return CloudLimits.fromWelcome(welcome);
     }
 
     @Test
     void negotiatedSmallBudgetAlsoCapsStartupResultsIfTheyAloneDoNotFit() {
-        JsonObject welcome = ContractFixtures.validFrames("welcome").getFirst().frame()
-                .getAsJsonObject("payload").getAsJsonObject("limits");
-        welcome.addProperty("maxFrameBytes", 65_536);
-        limits = CloudLimits.fromWelcome(welcome);
+        limits = negotiatedFrameLimit(65_536);
         outcomes = IntStream.range(0, 200).mapToObj(i -> new StartOutcome(Kind.UPDATE, "界".repeat(128),
                 "界".repeat(64), "界".repeat(64), Result.ROLLED_BACK)).toList();
         list(List.of(change(Kind.INSTALL, State.PENDING, REVISION, null)), 0);
@@ -275,6 +331,31 @@ class PendingChangesHandlerTest {
         assertThat(revoked.get("id").getAsString()).isEqualTo(ID);
         verify(pending).revoke(ID, REVISION, true);
         assertThat(log).singleElement().satisfies(record -> assertThat(record.getLevel()).isEqualTo(Level.INFO));
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "INSTALL,en,Panel user #7 revoked the pending install of <red>Demo.",
+        "UPDATE,en,Panel user #7 revoked the pending update of <red>Demo.",
+        "UNINSTALL,en,Panel user #7 revoked the pending uninstall of <red>Demo.",
+        "INSTALL,zh,面板用户 #7 撤销了 <red>Demo 的待生效操作（安装）。",
+        "UPDATE,zh,面板用户 #7 撤销了 <red>Demo 的待生效操作（更新）。",
+        "UNINSTALL,zh,面板用户 #7 撤销了 <red>Demo 的待生效操作（卸载）。"
+    })
+    void auditUsesTheServerFallbackAndKeepsModuleNamesLiteral(Kind kind, String locale, String auditLine)
+            throws Exception {
+        var before = new PendingChange(ID, REVISION, kind, "<red>Demo", "1", "2", List.of("demo.jar"),
+                null, null, State.PENDING, null, null, ModuleContent.NONE);
+        captureLogs();
+        when(pending.revoke(ID, REVISION, true)).thenReturn(RevokeResult.revoked(before));
+        try (var text = new CommandMessageTestSupport(locale);
+             var scope = FrameworkMessages.overrideForTests(text.messages(), Locale.forLanguageTag(locale))) {
+            handler.handle(request(REVOKE, revokePayload(REVISION)), channel);
+        }
+        assertThat(log).singleElement().satisfies(record -> {
+            assertThat(record.getLevel()).isEqualTo(Level.INFO);
+            assertThat(record.getMessage()).isEqualTo(auditLine);
+        });
     }
 
     @ParameterizedTest

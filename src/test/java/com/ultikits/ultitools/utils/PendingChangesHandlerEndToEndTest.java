@@ -24,6 +24,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.stream.Stream;
@@ -31,6 +32,7 @@ import java.util.stream.Stream;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.catalogue;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.moduleJar;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 class PendingChangesHandlerEndToEndTest {
@@ -66,7 +68,7 @@ class PendingChangesHandlerEndToEndTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"en,Panel user #7 revoked the pending install of Demo.", "zh,面板用户 #7 撤销了 Demo 的待生效操作（install）。"})
+    @CsvSource({"en,Panel user #7 revoked the pending install of Demo.", "zh,面板用户 #7 撤销了 Demo 的待生效操作（安装）。"})
     void acceptedHandshakeListsAndRevokesTheRealJournalEntry(String locale, String auditLine) throws Exception {
         PendingChange staged = stage("1");
         assertThat(declaredCapabilities(1)).contains(CAPABILITY);
@@ -113,6 +115,38 @@ class PendingChangesHandlerEndToEndTest {
     }
 
     @Test
+    void commandAndPanelRevokingTheSameEntryHaveExactlyOneWinner() throws Exception {
+        PendingChange staged = stage("1");
+        var ready = new CountDownLatch(2);
+        // Rendezvous in the actual panel worker before it enters the journal, not just before sending the frame.
+        doAnswer(call -> {
+            awaitConcurrentRevoke(ready);
+            return transactions;
+        }).when(session.plugin()).getModuleFileTransactions();
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var command = executor.submit(() -> {
+                awaitConcurrentRevoke(ready);
+                return pending.revokeByModule("Demo").outcome();
+            });
+            JsonObject reply = revoke(staged.id(), staged.revision(), REVOKE + ".result");
+            Outcome commandOutcome = command.get(10, TimeUnit.SECONDS);
+            if (commandOutcome == Outcome.REVOKED) {
+                assertError(reply, "pending_not_found");
+            } else {
+                assertThat(commandOutcome).isEqualTo(Outcome.NOT_FOUND);
+                assertThat(okData(reply).getAsJsonObject("revoked").get("id").getAsString()).isEqualTo(staged.id());
+            }
+        }
+        assertThat(pending.list()).isEmpty();
+        assertThat(staged.recordFile()).doesNotExist();
+    }
+
+    private static void awaitConcurrentRevoke(CountDownLatch ready) throws InterruptedException {
+        ready.countDown();
+        assertThat(ready.await(10, TimeUnit.SECONDS)).as("both revoke paths reached the journal").isTrue();
+    }
+
+    @Test
     void supersededRevisionDoesNotUndoTheReplacement() throws Exception {
         PendingChange earlier = stage("1");
         PendingChange replacement = stage("2");
@@ -138,15 +172,19 @@ class PendingChangesHandlerEndToEndTest {
     void downloadingCanBeRevokedOnlyWithNullRevision() throws Exception {
         var entered = new CountDownLatch(1);
         var released = new CountDownLatch(1);
+        var stagedJar = new AtomicReference<File>();
         try (var executor = Executors.newSingleThreadExecutor()) {
             var download = executor.submit(() -> transactions.stageChange("demo", "1", "Demo", null,
                     List::of, ignored -> null, catalogue("demo", "1"), (url, name, folder) -> {
+                        File jar = new File(folder, name);
+                        moduleJar(jar, "Demo", "1", "demo");
+                        stagedJar.set(jar);
                         entered.countDown();
                         awaitDownloadRelease(released);
-                        moduleJar(new File(folder, name), "Demo", "1", "demo");
                     }, null));
             try {
                 assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+                assertThat(stagedJar.get()).isFile();
                 PendingChange inFlight = pending.list().getFirst();
                 assertThat(inFlight.state()).isEqualTo(PendingChanges.State.DOWNLOADING);
                 assertThat(inFlight.revision()).isNull();
@@ -160,6 +198,8 @@ class PendingChangesHandlerEndToEndTest {
             assertThat(download.get(10, TimeUnit.SECONDS).getReasonKey())
                     .isEqualTo(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING);
         }
+        assertThat(stagedJar.get()).doesNotExist();
+        assertThat(stagedJar.get().getParentFile().getParentFile()).doesNotExist();
         assertThat(pending.list()).isEmpty();
     }
 

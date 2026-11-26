@@ -169,6 +169,12 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.reason.wrong_identity");
     public static final MessageKey REASON_WRONG_VERSION =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.reason.wrong_version");
+    public static final MessageKey REVOKE_ACTION_INSTALL =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.action.install");
+    public static final MessageKey REVOKE_ACTION_UNINSTALL =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.action.uninstall");
+    public static final MessageKey REVOKE_ACTION_UPDATE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.action.update");
     public static final MessageKey REVOKE_DONE_DOWNLOADING =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.done.downloading");
     public static final MessageKey REVOKE_DONE_INSTALL =

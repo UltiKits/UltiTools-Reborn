@@ -299,6 +299,10 @@ upm:
     wrong_identity: "the downloaded <file> does not declare identify-string <module> and a version"
     wrong_version: "the download <file> declares version <declared>, not the latest version <version> the catalogue offered"
   revoke:
+    action:
+      install: "install"
+      uninstall: "uninstall"
+      update: "update"
     done:
       downloading: "<green>Cancelled the download for <module>; it will not be added to the pending changes."
       install: "<green>Undone: <module> <to> will not be installed."
