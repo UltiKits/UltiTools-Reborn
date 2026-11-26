@@ -3,13 +3,10 @@
 # check-comment-only-diff.sh — D-21's substitute for per-PR real-machine UAT on GATE-02's four
 # comment-conversion batches (see 08-CONTEXT.md D-08 through D-11 and D-21).
 #
-# This check does NOT replace real-machine UAT in general. It replaces it for exactly the four
-# comment-conversion batch PRs, because the two hazards a real-machine pass would normally catch
-# in this repository — an accidental edit inside one of the 98 `i18n("...")` functional keys, and
-# a CRLF/LF normalisation across a 90-CRLF / 210-LF tree — are both mechanically decidable and are
-# exactly what a human tester detects worst (a broken i18n key surfaces only if the tester happens
-# to trigger that specific message). Every other lane in this phase (GATE-03, the gate lane,
-# GATE-04, GATE-05/06) keeps full per-PR real-machine UAT.
+# This check did not replace real-machine UAT except for the four historical comment-conversion
+# batch PRs. It detected accidental edits to the 98 legacy translation keys or line-ending
+# normalization of that tree. Assertion B still checks historical revisions and fixtures;
+# UltiTools 7.0 no longer has the legacy translation call sites.
 #
 # Three invariants are asserted over a commit range, restricted to --scope:
 #

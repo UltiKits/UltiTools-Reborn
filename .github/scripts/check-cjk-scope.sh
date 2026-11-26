@@ -68,17 +68,9 @@
 #   is unambiguously in criterion 2's scope and contains no such runtime-generated content.
 #   This is a deliberate scope narrowing, not a silent one — see the commit that made this change.
 #
-#   Two structural exclusions apply regardless of --scope:
-#     - lang/*.json catalogue files (src/main/resources/lang/{en,zh}.json) are never scanned.
-#       These are i18n message catalogues, not documentation or comments — the root monorepo
-#       CLAUDE.md names them as a hard, project-wide exemption category alongside contributor
-#       names and target-language link labels. D-08/D-11's three-item allowlist covers the
-#       *i18n("...") call-site literals* in Java source; the catalogue files themselves are a
-#       different thing and are excluded here at the enumeration level rather than via an
-#       allowlist entry, so the "exactly three allowlist entries" invariant stays intact.
-#     - .github/scripts/testdata/ (this script's own fixtures) is always excluded. The fixtures
-#       under that directory contain CJK by design, to prove the gate fires and to prove it
-#       exempts — if they were in scope they would permanently fail the gate they exist to test.
+#   The default scope excludes resources, including localized messages/*.yml. The script's
+#   fixtures under .github/scripts/testdata/ contain CJK by design and are always excluded,
+#   even when explicitly scoped, so they do not permanently fail the gate they test.
 #
 # String-literal exclusion for .java files (08-17, "DECISIVE MEASUREMENT" section of
 # "08-SAME-LINE-CJK-RESIDUE.md"): GATE-02 and ROADMAP criterion 2 are about *comments and
@@ -86,7 +78,7 @@
 # jars carry that form." A CJK string literal is neither a comment nor javadoc, is not in either
 # published jar, and this phase's own rule R2/C-03 (08-BATCH-CONVERSION-RULES.md,
 # 08-CONTROL-DOC-CORRECTIONS.md) already treats translating one as a behaviour change out of
-# scope, since it may be user-facing output that belongs in lang/*.json instead. The scanner
+# scope, since it may be historical user-facing output now stored in messages/*.yml. The scanner
 # previously counted string-literal CJK anyway, because it never distinguished a comment line from
 # a string line — this measured 158 such violations across the repository before this fix, which
 # is the gate measuring a superset of what GATE-02 actually requires.
@@ -379,8 +371,7 @@ scan_file() {
 }
 
 # run_scan — enumerates the current SCOPES via `git ls-files` and prints violations for every
-# candidate file, applying the two structural exclusions (lang/*.json catalogues, this script's
-# own testdata fixtures). Prints an explicit note to stderr for any scope matching zero tracked
+# candidate file, excluding the script's testdata fixtures. Prints an explicit note to stderr for any scope matching zero tracked
 # files — an empty scope is never a silent pass. A failed enumeration is not an empty scope:
 # when `git ls-files` exits non-zero, the scan prints an ERROR naming the scope and exits 2,
 # like matcher, helper and read failures, before any count or SUMMARY.
@@ -405,7 +396,6 @@ run_scan() {
         fi
         for f in "${files[@]}"; do
             case "$f" in
-                */lang/en.json | */lang/zh.json) continue ;;
                 .github/scripts/testdata/*) continue ;;
             esac
             scan_file "$f"
