@@ -302,8 +302,12 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   During coexistence, the legacy path still loads custom files as before. New `Messages` use the
   official prefix of a custom configured name (`zh-myserver` → `zh`, unmatched safe names → `en`)
   without treating that custom file as a new catalogue or adding an invalid-locale warning.
-  Once the legacy loader is removed, an upgrade with leftover `lang/` directories gets one console
-  notice per startup listing them; the notice does not rename, delete, or read their contents.
+- **Legacy language directory notice:** On startup, 7.0 logs one console notice if it finds a
+  leftover `lang/` directly under the framework data directory or an immediate module directory
+  under `pluginConfig`. It lists up to 20 paths and reports only a count for the rest. It follows
+  symlinks for the data directory and `pluginConfig` themselves, but skips symlinked module and
+  `lang` entries and does not scan recursively. It does not rename or delete directories, read legacy
+  translations, or run on `/ul reload`.
 - **Module annotation text:** `@ConfigEntry(comment = "{path}")`, `@CmdExecutor(description = …)`,
   and `@CmdParam(suggest = …)` without a matching provider method look up names only if they match
   `[a-z0-9_-]+(\.[a-z0-9_-]+)*` and are at most 128 characters. A matching key in the server fallback
@@ -353,7 +357,9 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。
 并存期间旧路径照旧读取自定义文件；新 `Messages` 将自定义配置名按旧官方前缀归到基础语言
 （`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不读取该旧文件，也不新增非法 locale 警告。
-旧加载器移除后，升级时若仍留有 `lang/` 目录，控制台每次启动只提示一次并列出这些目录；提示不会给目录改名、删除目录或读取其内容。
+7.0 启动时只检查框架数据目录直属的 `lang/`，以及 `pluginConfig` 下各直接模块目录里的 `lang/`。
+若发现遗留目录，控制台只提示一行，最多列出 20 个路径，其余只报数量。框架数据目录和 `pluginConfig` 本身可以是符号链接，
+但扫描遇到的模块目录或 `lang` 条目若是符号链接则跳过，且不会递归扫描。提示不会给目录改名、删除目录或读取旧译文；`/ul reload` 不会触发提示。
 语言标量键和值一律按文字读取（`yes`、`No`、`123`、`null`、`~` 不做 YAML 类型转换），列表与非标量键
 拒绝并告警，嵌套映射仍用于点分键分组。仅读取 `.yml`，`.yaml` 会告警；文件必须为 UTF-8，允许 BOM。
 只带 `zh_CN.yml` 等地区文件却没有 `zh.yml` 时会提示补基础语言文件，不把地区变体回退规则改成模糊匹配。

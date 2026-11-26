@@ -53,21 +53,36 @@ class LegacyLangFolderNoticeTest {
     }
 
     @Test
-    void noLegacyDirectoriesProducesNoLog() throws Exception {
-        Files.createDirectories(dataFolder.resolve("pluginConfig/UltiChat/messages"));
-        Files.createDirectories(dataFolder.resolve("pluginConfig/UltiChat/nested/lang"));
+    void absentDataFolderStaysAbsent() throws Exception {
+        Files.delete(dataFolder);
 
         report("en");
 
+        assertThat(dataFolder).doesNotExist();
+        assertThat(records).isEmpty();
+    }
+
+    @Test
+    void noLegacyDirectoriesProducesNoLog() throws Exception {
+        Path module = Files.createDirectories(dataFolder.resolve("pluginConfig/UltiChat"));
+        Files.createDirectory(module.resolve("messages"));
+        Files.createDirectories(module.resolve("nested/lang"));
+        List<Path> entries = directoryEntries();
+
+        report("en");
+
+        assertThat(directoryEntries()).containsExactlyElementsOf(entries);
         assertThat(records).isEmpty();
     }
 
     @Test
     void frameworkDirectoryProducesOneInfoLineWithLiteralMigrationPath() throws Exception {
         Files.createDirectory(dataFolder.resolve("lang"));
+        List<Path> entries = directoryEntries();
 
         report("en");
 
+        assertThat(directoryEntries()).containsExactlyElementsOf(entries);
         assertThat(infoLine()).isEqualTo("UltiTools 7.0 no longer reads lang/ folders: plugins/UltiTools/lang. "
                 + "Write any translations you changed to messages/<locale>.yml in the new format.");
     }
@@ -129,13 +144,27 @@ class LegacyLangFolderNoticeTest {
     }
 
     @Test
-    void doesNotEnumerateThroughALinkedPluginConfigDirectory() throws Exception {
-        Path other = Files.createDirectories(temporary.resolve("outside/UltiChat/lang"));
-        Files.createSymbolicLink(dataFolder.resolve("pluginConfig"), other.getParent().getParent());
+    void findsLegacyDirectoryThroughALinkedDataFolder() throws Exception {
+        Path target = Files.createDirectory(temporary.resolve("linked-data-target"));
+        Files.createDirectory(target.resolve("lang"));
+        Files.delete(dataFolder);
+        Files.createSymbolicLink(dataFolder, target);
 
         report("en");
 
-        assertThat(records).isEmpty();
+        assertThat(infoLine()).contains("plugins/UltiTools/lang.").doesNotContain(target.toString());
+    }
+
+    @Test
+    void findsLegacyDirectoryThroughALinkedPluginConfigDirectory() throws Exception {
+        Path target = Files.createDirectory(temporary.resolve("linked-config-target"));
+        Files.createDirectories(target.resolve("UltiChat/lang"));
+        Files.createSymbolicLink(dataFolder.resolve("pluginConfig"), target);
+
+        report("en");
+
+        assertThat(infoLine()).contains("plugins/UltiTools/pluginConfig/UltiChat/lang.")
+                .doesNotContain(target.toString());
     }
 
     @Test
@@ -147,6 +176,9 @@ class LegacyLangFolderNoticeTest {
         List<Path> entries = directoryEntries();
         List<String> hashes = List.of(sha256(frameworkFile), sha256(moduleFile));
         List<FileTime> times = List.of(Files.getLastModifiedTime(frameworkFile), Files.getLastModifiedTime(moduleFile));
+        FileTime oldTime = FileTime.from(Instant.parse("2020-01-02T03:04:05Z"));
+        Files.setLastModifiedTime(framework, oldTime);
+        Files.setLastModifiedTime(module, oldTime);
 
         report("en");
 
@@ -155,6 +187,8 @@ class LegacyLangFolderNoticeTest {
         assertThat(List.of(sha256(frameworkFile), sha256(moduleFile))).containsExactlyElementsOf(hashes);
         assertThat(List.of(Files.getLastModifiedTime(frameworkFile), Files.getLastModifiedTime(moduleFile)))
                 .containsExactlyElementsOf(times);
+        assertThat(List.of(Files.getLastModifiedTime(framework), Files.getLastModifiedTime(module)))
+                .containsExactly(oldTime, oldTime);
     }
 
     @Test

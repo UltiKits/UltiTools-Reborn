@@ -31,9 +31,10 @@ public final class LegacyLangFolderNotice {
     }
 
     /**
-     * Logs one localized INFO notice if legacy language directories are found. Only the immediate
-     * children of {@code pluginConfig} are enumerated; symbolic links within the scan are ignored.
-     * A filesystem failure is logged at FINE without discarding directories already found.
+     * Logs one localized INFO notice if legacy language directories are found. The data folder and
+     * {@code pluginConfig} may be symbolic links; their discovered module and {@code lang} entries
+     * are not followed if linked. A filesystem failure is logged at FINE without discarding
+     * directories already found.
      *
      * @param dataFolder the framework data folder
      * @param logger the framework logger
@@ -54,19 +55,18 @@ public final class LegacyLangFolderNotice {
         } catch (IOException | SecurityException failure) {
             logger.log(Level.FINE, failure::toString);
         }
-        if (folders.isEmpty()) {
-            return;
+        if (!folders.isEmpty() && logger.isLoggable(Level.INFO)) {
+            Collections.sort(folders);
+            int shown = Math.min(folders.size(), DISPLAY_LIMIT);
+            String summary = String.join(", ", folders.subList(0, shown));
+            if (shown < folders.size()) {
+                summary += ", " + FrameworkMessages.plain(UltiToolsKeys.STARTUP_LEGACY_LANG_FOLDERS_MORE,
+                        Arg.number("count", folders.size() - shown));
+            }
+            String message = FrameworkMessages.plain(UltiToolsKeys.STARTUP_LEGACY_LANG_FOLDERS,
+                    Arg.string("folders", summary));
+            logger.info(message.replaceAll("\\R", " "));
         }
-        Collections.sort(folders);
-        int shown = Math.min(folders.size(), DISPLAY_LIMIT);
-        String summary = String.join(", ", folders.subList(0, shown));
-        if (shown < folders.size()) {
-            summary += ", " + FrameworkMessages.plain(UltiToolsKeys.STARTUP_LEGACY_LANG_FOLDERS_MORE,
-                    Arg.number("count", folders.size() - shown));
-        }
-        String message = FrameworkMessages.plain(UltiToolsKeys.STARTUP_LEGACY_LANG_FOLDERS,
-                Arg.string("folders", summary));
-        logger.info(message.replaceAll("\\R", " "));
     }
 
     private static void collectModuleDirectories(Path config, Path displayRoot, List<String> folders)
@@ -76,7 +76,7 @@ public final class LegacyLangFolderNotice {
         }
         try (DirectoryStream<Path> modules = Files.newDirectoryStream(config)) {
             for (Path module : modules) {
-                if (isDirectory(module)) {
+                if (isDirectory(module, LinkOption.NOFOLLOW_LINKS)) {
                     collectLangDirectory(module, displayRoot, folders);
                 }
             }
@@ -85,15 +85,15 @@ public final class LegacyLangFolderNotice {
 
     private static void collectLangDirectory(Path owner, Path displayRoot, List<String> folders) throws IOException {
         Path lang = owner.resolve("lang");
-        if (isDirectory(lang)) {
+        if (isDirectory(lang, LinkOption.NOFOLLOW_LINKS)) {
             folders.add(displayRoot.relativize(lang).toString().replace(File.separatorChar, '/'));
         }
     }
 
-    private static boolean isDirectory(Path path) throws IOException {
+    private static boolean isDirectory(Path path, LinkOption... options) throws IOException {
         // Unlike Files.isDirectory, the attribute read distinguishes missing paths from access errors.
         try {
-            return Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isDirectory();
+            return Files.readAttributes(path, BasicFileAttributes.class, options).isDirectory();
         } catch (NoSuchFileException absent) {
             return false;
         }
