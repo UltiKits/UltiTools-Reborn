@@ -302,6 +302,27 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   During coexistence, the legacy path still loads custom files as before. New `Messages` use the
   official prefix of a custom configured name (`zh-myserver` → `zh`, unmatched safe names → `en`)
   without treating that custom file as a new catalogue or adding an invalid-locale warning.
+- **Module annotation text:** `@ConfigEntry(comment = "{path}")`, `@CmdExecutor(description = …)`,
+  and `@CmdParam(suggest = …)` without a matching provider method look up names only if they match
+  `[a-z0-9_-]+(\.[a-z0-9_-]+)*` and are at most 128 characters. A matching key in the server fallback
+  language or the module's source language renders as plain text. Other spellings and missing keys
+  stay literal: comments keep their token and warn once per field; descriptions and hints keep their
+  original text. A single lowercase word such as `amount` is also a valid path and resolves if the
+  module has a top-level message with that name. Use a full sentence for literal descriptions and
+  hints, or an explicit dotted key for translations.
+  Move 6.x token translations from `lang/` to `messages/<locale>.yml`. If the wording has changed,
+  list the old 6.x text in `@ConfigEntry(previousComments = …)` so the framework recognizes the
+  existing comment as its own. Text that only matches an old custom `lang/` file stays as operator content.
+  Modules using the legacy connector constructor have no module message catalogue, so their tokens
+  do not resolve and descriptions and hints stay literal. Switch to the standard no-argument
+  module constructor to use a catalogue.
+- **Module config comment limits:** Changing or removing an override, or switching the server
+  fallback language, can leave the previous override text in the module's `config.yml`. If it no
+  longer matches a known rendering, the framework preserves it as operator content. Delete just that
+  comment line (not the setting, and do not leave a bare `#`); if no other comment remains attached to
+  the setting, the next successful reload or startup that can write the file inserts the current text.
+  The framework itself registers modules only at startup; if third-party code constructs a replacement
+  while the old instance is still running, construction-time comments use the old instance's published catalogue.
 
 中文补充：7.0 的新装 `language` 与 `fallback-language` 均默认 `auto`。玩家跟随客户端语言；后备
 语言只按上述 11 个系统时区 ID 选 `zh`，其他选 `en`，不按时差猜测。云主机和容器常用 UTC，因此
@@ -311,6 +332,20 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 `zh-myserver` 等自定义名称的后备取官方前缀语言 `zh`。已有配置继续沿用原语言，绝不改写服主文件。
 若服主从已有文件删去了 `language`，7.0 按 `auto` 处理，不再取 6.x 的中文默认，也不把该键写回。
 时区在启动和配置重载时解析，玩家语言每次投递时读取。
+模块的注释令牌、命令描述及无对应方法的补全提示，只有名称符合 `[a-z0-9_-]+(\.[a-z0-9_-]+)*`
+且最多 128 个字符，才会按服务器后备语言、再按模块源语言查找模块 `messages/` 中的纯文本。
+不符合规则或找不到键时，描述和提示照原文显示，注释保留令牌并按字段告警一次。
+`amount` 之类的单个小写词也是合法路径；若与目录中的顶层消息同名，就会被解析。
+不需要翻译的描述和提示建议写成完整句子，需要翻译时用带点的键。
+6.x 的令牌译文须搬到 `messages/<locale>.yml`；若措辞有变，须把 6.x 的旧文字列入
+`@ConfigEntry(previousComments = …)`，框架才会认出自己写过的注释。仅匹配旧自定义 `lang/`
+译文的既有注释按服主内容保留。旧连接器构造器不准备模块消息目录，注释令牌不解析，描述和提示保持原文；
+要使用消息目录，请改用标准的无参模块构造器。
+
+修改或删除消息覆盖，或切换服务器后备语言后，模块 `config.yml` 里可能仍留着上一次的覆盖文字。
+旧文字不再匹配任何已知渲染时，框架会按服主内容保留。要刷新，只删那一行注释，不要删配置项或留下裸 `#`；
+如果该配置项没有其他相邻注释，下次成功重载或启动且配置文件可写入时，框架会补写当前文字。
+框架只在启动时注册模块；若第三方代码在旧实例运行期间构造替代实例，构造期注释会使用旧实例已发布的目录。
 翻译顺序为请求语言、后备语言、模块源语言、键本身；参数仍按请求语言格式化。服主只改上级覆盖
 文件，`reference/` 是框架每次启动重写的只读参考；`/ul reload <模块>` 重载该模块的覆盖，完整的 `/ul reload` 同时重读框架覆盖。6.x 的语言
 文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。

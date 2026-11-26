@@ -3,16 +3,17 @@ package com.ultikits.ultitools.abstracts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
+import java.util.Map;
+import java.util.Optional;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,7 @@ import org.mockito.Mockito;
 
 import com.google.gson.JsonObject;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.text.ModuleCatalogueFixture;
 
 /**
  * UltiKits/UltiTools-Reborn#542, maintainer answer of 2026-09-29 ("rewrite in the current language
@@ -71,6 +73,7 @@ class ConfigCommentTokenUpgradeTest {
     Path tempDir;
 
     private UltiToolsPlugin plugin;
+    private ModuleCatalogueFixture catalogue;
 
     @SuppressWarnings("unused") // read reflectively by the binder
     static class UpgradeConfig extends AbstractConfigEntity {
@@ -89,24 +92,21 @@ class ConfigCommentTokenUpgradeTest {
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("UpgradeModule");
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
-        // The module's jar ships both catalogues (#604: a shipped text is the framework's in every language).
-        lenient().when(plugin.shippedCatalogueTexts("config.demo.limit")).thenReturn(Arrays.asList(EN_LIMIT, ZH_LIMIT));
-        languageEnglish();
+        catalogue = new ModuleCatalogueFixture(tempDir);
+        catalogue.shipped("en", Map.of("config.demo.limit", "<green>" + EN_LIMIT + "</green>"));
+        catalogue.shipped("zh", Map.of("config.demo.limit", "<gold>" + ZH_LIMIT + "</gold>"));
+        lenient().when(plugin.moduleTexts()).thenReturn(Optional.of(catalogue.preparedTexts()));
     }
 
-    private void languageEnglish() {
-        lenient().when(plugin.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
-        when(plugin.i18n("config.demo.limit")).thenReturn(EN_LIMIT);
-    }
-
-    private void languageChinese() {
-        when(plugin.i18n("config.demo.limit")).thenReturn(ZH_LIMIT);
+    @AfterEach
+    void closeCatalogue() {
+        catalogue.close();
     }
 
     private Path file() {
@@ -203,7 +203,7 @@ class ConfigCommentTokenUpgradeTest {
         writeFile(UPGRADED_FILE);
         new UpgradeConfig(PATH).init(plugin);
 
-        languageChinese();
+        catalogue.fallback("zh");
         new UpgradeConfig(PATH).init(plugin);
         assertPreserved(ZH_LIMIT);
 

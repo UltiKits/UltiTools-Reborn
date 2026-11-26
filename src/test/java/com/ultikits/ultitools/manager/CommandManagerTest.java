@@ -13,10 +13,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.times;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.bukkit.command.CommandSender;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
@@ -24,29 +30,44 @@ import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.command.engine.CommandEngine;
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.text.ModuleCatalogueFixture;
 
 /** Manager ownership/routing tests; lifecycle/proxy behaviour is tested with RecordingCommands. */
 class CommandManagerTest {
+    private static final String DESCRIPTION = "command.probe.description";
+    private static final String EXPLICIT = "command.probe.explicit";
+    private static final String SENTENCE = "Run this command";
+    @TempDir Path tempDir;
+    private ModuleCatalogueFixture catalogue;
     private CommandEngine engine;
     private CommandManager manager;
     private UltiToolsPlugin module;
     private SimpleContainer container;
-    @BeforeEach void setup() {
+    @BeforeEach void setup() throws Exception {
         engine = mock(CommandEngine.class);
         manager = new CommandManager(engine);
         module = mock(UltiToolsPlugin.class);
         container = new AliasingContainer();
         when(module.getContext()).thenReturn(container);
         when(module.getPluginName()).thenReturn("module");
-        when(module.i18n(anyString())).thenAnswer(call -> "translated:" + call.getArgument(0));
+        catalogue = new ModuleCatalogueFixture(tempDir);
+        catalogue.shipped("en", Map.of(DESCRIPTION, "Run the probe", EXPLICIT, "Explicit description"));
+        catalogue.shipped("zh", Map.of(DESCRIPTION, "<green>运行探针</green>", EXPLICIT, "显式命令说明"));
+        catalogue.fallback("zh");
+        when(module.moduleTexts()).thenReturn(Optional.of(catalogue.preparedTexts()));
+    }
+    @AfterEach void closeCatalogue() {
+        catalogue.close();
     }
     @Test void automaticallyRegistersOnlyEligibleAnnotationBeans() {
         var automatic = new Fixture();
         container.registerSingleton("automatic", automatic);
         container.registerSingleton("manual", new Manual());
         manager.registerAll(module);
-        verify(engine).register(module, "module", automatic, "translated:description", "root.permission", false,
-                List.of("test", "alias"));
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq(module), eq("module"), same(automatic), description.capture(), eq("root.permission"),
+                eq(false), eq(List.of("test", "alias")));
+        assertThat(description.getValue()).isEqualTo("运行探针");
         verifyNoMoreInteractions(engine);
     }
     @Test void aliasesOfTheSameBeanAreRegisteredOnce() {
@@ -59,28 +80,47 @@ class CommandManagerTest {
     @Test void theExplicitOverloadResolvesTheModulesOwnInstance() {
         Fixture own = new Fixture();
         container.registerSingleton("own", own);
-        manager.register(module, Fixture.class, "custom", "custom description", "custom", "other");
-        verify(engine).register(module, "module", own, "translated:custom description", "custom", false,
-                List.of("custom", "other"));
+        manager.register(module, Fixture.class, "custom", EXPLICIT, "custom", "other");
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq(module), eq("module"), same(own), description.capture(), eq("custom"), eq(false),
+                eq(List.of("custom", "other")));
+        assertThat(description.getValue()).isEqualTo("显式命令说明");
     }
     @Test void explicitRegistrationWithoutAliasesUsesTheAnnotationLabels() {
         Fixture own = new Fixture();
         container.registerSingleton("own", own);
-        manager.register(module, Fixture.class, "custom", "description");
-        verify(engine).register(module, "module", own, "translated:description", "custom", false,
-                List.of("test", "alias"));
+        manager.register(module, Fixture.class, "custom", DESCRIPTION);
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq(module), eq("module"), same(own), description.capture(), eq("custom"), eq(false),
+                eq(List.of("test", "alias")));
+        assertThat(description.getValue()).isEqualTo("运行探针");
     }
     @Test void theShortOverloadAllowsManualRegistration() {
         Manual manual = new Manual();
         container.registerSingleton("manual", manual);
         manager.register(module, Manual.class);
-        verify(engine).register(module, "module", manual, "translated:", "", false, List.of("manual"));
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq(module), eq("module"), same(manual), description.capture(), eq(""), eq(false),
+                eq(List.of("manual")));
+        assertThat(description.getValue()).isEmpty();
+    }
+    @Test void aPlainSentenceRemainsTheDescriptionInEitherRegistrationPath() {
+        var literal = new Literal();
+        container.registerSingleton("literal", literal);
+        manager.registerAll(module);
+        manager.register(module, Literal.class, "", SENTENCE, "literal");
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine, times(2)).register(eq(module), eq("module"), same(literal), description.capture(), eq(""),
+                eq(false), eq(List.of("literal")));
+        assertThat(description.getAllValues()).containsExactly(SENTENCE, SENTENCE);
     }
     @Test void coreCommandsHaveFrameworkOwnershipAndRawDescriptions() {
         var executor = new Fixture();
         manager.registerCoreCommand(executor);
-        verify(engine).register("UltiTools", "UltiTools", executor, "description", "root.permission", false,
-                List.of("test", "alias"));
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq("UltiTools"), eq("UltiTools"), same(executor), description.capture(),
+                eq("root.permission"), eq(false), eq(List.of("test", "alias")));
+        assertThat(description.getValue()).isEqualTo(DESCRIPTION);
     }
     @Test void externalCommandsUseTheirNameAndDoNotTranslateDescriptions() {
         var executor = new Fixture();
@@ -90,8 +130,10 @@ class CommandManagerTest {
         when(adapter.getContext()).thenReturn(container);
         when(adapter.getPluginName()).thenReturn("external");
         manager.registerAllExternal(adapter);
-        verify(engine).register("external", "external", executor, "description", "root.permission", false,
-                List.of("test", "alias"));
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(engine).register(eq("external"), eq("external"), same(executor), description.capture(),
+                eq("root.permission"), eq(false), eq(List.of("test", "alias")));
+        assertThat(description.getValue()).isEqualTo(DESCRIPTION);
         verifyNoMoreInteractions(engine);
     }
     @Test void absentExternalContextHasNoRegistrations() {
@@ -115,8 +157,13 @@ class CommandManagerTest {
         assertThat(manager.getPluginByLabel("external")).isNull();
         assertThat(manager.getPluginByLabel("missing")).isNull();
     }
-    @CmdExecutor(alias = {"test", "alias"}, description = "description", permission = "root.permission")
+    @CmdExecutor(alias = {"test", "alias"}, description = DESCRIPTION, permission = "root.permission")
     static class Fixture extends BaseCommandExecutor {
+        @CmdMapping(format = "ping") public void ping() { /* Registration fixture. */ }
+        @Override protected void handleHelp(CommandSender sender) { /* Registration fixture. */ }
+    }
+    @CmdExecutor(alias = "literal", description = SENTENCE)
+    static class Literal extends BaseCommandExecutor {
         @CmdMapping(format = "ping") public void ping() { /* Registration fixture. */ }
         @Override protected void handleHelp(CommandSender sender) { /* Registration fixture. */ }
     }

@@ -9,15 +9,21 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
+import com.ultikits.testfixtures.textwiring.ConfigTextProbeModule;
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.text.ModuleCatalogueFixture;
 
 /**
  * UltiKits/UltiTools-Reborn#542, resolution: a {@code @ConfigEntry} comment that is exactly one
@@ -34,6 +40,7 @@ class ConfigCommentTokenTest {
     Path tempDir;
 
     private UltiToolsPlugin plugin;
+    private ModuleCatalogueFixture catalogue;
 
     @SuppressWarnings("unused") // read reflectively by the binder
     static class DemoConfig extends AbstractConfigEntity {
@@ -58,15 +65,22 @@ class ConfigCommentTokenTest {
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("DemoModule");
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
-        lenient().when(plugin.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
-        lenient().when(plugin.i18n("config.demo.limit")).thenReturn("Maximum number of items");
-        lenient().when(plugin.i18n("config.demo.multi")).thenReturn("First line\r\nSecond line\nThird line");
+        catalogue = new ModuleCatalogueFixture(tempDir);
+        catalogue.shipped("en", Map.of(
+                "config.demo.limit", "<green>Maximum number of items</green>",
+                "config.demo.multi", "First line\r\nSecond line\nThird line"));
+        lenient().when(plugin.moduleTexts()).thenReturn(Optional.of(catalogue.preparedTexts()));
+    }
+
+    @AfterEach
+    void closeCatalogue() {
+        catalogue.close();
     }
 
     private YamlConfiguration reload() throws Exception {
@@ -74,6 +88,19 @@ class ConfigCommentTokenTest {
         configuration.options().parseComments(true);
         configuration.load(tempDir.resolve(PATH).toFile());
         return configuration;
+    }
+
+    @Test
+    void theRealModuleConstructorWritesTheCommentBeforePublication() throws Exception {
+        try (var fixture = new ConfigMessageModuleFixture(Files.createDirectory(tempDir.resolve("framework")),
+                new ConfigManager(), null)) {
+            fixture.shipped("en", "config.probe.limit: '<green>Shipped limit</green>'\n")
+                    .onDisk("messages/en.yml", "config.probe.limit: '<green>Operator limit</green>'\n");
+            fixture.construct(ConfigTextProbeModule.class, ConfigTextProbeModule.ProbeConfig.class);
+
+            assertThat(fixture.disk(ConfigTextProbeModule.PATH)).hasContent("# Operator limit\nlimit: 10");
+            assertThat(fixture.disk("messages/reference")).doesNotExist();
+        }
     }
 
     @Test
@@ -126,7 +153,7 @@ class ConfigCommentTokenTest {
     @Test
     @DisplayName("a catalogue lookup that throws is treated as a missing key: the load completes and the token is written")
     void throwingCatalogueLookupDoesNotFailTheLoad() throws Exception {
-        lenient().when(plugin.i18n("config.demo.limit")).thenThrow(new IllegalStateException("language not loaded"));
+        lenient().when(plugin.moduleTexts()).thenThrow(new IllegalStateException("language not loaded"));
         DemoConfig config = new DemoConfig(PATH);
 
         try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {

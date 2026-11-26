@@ -1,9 +1,12 @@
 package com.ultikits.ultitools.text.internal;
 
 import com.ultikits.ultitools.text.MessageKey;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import org.jetbrains.annotations.ApiStatus;
 
@@ -37,6 +40,12 @@ public final class Catalogue {
             }
         }
         return Optional.empty();
+    }
+
+    /** Returns the templates that define a path, sorted by language tag. */
+    List<String> templates(String path) {
+        return entries.keySet().stream().sorted(Comparator.comparing(Locale::toLanguageTag))
+                .map(locale -> entries.get(locale).get(path)).filter(Objects::nonNull).toList();
     }
 
     /** Checks the exact locale and its language without other fallbacks. */

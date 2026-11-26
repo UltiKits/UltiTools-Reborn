@@ -10,8 +10,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
+import java.util.Optional;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,6 +22,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
 import com.ultikits.ultitools.annotations.ConfigEntry;
+import com.ultikits.ultitools.config.document.AtomicConfigWriter;
+import com.ultikits.ultitools.text.ModuleCatalogueFixture;
+import org.mockito.MockedStatic;
 
 /**
  * Gate-1 review of plan 17-41 (#542): a catalogue text must never make the framework write a file
@@ -36,6 +42,7 @@ class ConfigCommentTokenSafetyTest {
     Path tempDir;
 
     private UltiToolsPlugin plugin;
+    private ModuleCatalogueFixture catalogue;
 
     @SuppressWarnings("unused") // read reflectively by the binder
     static class SafetyConfig extends AbstractConfigEntity {
@@ -51,14 +58,24 @@ class ConfigCommentTokenSafetyTest {
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("SafetyModule");
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
-        lenient().when(plugin.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
-        lenient().when(plugin.i18n("config.demo.limit")).thenReturn(EN_LIMIT);
+        catalogue = new ModuleCatalogueFixture(tempDir);
+        catalogueValue("<green>" + EN_LIMIT + "</green>");
+    }
+
+    private void catalogueValue(String template) throws IOException {
+        catalogue.shipped("en", Map.of("config.demo.limit", template));
+        lenient().when(plugin.moduleTexts()).thenReturn(Optional.of(catalogue.preparedTexts()));
+    }
+
+    @AfterEach
+    void closeCatalogue() {
+        catalogue.close();
     }
 
     private Path file() {
@@ -80,8 +97,7 @@ class ConfigCommentTokenSafetyTest {
     @Test
     @DisplayName("every YAML line break in a catalogue text starts a new comment line; a control character is dropped")
     void everyLineBreakAndControlCharacterIsSafe() throws Exception {
-        lenient().when(plugin.i18n("config.demo.limit"))
-                .thenReturn("Max items (keep it low)\u0085third fourth\u0007");
+        catalogueValue("<green>Max items\u2028(keep it low)\u0085third\u2029fourth\u0007</green>");
         // The bare token is the framework's own comment (#604), so the load rewrites it.
         writeFile("demo:\n  # {config.demo.limit}\n  limit: 25\n  # Display name\n  name: Custom\n");
 
@@ -125,10 +141,10 @@ class ConfigCommentTokenSafetyTest {
         // The bare token is the framework's own comment (#604), so the load attempts the comment-only write.
         writeFile("demo:\n  # {config.demo.limit}\n  limit: 25\n  # Display name\n  name: Custom\n");
         byte[] before = Files.readAllBytes(file());
-        try (org.mockito.MockedStatic<com.ultikits.ultitools.config.document.AtomicConfigWriter> writer =
-                Mockito.mockStatic(com.ultikits.ultitools.config.document.AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
+        try (MockedStatic<AtomicConfigWriter> writer =
+                Mockito.mockStatic(AtomicConfigWriter.class, Mockito.CALLS_REAL_METHODS)) {
             // Automatic writes publish through the write gate, which stages before its last-moment re-read (17-63 IN-01).
-            writer.when(() -> com.ultikits.ultitools.config.document.AtomicConfigWriter.stage(
+            writer.when(() -> AtomicConfigWriter.stage(
                     Mockito.eq(file()), Mockito.anyString())).thenThrow(new IOException("injected write failure"));
             SafetyConfig config = new SafetyConfig(PATH);
             try (ConfigWarningCapture warnings = ConfigWarningCapture.install()) {

@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.manager;
 
+import static com.ultikits.ultitools.text.ModuleTextStubs.stubModuleTexts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -19,6 +20,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,7 +38,7 @@ class ConfigBatchBufferingTest {
         plugin = mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("BatchModule");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(directory.toString());
-        lenient().when(plugin.i18n(anyString())).thenReturn("Translated note");
+        lenient().when(stubModuleTexts(plugin).resolve(anyString())).thenReturn(Optional.of("Translated note"));
         ConfigFileStubs.stubConfigFolder(plugin, directory.toFile());
         manager = new ConfigManager();
     }

@@ -1,10 +1,12 @@
 package com.ultikits.ultitools.abstracts;
 
+import static com.ultikits.ultitools.text.ModuleTextStubs.stubModuleTexts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
+import java.util.Optional;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -46,7 +48,7 @@ class ConfigUnreadableFileTest {
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
-        lenient().when(plugin.i18n("config.limit")).thenReturn("Maximum");
+        lenient().when(stubModuleTexts(plugin).resolve("config.limit")).thenReturn(Optional.of("Maximum"));
     }
 
     private Path file() { return tempDir.resolve(PATH); }

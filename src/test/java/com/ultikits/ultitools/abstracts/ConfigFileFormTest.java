@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts;
 
+import static com.ultikits.ultitools.text.ModuleTextStubs.stubModuleTexts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -93,8 +95,7 @@ class ConfigFileFormTest {
         lenient().when(plugin.getConfigFolder()).thenReturn(tempDir.toString());
         lenient().when(plugin.getConfigFile(anyString())).thenAnswer(
                 invocation -> new File(tempDir.toFile(), invocation.<String>getArgument(0)));
-        lenient().when(plugin.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
-        lenient().when(plugin.i18n("config.limit")).thenReturn("Maximum");
+        lenient().when(stubModuleTexts(plugin).resolve("config.limit")).thenReturn(Optional.of("Maximum"));
     }
 
     private Path file() {

@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts;
 
+import static com.ultikits.ultitools.text.ModuleTextStubs.stubModuleTexts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -21,6 +22,7 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Optional;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -160,12 +162,13 @@ class ConfigBlockScalarDeleteToResetTest {
         lenient().when(plugin.getPluginName()).thenReturn("MailModule");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
-        lenient().when(plugin.i18n(anyString())).thenAnswer(i -> {
+        var texts = stubModuleTexts(plugin);
+        lenient().when(texts.resolve(anyString())).thenAnswer(i -> {
             String english = COMMENTS.get(i.<String>getArgument(0));
-            return english == null ? i.getArgument(0) : english + (switched ? SWITCHED : "");
+            return english == null ? Optional.empty() : Optional.of(english + (switched ? SWITCHED : ""));
         });
         // The module's jar ships both catalogues, so a comment in either language is the framework's (#604).
-        lenient().when(plugin.shippedCatalogueTexts(anyString())).thenAnswer(i -> {
+        lenient().when(texts.shippedTemplates(anyString())).thenAnswer(i -> {
             String english = COMMENTS.get(i.<String>getArgument(0));
             return english == null ? Collections.emptyList() : Arrays.asList(english, english + SWITCHED);
         });

@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.commands.tabcomplete;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -12,10 +13,13 @@ import org.bukkit.command.CommandMap;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
@@ -25,6 +29,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -36,6 +41,7 @@ import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.command.CmdParam;
 import com.ultikits.ultitools.annotations.command.CmdSuggest;
 import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.text.ModuleCatalogueFixture;
 
 /**
  * Unit tests for MethodInvocationCompleter.
@@ -60,6 +66,7 @@ class MethodInvocationCompleterTest {
     @Mock
     private UltiToolsPlugin mockPlugin;
 
+    @TempDir Path tempDir;
     private MethodInvocationCompleter completer;
     private MockedStatic<UltiTools> ultiToolsMock;
 
@@ -642,84 +649,62 @@ class MethodInvocationCompleterTest {
     }
 
     @Nested
-    @DisplayName("I18n Hint Fallback Tests")
-    class I18nHintFallbackTests {
+    @DisplayName("Message catalogue hint fallback tests")
+    class HintFallbackTests {
 
         @Test
-        @DisplayName("Should return i18n hint when suggest method not found")
-        void returnsI18nHintWhenMethodNotFound() throws NoSuchMethodException {
-            Method method = ExecutorWithMissingSuggest.class.getMethod("testMethod", String.class);
-            ExecutorWithMissingSuggest executor = new ExecutorWithMissingSuggest();
-            
-            when(mockCommandManager.getPluginByLabel(mockCommand.getName())).thenReturn(mockPlugin);
-            when(mockPlugin.i18n("nonExistentMethod")).thenReturn("Use a valid value");
-            
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .player(mockPlayer)
-                    .commandName(mockCommand.getName())
-                    .args(new String[]{""})
-                    .currentArgIndex(0)
-                    .matchedMethod(method)
-                    .parameterName("param")
-                    .executorInstance(executor)
-                    .build();
-            
-            List<String> suggestions = completer.complete(context);
-            
-            assertEquals(1, suggestions.size());
-            assertEquals("Use a valid value", suggestions.get(0));
+        void definedPathYieldsTheServerFallbackText() throws Exception {
+            try (var catalogue = new ModuleCatalogueFixture(tempDir)) {
+                catalogue.shipped("en", Map.of("command.hint", "Use a valid value"));
+                catalogue.shipped("zh", Map.of("command.hint", "<yellow>请输入有效值</yellow>"));
+                catalogue.fallback("zh");
+                when(mockPlugin.moduleTexts()).thenReturn(Optional.of(catalogue.preparedTexts()));
+                assertThat(completer.complete(hintContext("messageHint", mockPlugin))).containsExactly("请输入有效值");
+            }
         }
 
         @Test
-        @DisplayName("Should return empty when i18n hint is empty")
-        void returnsEmpty_whenI18nHintEmpty() throws NoSuchMethodException {
-            Method method = ExecutorWithMissingSuggest.class.getMethod("testMethod", String.class);
-            ExecutorWithMissingSuggest executor = new ExecutorWithMissingSuggest();
-            
-            when(mockCommandManager.getPluginByLabel(mockCommand.getName())).thenReturn(mockPlugin);
-            when(mockPlugin.i18n("nonExistentMethod")).thenReturn("");
-            
-            TabCompletionContext context = TabCompletionContext.builder()
-                    .player(mockPlayer)
-                    .commandName(mockCommand.getName())
-                    .args(new String[]{""})
-                    .currentArgIndex(0)
-                    .matchedMethod(method)
-                    .parameterName("param")
-                    .executorInstance(executor)
-                    .build();
-            
-            List<String> suggestions = completer.complete(context);
-            
-            assertTrue(suggestions.isEmpty());
+        void missingPathAndPlainSentenceAreReturnedUnchanged() throws Exception {
+            assertThat(completer.complete(hintContext("messageHint", mockPlugin))).containsExactly("command.hint");
+            assertThat(completer.complete(hintContext("literalHint", mockPlugin))).containsExactly("Use a valid value");
         }
 
         @Test
-        @DisplayName("Should return empty when plugin is null")
+        void anEmptyRenderedHintIsNotReturned() throws Exception {
+            try (var catalogue = new ModuleCatalogueFixture(tempDir)) {
+                catalogue.shipped("en", Map.of("command.hint", "<green></green>"));
+                when(mockPlugin.moduleTexts()).thenReturn(Optional.of(catalogue.preparedTexts()));
+                assertThat(completer.complete(hintContext("messageHint", mockPlugin))).isEmpty();
+            }
+        }
+
+        @Test
         void returnsEmpty_whenPluginNull() throws NoSuchMethodException {
-            Method method = ExecutorWithMissingSuggest.class.getMethod("testMethod", String.class);
-            ExecutorWithMissingSuggest executor = new ExecutorWithMissingSuggest();
-            
-            when(mockCommandManager.getPluginByLabel(mockCommand.getName())).thenReturn(null);
-            
-            TabCompletionContext context = TabCompletionContext.builder()
+            assertTrue(completer.complete(hintContext("messageHint", null)).isEmpty());
+        }
+
+        private TabCompletionContext hintContext(String methodName, UltiToolsPlugin owner) throws NoSuchMethodException {
+            Method method = ExecutorWithMissingSuggest.class.getMethod(methodName, String.class);
+            when(mockCommandManager.getPluginByLabel("fixture")).thenReturn(owner);
+            return TabCompletionContext.builder()
                     .player(mockPlayer)
-                    .commandName(mockCommand.getName())
+                    .commandName("fixture")
                     .args(new String[]{""})
                     .currentArgIndex(0)
                     .matchedMethod(method)
                     .parameterName("param")
-                    .executorInstance(executor)
+                    .executorInstance(new ExecutorWithMissingSuggest())
                     .build();
-            
-            List<String> suggestions = completer.complete(context);
-            
-            assertTrue(suggestions.isEmpty());
         }
     }
 
     public static class ExecutorWithMissingSuggest {
-        public void testMethod(@CmdParam(value = "param", suggest = "nonExistentMethod") String param) {
+        public void messageHint(@CmdParam(value = "param", suggest = "command.hint") String param) {
+            // Fixture only: the completer reads the parameter annotation and never invokes this method.
+        }
+
+        public void literalHint(@CmdParam(value = "param", suggest = "Use a valid value") String param) {
+            // Fixture only: the completer reads the parameter annotation and never invokes this method.
         }
     }
 

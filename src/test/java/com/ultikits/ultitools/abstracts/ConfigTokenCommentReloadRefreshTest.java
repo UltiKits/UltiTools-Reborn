@@ -5,19 +5,16 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.spy;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.logging.Handler;
@@ -36,10 +33,8 @@ import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.config.document.OperatorFileWriter;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
-import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
 import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.utils.TestHelper;
 
 /**
  * #594: a config comment written as one {@code {key}} token (#542) follows a language switch applied by
@@ -65,10 +60,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @TempDir
     File frameworkFolder;
 
-    @TempDir
-    File moduleFolder;
-
-    private YamlConfiguration runningConfig;
+    private ConfigMessageModuleFixture fixture;
     private ConfigManager configManager;
     private PluginManager pluginManager;
     private final List<LogRecord> warnings = Collections.synchronizedList(new ArrayList<LogRecord>());
@@ -92,10 +84,6 @@ class ConfigTokenCommentReloadRefreshTest {
         }
     };
 
-    /** Bare fixture. */
-    abstract static class FixturePlugin extends UltiToolsPlugin {
-    }
-
     @SuppressWarnings("unused") // read reflectively by the binder
     @ConfigEntity(PATH)
     static class DemoConfig extends AbstractConfigEntity {
@@ -115,72 +103,32 @@ class ConfigTokenCommentReloadRefreshTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        runningConfig = new YamlConfiguration();
-        runningConfig.set("language", "zh");
         configManager = new ConfigManager();
         pluginManager = mock(PluginManager.class);
-        TestHelper.mockUltiToolsInstance(ultiTools -> {
-            when(ultiTools.getConfigManager()).thenReturn(configManager);
-            when(ultiTools.getDataFolder()).thenReturn(frameworkFolder);
-            when(ultiTools.getConfig()).thenReturn(runningConfig);
-            when(ultiTools.getPluginManager()).thenReturn(pluginManager);
-        });
-        writeFrameworkConfigOnDisk("language: zh\n");
-        File langDir = new File(moduleFolder, "lang");
-        Files.createDirectories(langDir.toPath());
-        Files.write(new File(langDir, "zh.json").toPath(),
-                ("{\"config.demo.interval\":\"" + ZH_INTERVAL + "\",\"config.demo.name\":\"" + ZH_NAME + "\"}")
-                        .getBytes(StandardCharsets.UTF_8));
-        Files.write(new File(langDir, "en.json").toPath(),
-                ("{\"config.demo.interval\":\"" + EN_INTERVAL + "\",\"config.demo.name\":\"" + EN_NAME + "\"}")
-                        .getBytes(StandardCharsets.UTF_8));
+        fixture = new ConfigMessageModuleFixture(frameworkFolder.toPath(), configManager, pluginManager);
+        fixture.shipped("zh", "config.demo.interval: '<gold>" + ZH_INTERVAL
+                        + "</gold>'\nconfig.demo.name: '" + ZH_NAME + "'\n")
+                .shipped("en", "config.demo.interval: '<green>" + EN_INTERVAL
+                        + "</green>'\nconfig.demo.name: '" + EN_NAME + "'\n");
+        fixture.fallback("zh");
         frameworkLogger.addHandler(capture);
     }
 
     @AfterEach
-    void tearDown() {
+    void tearDown() throws IOException {
         frameworkLogger.removeHandler(capture);
+        fixture.close();
     }
 
-    private void writeFrameworkConfigOnDisk(String content) throws IOException {
-        Files.write(new File(frameworkFolder, "config.yml").toPath(), content.getBytes(StandardCharsets.UTF_8));
-    }
-
-    /** The operator switches the server language and runs a full {@code /ul reload}. */
+    /** The operator switches the fallback and runs a full {@code /ul reload}. */
     private void switchServerLanguageTo(String code) throws IOException {
-        writeFrameworkConfigOnDisk("language: " + code + "\n");
-        runningConfig.set("language", code);
-    }
-
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // same idiom as UltiToolsPluginLanguageChangeReloadTest
-    private FixturePlugin module() throws Exception {
-        FixturePlugin plugin = mock(FixturePlugin.class);
-        when(plugin.getPluginName()).thenReturn("DemoModule");
-        when(plugin.getLogger()).thenReturn(mock(PluginLogger.class));
-        when(plugin.getConfigFile(anyString())).thenAnswer(
-                invocation -> new File(moduleFolder, invocation.<String>getArgument(0)));
-        // The module's jar ships both catalogues (#604: a shipped text is the framework's in every language).
-        when(plugin.shippedCatalogueTexts("config.demo.interval")).thenReturn(Arrays.asList(EN_INTERVAL, ZH_INTERVAL));
-        when(plugin.shippedCatalogueTexts("config.demo.name")).thenReturn(Arrays.asList(EN_NAME, ZH_NAME));
-        Field resourceFolderPathField = UltiToolsPlugin.class.getDeclaredField("resourceFolderPath");
-        resourceFolderPathField.setAccessible(true);
-        resourceFolderPathField.set(plugin, moduleFolder.getAbsolutePath());
-        doCallRealMethod().when(plugin).getResourceFolderPath();
-        doCallRealMethod().when(plugin).reloadSelf();
-        doCallRealMethod().when(plugin).reloadWithReport();
-        doCallRealMethod().when(plugin).onReload(any(ReloadReport.class));
-        doCallRealMethod().when(plugin).getLanguageCode();
-        doCallRealMethod().when(plugin).getConfiguredLanguage();
-        doCallRealMethod().when(plugin).getLanguage();
-        doCallRealMethod().when(plugin).i18n(anyString());
-        return plugin;
+        fixture.fallback(code);
     }
 
     /** A module running in Chinese with its config written by init in Chinese. */
-    private FixturePlugin moduleWithConfig() throws Exception {
-        FixturePlugin plugin = module();
-        // Builds the module's catalogue in the running language, as the module's load does.
-        plugin.reloadWithReport();
+    private UltiToolsPlugin moduleWithConfig() throws Exception {
+        UltiToolsPlugin plugin = spy(fixture.construct());
+        plugin.commitLanguageProvenance();
         configManager.register(plugin, new DemoConfig(PATH));
         assertThat(comments("demo.interval")).as("precondition: init wrote the token in Chinese")
                 .containsExactly(ZH_INTERVAL);
@@ -189,7 +137,7 @@ class ConfigTokenCommentReloadRefreshTest {
     }
 
     private Path file() {
-        return new File(moduleFolder, PATH).toPath();
+        return fixture.disk(PATH);
     }
 
     private String text() throws IOException {
@@ -235,7 +183,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("after a language switch and a reload, every framework comment is in the new language")
     void tokenCommentsFollowTheLanguageSwitch() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
 
         switchServerLanguageTo("en");
         plugin.reloadWithReport();
@@ -249,7 +197,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("the refresh changes comment lines only: an invalid value and a deleted key stay byte for byte (F5)")
     void valuesAndDeletedKeysAreByteUnchanged() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         edit("interval: 300", "interval: 3O0");
         edit("  name: lobby\n", "");
         List<String> typed = nonCommentLines();
@@ -265,7 +213,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("a reload without a language switch writes nothing")
     void noLanguageSwitchWritesNothing() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         edit("interval: 300", "interval: 3O0");
         Files.setLastModifiedTime(file(), OLD);
         byte[] before = Files.readAllBytes(file());
@@ -279,7 +227,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("an anchored file is refused by the gate with one warning and keeps its bytes")
     void anchoredFileIsRefusedByTheGate() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         Files.write(file(), (text() + "templates:\n  base: &base\n    value: 1\n  other: *base\n")
                 .getBytes(StandardCharsets.UTF_8));
         plugin.reloadWithReport();
@@ -299,7 +247,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("F1: an anchored file reloaded twice after a language switch keeps its bytes")
     void anchoredFileReloadedTwiceAfterALanguageSwitchKeepsItsBytes() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         Files.write(file(), (text() + "templates:\n  base: &base\n    value: 1\n  other: *base\n")
                 .getBytes(StandardCharsets.UTF_8));
         Files.setLastModifiedTime(file(), OLD);
@@ -316,7 +264,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("a refresh whose write fails leaves nothing for the shutdown save to write over the operator's values")
     void failedRefreshWriteMarksNothingForShutdown() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         edit("interval: 300", "interval: 3O0");
         plugin.reloadWithReport();
         DemoConfig config = configManager.getConfigEntity(plugin, DemoConfig.class);
@@ -344,7 +292,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("a file the gate refuses is warned about once per reload, whichever write was refused")
     void aRefusedFileIsWarnedOncePerReload() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         edit("interval: 300", "interval:  300");
         plugin.reloadWithReport();
         byte[] before = Files.readAllBytes(file());
@@ -362,7 +310,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("F2: a failed refresh write followed by a second reload leaves isModifiedSinceSnapshot() false")
     void failedRefreshThenSecondReloadMarksNothing() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         edit("interval: 300", "interval: 3O0");
         plugin.reloadWithReport();
         DemoConfig config = configManager.getConfigEntity(plugin, DemoConfig.class);
@@ -386,7 +334,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @DisplayName("a file that cannot be parsed is not refreshed: it stays byte for byte")
     @SuppressWarnings("PMD.EmptyCatchBlock") // either outcome of the reload is fine; the file is what is asserted
     void unparseableFileIsNotRefreshed() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         edit("interval: 300", "interval: [unclosed");
         byte[] before = Files.readAllBytes(file());
 
@@ -403,7 +351,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("a hand-written comment above a token setting survives a language-switch reload byte for byte (#604)")
     void handWrittenCommentSurvivesALanguageSwitchReload() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         edit("  # " + ZH_NAME + "\n", "  # my own note on the lobby\n");
         plugin.reloadWithReport();
 
@@ -417,7 +365,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("an edit saved after the reload read the file is kept; only the framework's comment lines are refreshed")
     void operatorEditAfterTheReloadReadIsKept() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         DemoConfig config = configManager.getConfigEntity(plugin, DemoConfig.class);
         // Runs between the reload's read and the language rebuild: an editor saves the file meanwhile.
         doAnswer(invocation -> {
@@ -437,7 +385,7 @@ class ConfigTokenCommentReloadRefreshTest {
     @Test
     @DisplayName("the refresh runs after the language rebuild and before the module's own reload hook")
     void refreshRunsAfterTheLanguageRebuildAndBeforeTheModulesHook() throws Exception {
-        FixturePlugin plugin = moduleWithConfig();
+        UltiToolsPlugin plugin = moduleWithConfig();
         List<List<String>> seenByHook = new ArrayList<>();
         doAnswer(invocation -> {
             seenByHook.add(comments("demo.interval"));
@@ -449,6 +397,11 @@ class ConfigTokenCommentReloadRefreshTest {
 
         assertThat(seenByHook).as("the module's hook already sees the new language's comment")
                 .containsExactly(Collections.singletonList(EN_INTERVAL));
+
+        fixture.onDisk("messages/en.yml", "config.demo.interval: '<gold>Operator interval</gold>'\n");
+        plugin.reloadWithReport();
+        assertThat(seenByHook).as("the hook runs after the published override and the comment are both refreshed")
+                .containsExactly(List.of(EN_INTERVAL), List.of("Operator interval"));
     }
 
     /** Resets the gate's once-per-run anchored-file warnings (package-private) from this package. */

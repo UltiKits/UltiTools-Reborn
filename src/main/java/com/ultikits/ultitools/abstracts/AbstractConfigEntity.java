@@ -7,6 +7,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Type;
 import java.lang.reflect.ParameterizedType;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Iterator;
 import java.nio.file.Files;
 import java.security.MessageDigest;
@@ -79,7 +80,7 @@ public abstract class AbstractConfigEntity {
     private static final List<Class<?>> NUMBER_KINDS = Arrays.asList(Integer.class, Long.class, Double.class, Float.class,
             Short.class, Byte.class, java.math.BigInteger.class, java.math.BigDecimal.class);
     private static final List<Class<?>> TEXT_KINDS = Arrays.asList(String.class, Character.class);
-    private static final List<Class<?>> CONTAINER_KINDS = Arrays.asList(ArrayList.class, java.util.LinkedHashSet.class,
+    private static final List<Class<?>> CONTAINER_KINDS = Arrays.asList(ArrayList.class, LinkedHashSet.class,
             LinkedHashMap.class, Object[].class);
 
     private final String configFilePath;
@@ -311,7 +312,7 @@ public abstract class AbstractConfigEntity {
     @SuppressWarnings("PMD.NPathComplexity") // Map parents emptied by the changes are owned whole; every other change owns its key.
     private static OwnedPaths saveOwnership(List<ModuleChange> changes, ConfigDocument read) {
         Map<List<String>, Map<String, Object>> after = new LinkedHashMap<>();
-        Set<List<String>> emptied = new java.util.LinkedHashSet<>();
+        Set<List<String>> emptied = new LinkedHashSet<>();
         for (ModuleChange change : changes) {
             if (change.path.size() < 2) { continue; }
             List<String> parent = change.path.subList(0, change.path.size() - 1);
@@ -500,7 +501,7 @@ public abstract class AbstractConfigEntity {
             Map<?, ?> before = (Map<?, ?>) base;
             Map<?, ?> after = (Map<?, ?>) current;
             Type valueType = mapValueType(declared);
-            Set<Object> names = new java.util.LinkedHashSet<>(after.keySet()); names.addAll(before.keySet());
+            Set<Object> names = new LinkedHashSet<>(after.keySet()); names.addAll(before.keySet());
             for (Object name : names) {
                 List<String> path = new ArrayList<>(prefix); path.add(String.valueOf(name));
                 if (!before.containsKey(name) || !after.containsKey(name)) { out.add(path); }
@@ -1265,11 +1266,12 @@ public abstract class AbstractConfigEntity {
         String token = literal.trim();
         String key = token.substring(1, token.length() - 1);
         String resolved = null;
-        try { resolved = ultiToolsPlugin.i18n(key); }
-        catch (RuntimeException unavailable) {
+        try {
+            resolved = ultiToolsPlugin.moduleTexts().flatMap(texts -> texts.resolve(key)).orElse(null);
+        } catch (RuntimeException unavailable) {
             // Catalogue failure must not prevent configuration values from loading.
         }
-        if (resolved != null && !resolved.equals(key)) { return resolved; }
+        if (resolved != null) { return resolved; }
         if (warnedCommentKeys.add(fieldPath(field))) {
             LOGGER.warning("Module " + ultiToolsPlugin.getPluginName() + ", file " + configFilePath
                     + ", path '" + fieldPath(field) + "': missing comment catalogue key '" + key + "'");
@@ -1306,9 +1308,8 @@ public abstract class AbstractConfigEntity {
      * lines above it - is the framework's when it equals, as a whole or as its trailing run of lines, the exact
      * form the framework writes (the key's column, {@code "# "} and the text; identification revision 1, 17-64
      * review round 1 R1-02) of the token's text in a catalogue the module's jar ships, of a text an earlier module
-     * version shipped for the entry ({@link ConfigEntry#previousComments()}), of the text an operator's custom
-     * language file in the module's {@code lang/} folder holds for the token now (#615 item 1), of the text the module
-     * resolves now, or of the bare {@code {key}} token. Equality is the only test: no prefix, similarity, spacing
+     * version shipped for the entry ({@link ConfigEntry#previousComments()}), of the text the module resolves now
+     * (including an active message override), or of the bare {@code {key}} token. Equality is the only test: no prefix, similarity, spacing
      * or language tolerance, so a note the operator wrote above the framework's lines, a framework comment the
      * operator edited, or the framework's text written at another column or without the space after {@code #}
      * is never taken in. Of several matching texts the longest run counts, so a whole-comment match comes first.
@@ -1332,48 +1333,25 @@ public abstract class AbstractConfigEntity {
     }
 
     /**
-     * Every rendering of a token comment the framework may have written above {@code field}'s key: the token's text
-     * in each catalogue the module's jar ships (read without any language-file side effect), the texts earlier module
-     * versions shipped for the entry ({@link ConfigEntry#previousComments()}), the token's text in each of the
-     * operator's custom language files in the module's {@code lang/} folder ({@link
-     * UltiToolsPlugin#customCatalogueTexts}, #615 item 1), the text the module resolves now, and the bare token - each
-     * in the byte form {@link ConfigDocument#setFrameworkComment} writes
-     * it, as {@link ConfigDocument#blockCommentAsWritten(List)} reports it. An empty text is not a rendering: the
-     * framework writes no comment for it, so it can never identify an operator's bare {@code #} line.
-     * <p>
-     * <b>Why the custom files' texts cannot take in an operator's own comment.</b> While a custom language is
-     * selected, the framework renders a token comment from that file's text for the same key, so a comment equal to
-     * it, above that key, is a text the framework wrote there; the operator supplied it through their own catalogue,
-     * for this very purpose. Only the text for the comment's own key counts, and only as the whole comment or its
-     * trailing run of lines, with no tolerance. A comment written from an earlier version of that text - edited in the
-     * custom file since - equals no current text and stays the operator's: no record of earlier renderings is kept
-     * (maintainer decision of 2026-10-06, option A). The custom files are only read; nothing records, refreshes or
-     * backs them up.
+     * The module's bundled plain texts, explicitly registered previous comments, the current effective rendering,
+     * and the bare token, each in the byte form {@link ConfigDocument#setFrameworkComment} writes.
+     * Overrides count only when they supply the current rendering for this key; legacy custom language files do not
+     * declare ownership. The framework never writes empty comments, so it cannot claim an operator's bare {@code #}.
      */
     private List<List<String>> frameworkRenderings(Field field) {
         String token = field.getAnnotation(ConfigEntry.class).comment().trim();
         String key = token.substring(1, token.length() - 1);
-        Set<List<String>> known = new java.util.LinkedHashSet<>();
-        List<String> shipped = null;
-        try { shipped = ultiToolsPlugin.shippedCatalogueTexts(key); }
-        catch (RuntimeException unavailable) {
-            // Without the shipped catalogues only the current text and the bare token are recognised.
-        }
-        List<String> custom = null;
-        try { custom = ultiToolsPlugin.customCatalogueTexts(key); }
-        catch (RuntimeException unavailable) {
-            // Without the custom files a comment written from one is kept as the operator's (the pre-#615 outcome).
-        }
+        Set<List<String>> known = new LinkedHashSet<>();
         List<String> texts = new ArrayList<>();
-        if (shipped != null) { texts.addAll(shipped); }
-        // Texts earlier module versions shipped for this entry (maintainer decision 2026-10-04: registered as the framework's).
+        try {
+            ultiToolsPlugin.moduleTexts().ifPresent(moduleTexts -> texts.addAll(moduleTexts.shippedTemplates(key)));
+        } catch (RuntimeException unavailable) {
+            // Unavailable bundled messages do not make an unrecognised comment ours.
+        }
         texts.addAll(Arrays.asList(field.getAnnotation(ConfigEntry.class).previousComments()));
-        // The operator's custom language files' current texts (#615 item 1): a comment the framework wrote while one was selected.
-        if (custom != null) { texts.addAll(custom); }
         texts.add(resolvedComment(field));
         texts.add(token);
         for (String text : texts) {
-            // The framework never writes an empty comment (addEntryComment), so an empty text renders nothing of its.
             if (text != null && !text.isEmpty()) { known.add(renderedComment(text)); }
         }
         return new ArrayList<>(known);
@@ -2356,7 +2334,7 @@ public abstract class AbstractConfigEntity {
         private final boolean incomplete = lastInitIncomplete;
         private final boolean deferred = deferInitialization;
         private final PendingInitialization initialization = pendingInitialization;
-        private final Set<String> warningKeys = new java.util.LinkedHashSet<>(warnedCommentKeys);
+        private final Set<String> warningKeys = new LinkedHashSet<>(warnedCommentKeys);
         private PanelCheckpoint() {
             for (Field field : fields) { values.add(ReflectionUtil.getFieldValue(AbstractConfigEntity.this, field)); }
         }
@@ -2489,7 +2467,7 @@ public abstract class AbstractConfigEntity {
         Map<Field, List<List<String>>> leaves = new LinkedHashMap<>();
         compositeReads.clear();
         compositeWrites.clear();
-        Set<Field> whole = new java.util.LinkedHashSet<>();
+        Set<Field> whole = new LinkedHashSet<>();
         List<String> refused = new ArrayList<>();
         JsonObject displayed = toJsonObject();
         for (Map.Entry<String, JsonElement> edit : jsonObject.entrySet()) {
@@ -2588,7 +2566,7 @@ public abstract class AbstractConfigEntity {
         }
         if (!heldTwice.isEmpty()) {
             // Not a value violation: the operator chooses which form stays (gate-1 R613-04).
-            throw new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+            throw new ConfigurationException(ErrorCode.CONFIG_VALIDATION_FAILED,
                     "Module '" + ultiToolsPlugin.getPluginName() + "' refused to load: configuration file '" + configFilePath
                             + "' writes a setting in two forms: " + String.join("; ", heldTwice)
                             + ". The file was not modified - delete one of the two forms and restart.");
@@ -2622,7 +2600,7 @@ public abstract class AbstractConfigEntity {
             List<String> conflicts) {
         Type valueType = mapValueType(declared);
         Map<?, ?> b = (Map<?, ?>) base; Map<?, ?> m = (Map<?, ?>) mine; Map<?, ?> t = (Map<?, ?>) theirs;
-        Set<Object> keys = new java.util.LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
+        Set<Object> keys = new LinkedHashSet<>(); keys.addAll(t.keySet()); keys.addAll(m.keySet()); keys.addAll(b.keySet());
         Map<String, Object> merged = new LinkedHashMap<>();
         for (Object key : keys) {
             List<String> child = new ArrayList<>(leaf); child.add(String.valueOf(key));
@@ -2974,7 +2952,7 @@ public abstract class AbstractConfigEntity {
 
     /** Edit refusal, shared by annotation and binding-range checks; memory and file are restored by the caller. */
     private ConfigurationException editValidationFailed(String moduleName, List<String> violations) {
-        return new ConfigurationException(com.ultikits.ultitools.exceptions.ErrorCode.CONFIG_VALIDATION_FAILED,
+        return new ConfigurationException(ErrorCode.CONFIG_VALIDATION_FAILED,
                 "Module '" + moduleName + "': configuration edit was not applied to file '" + configFilePath
                         + "': " + String.join("; ", violations)
                         + ". The file and running values are unchanged - correct the proposed value(s) and try again.");

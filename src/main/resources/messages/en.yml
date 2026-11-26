@@ -31,6 +31,8 @@ startup:
   enabled: "UltiTools-API enabled, current version: <version>"
   server_uuid: "Server UUID: <uuid>"
   server_uuid_failed: "Could not obtain the server UUID!<error>"
+  legacy_lang_folders: "UltiTools 7.0 no longer reads lang/ folders: <folders>. Write any translations you changed to messages/\\<locale>.yml in the new format."
+  legacy_lang_folders_more: "and <count:'0'> more"
 module:
   duplicate_main_class: "These JAR files all declare the same module main class <main_class>: <jars>. The module's classes load only from <loaded_from>; the other copies are not loaded. Keep only one of them."
   missing_required_plugin: "Module '<module>' requires <plugins>, which is not installed or not enabled; the module is not loaded."
@@ -43,6 +45,9 @@ module:
 reload:
   framework_overrides_failed: "Could not reread the framework message override files; keeping the loaded messages and continuing to reload modules: <reason>"
   partial: "Module <module> reloaded partially; not reloaded: <reasons>"
+  module_done: "Module '<module>' reloaded."
+  module_failed: "Module '<module>' failed to reload: <error>"
+  language_pending: "the language setting in config.yml changed from <from> to <to>; a full /ul reload applies it to every module"
   summary:
     failed: "Failed to reload <failed:'0'> of <total:'0'> modules: <modules>. See the console for each failure."
     mixed_partial: "<partial:'0'> of the others reloaded only partially:"

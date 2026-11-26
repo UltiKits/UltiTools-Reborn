@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts;
 
+import static com.ultikits.ultitools.text.ModuleTextStubs.stubModuleTexts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -16,6 +17,7 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.Optional;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -91,10 +93,10 @@ class ConfigAutomaticWriteGateTest {
         lenient().when(plugin.getPluginName()).thenReturn("GateModule");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
-        lenient().when(plugin.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
-        lenient().when(plugin.i18n("gate.interval")).thenAnswer(i -> language);
+        var texts = stubModuleTexts(plugin);
+        lenient().when(texts.resolve("gate.interval")).thenAnswer(i -> Optional.of(language));
         // The module's jar ships both catalogues, so a comment in either language is the framework's (#604).
-        lenient().when(plugin.shippedCatalogueTexts("gate.interval")).thenReturn(java.util.Arrays.asList(EN, ZH));
+        lenient().when(texts.shippedTemplates("gate.interval")).thenReturn(List.of(EN, ZH));
         frameworkLogger.addHandler(capture);
     }
 
