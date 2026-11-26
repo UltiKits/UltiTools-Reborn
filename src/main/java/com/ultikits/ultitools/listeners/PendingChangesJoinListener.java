@@ -52,14 +52,18 @@ public final class PendingChangesJoinListener implements Listener {
         if (pending.total() == 0 && outcomes.isEmpty()) {
             return;
         }
+        sendNotice(player, pending.total(), outcomes);
+        remindedAt.put(id, pending.generation());
+    }
+
+    private static void sendNotice(Player player, int pendingCount, List<StartOutcome> outcomes) {
         var messages = CommandRuntime.messages();
-        if (pending.total() != 0) {
-            messages.send(player, UpmKeys.PENDING_NOTICE_WAITING, Arg.number("count", pending.total()));
+        if (pendingCount != 0) {
+            messages.send(player, UpmKeys.PENDING_NOTICE_WAITING, Arg.number("count", pendingCount));
         }
         if (!outcomes.isEmpty()) {
             sendStartSummary(player, messages, outcomes);
         }
-        remindedAt.put(id, pending.generation());
     }
 
     private static void sendStartSummary(Player player, Messages messages, List<StartOutcome> outcomes) {

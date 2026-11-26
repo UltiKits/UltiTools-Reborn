@@ -304,9 +304,11 @@ class FrameworkTextCatalogueInvariantTest {
     void noChineseLiteralBypassesTheCatalogue() throws IOException {
         List<JavaLiteralScanner.Literal> literals = cjkLiterals();
         // Control: the scan sees literals that are translated today, so a zero below is not a blind scan.
+        // The count shrinks with every migration to the catalogue, so the control asserts presence, not
+        // a snapshot size. The change that removes the last legacy call must replace it with a fixture.
         assertThat(literals.stream().filter(FrameworkTextCatalogueInvariantTest::isTranslated).count())
                 .as("control: the scan finds literals that are direct arguments of a translator call")
-                .isGreaterThan(50);
+                .isPositive();
 
         List<String> violations = findViolations(mainSources(), catalogue("en"), catalogue("zh"));
         assertThat(violations)

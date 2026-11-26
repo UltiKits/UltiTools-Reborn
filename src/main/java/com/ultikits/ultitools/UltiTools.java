@@ -638,7 +638,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
                 if (loadFailure == null) {
                     throw reportFailure;
                 }
-                if (loadFailure != reportFailure) {
+                // Throwable does not override equals, so this is the identity check addSuppressed needs.
+                if (!loadFailure.equals(reportFailure)) {
                     loadFailure.addSuppressed(reportFailure);
                 }
             }
