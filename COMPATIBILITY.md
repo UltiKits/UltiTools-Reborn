@@ -361,7 +361,11 @@ implements `Localized`. Remove overrides of `Localized#supported()` when rebuild
 The removed entry points are `UltiToolsPlugin#i18n(String)`, `UltiToolsPlugin#i18n(String, String)`,
 `UltiToolsPlugin#getLanguageCode()`, `UltiToolsPlugin#getConfiguredLanguage()`,
 `UltiToolsPlugin#getLanguage()`, `UltiToolsPlugin#overrideLostPlaceholders(...)`,
-`UltiTools#i18n(String)`, `UltiTools#getLanguage()`, and `UltiTools#supported()`.
+`UltiToolsPlugin#supported()` (inherited from `Localized`),
+`UltiToolsPlugin#commitLanguageProvenance()` (internal; renamed to `publishMessageCatalogue()`),
+`UltiTools#i18n(String)`, `UltiTools#i18n(String, String)` (inherited from `Localized`),
+`UltiTools#getLanguage()`, and `UltiTools#supported()`. Module code that calls
+`UltiToolsPlugin#supported()` no longer compiles against 7.0.
 
 | 6.x | 7.0 |
 | --- | --- |
@@ -405,8 +409,11 @@ operator can copy revised translations into the new override files; there is no 
 A configured custom name such as `zh-myserver` still selects its official base (`zh`), and an
 unmatched safe name selects `en`, without reading the old file or adding an invalid-locale warning.
 
-中文补充：7.0 移除上述旧类、注解、方法和 `supported()` 覆盖入口。模块须改为注入 `Messages`，用
-点分键和 MiniMessage 编写 `messages/<locale>.yml`，格式参数使用 `Arg.string` 或 `Arg.number`。
+中文补充：7.0 移除上述旧类、注解和方法。模块须删掉 `supported()` 的覆盖；调用从 `Localized` 继承的
+`UltiToolsPlugin#supported()` 也无法通过编译。`UltiTools#i18n(String, String)` 同样是从 `Localized`
+继承的，现已移除。内部方法 `UltiToolsPlugin#commitLanguageProvenance()` 更名为 `publishMessageCatalogue()`。
+模块须改为注入 `Messages`，用点分键和 MiniMessage 编写 `messages/<locale>.yml`，格式参数使用
+`Arg.string` 或 `Arg.number`。
 需要服务器后备语言时注入 `LocaleResolver` 并调用 `fallback()`；注释令牌按上一节的约定迁移。
 框架和各模块已有的 `lang/` 文件夹（含自定义语言文件）不会被读取、修改或删除；启动时会提示一次。
 服主改过的翻译需手动搬到新覆盖文件。`zh-myserver` 仍按 `zh` 选择基础语言，无匹配前缀的安全名称用 `en`。
