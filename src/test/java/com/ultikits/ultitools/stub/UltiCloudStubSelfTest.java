@@ -201,7 +201,7 @@ class UltiCloudStubSelfTest {
         assertThat(contract.message("command.execute").ackFirst()).isTrue();
         assertThat(contract.message("player.link.create").replies())
                 .containsExactly("player.link.created", "player.link.completed", "player.link.expired");
-        assertThat(contract.messages()).hasSize(60);
+        assertThat(contract.messages()).hasSize(64);
     }
 
     @Test
