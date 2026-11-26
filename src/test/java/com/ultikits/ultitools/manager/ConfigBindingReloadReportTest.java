@@ -1,5 +1,8 @@
 package com.ultikits.ultitools.manager;
 
+import org.mockito.ArgumentCaptor;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -297,10 +300,16 @@ class ConfigBindingReloadReportTest {
             return null;
         }).when(independent).sendMessage(org.mockito.ArgumentMatchers.anyString());
 
+        doAnswer(invocation -> {
+            replies.add(CommandMessageTestSupport.plain(invocation.getArgument(0)));
+            return null;
+        }).when(independent).sendMessage(org.mockito.ArgumentMatchers.any(Component.class));
+
         runReloadCommand(independent, all);
 
         assertThat(replies).anySatisfy(line -> assertThat(line)
-                .contains("Module TimingModule reloaded partially; not reloaded:", "cooldown.wild", "-1", "60"));
+                .contains(all ? "Module TimingModule reloaded partially; not reloaded:"
+                        : "模块 TimingModule 只重载了一部分；未重载：", "cooldown.wild", "-1", "60"));
         assertThat(partialLogMessages()).hasSize(1);
     }
 
@@ -350,8 +359,14 @@ class ConfigBindingReloadReportTest {
                 commands.reloadAll(sender);
             } else {
                 commands.reloadPlugin(sender, "TimingModule");
+                var reply = ArgumentCaptor.forClass(Component.class);
+                verify(sender).sendMessage(reply.capture());
+                assertThat(CommandMessageTestSupport.plain(reply.getValue()))
+                        .isEqualTo("模块 TimingModule 只重载了一部分；未重载：" + report.getPartialReasons().get(0));
             }
-            verify(sender).sendMessage(line);
+            if (all) {
+                verify(sender).sendMessage(line);
+            }
             bukkit.verify(Bukkit::getConsoleSender, never());
         }
     }
