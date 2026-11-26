@@ -83,6 +83,7 @@ import com.ultikits.ultitools.utils.CloudOutboxListener;
 import com.ultikits.ultitools.utils.Metrics;
 import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.CloudFeatures;
+import com.ultikits.ultitools.utils.LegacyLangFolderNotice;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
@@ -394,6 +395,7 @@ public final class UltiTools extends JavaPlugin {
             return;
         }
         initializeTextFallback();
+        LegacyLangFolderNotice.report(getDataFolder(), getLogger());
         bootstrap.reportContent(getLogger());
         moduleFileTransactions.flushReports(getLogger(), CommandRuntime.messages());
         initDataStore();

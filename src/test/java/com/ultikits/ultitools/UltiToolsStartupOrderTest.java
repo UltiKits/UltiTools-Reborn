@@ -150,6 +150,26 @@ class UltiToolsStartupOrderTest {
         assertThat(installations.getFirst().method).isEqualTo("onEnable");
     }
 
+    @Test
+    void legacyLangNoticeRunsOnceOnlyOnEnableAfterLocaleInitialization() {
+        List<Event> enable = findMethod("onEnable");
+        List<Event> reload = findMethod("reloadPluginsAndReport");
+        List<Event> notices = methods.values().stream().flatMap(List::stream)
+                .filter(event -> event.opcode == Opcodes.INVOKESTATIC && "report".equals(event.name)
+                        && "com/ultikits/ultitools/utils/LegacyLangFolderNotice".equals(event.owner))
+                .toList();
+
+        assertThat(reload).as("compiled full reload exists").isNotEmpty();
+        assertThat(reload).anyMatch(event -> event.isOwnCall() && "initializeTextFallback".equals(event.name));
+        assertThat(notices).as("the notice has exactly one call site in UltiTools").hasSize(1);
+        assertThat(notices.getFirst().method).isEqualTo("onEnable");
+        Event localeInit = enable.stream().filter(Event::isOwnCall)
+                .filter(event -> "initializeTextFallback".equals(event.name)).findFirst().orElseThrow();
+        assertThat(enable.indexOf(notices.getFirst())).isGreaterThan(enable.indexOf(localeInit))
+                .isLessThan(enable.stream().filter(event -> "reportContent".equals(event.name))
+                        .mapToInt(enable::indexOf).findFirst().orElseThrow());
+    }
+
     // ---- compiled-class walk ----
 
     /** onEnable's events with each call to a method declared in UltiTools expanded one level deep. */

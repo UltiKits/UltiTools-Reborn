@@ -402,10 +402,13 @@ greeting.welcome: "Welcome, <name>!"
 ```
 
 Module JARs no longer load or extract `lang/` resources, and the framework no longer ships its
-own `lang/` catalogue. Existing `plugins/UltiTools/lang/` and
-`plugins/UltiTools/pluginConfig/<module>/lang/` folders, including custom `lang/<name>.*` files,
-are not read, modified or deleted. 7.0 reports existing legacy folders once at startup so the
-operator can copy revised translations into the new override files; there is no automatic import.
+own `lang/` catalogue. At startup, 7.0 checks only `plugins/UltiTools/lang/` and the `lang/`
+folder directly inside each module directory under `plugins/UltiTools/pluginConfig/`. If it
+finds any, it logs one INFO line with up to 20 paths and only a count for the rest. It does not
+recurse or follow symlinked module directories or `lang` entries; the framework data directory
+and `pluginConfig` may themselves be symlinks. The check does not run on `/ul reload`. It does
+not read, modify, rename, or delete any legacy files or change the directories. Move any
+translations you changed to the new override files manually; there is no automatic import.
 A configured custom name such as `zh-myserver` still selects its official base (`zh`), and an
 unmatched safe name selects `en`, without reading the old file or adding an invalid-locale warning.
 
@@ -415,8 +418,10 @@ unmatched safe name selects `en`, without reading the old file or adding an inva
 模块须改为注入 `Messages`，用点分键和 MiniMessage 编写 `messages/<locale>.yml`，格式参数使用
 `Arg.string` 或 `Arg.number`。
 需要服务器后备语言时注入 `LocaleResolver` 并调用 `fallback()`；注释令牌按上一节的约定迁移。
-框架和各模块已有的 `lang/` 文件夹（含自定义语言文件）不会被读取、修改或删除；启动时会提示一次。
-服主改过的翻译需手动搬到新覆盖文件。`zh-myserver` 仍按 `zh` 选择基础语言，无匹配前缀的安全名称用 `en`。
+7.0 启动时只检查 `plugins/UltiTools/lang/`，以及 `plugins/UltiTools/pluginConfig/` 下各直接模块目录里的 `lang/`。
+若发现遗留目录，控制台只记录一行 INFO，最多列出 20 个路径，其余只报数量。检查不递归，也不跟随遇到的模块目录或 `lang` 符号链接；
+框架数据目录与 `pluginConfig` 本身可以是符号链接。`/ul reload` 不触发此检查。框架不读取、修改、重命名或删除旧文件，也不改动这些目录。
+服主改过的翻译需手动搬到新覆盖文件，不会自动导入。`zh-myserver` 仍按 `zh` 选择基础语言，无匹配前缀的安全名称用 `en`。
 
 ## UI storage waits at shutdown (as of 7.0.0)
 
