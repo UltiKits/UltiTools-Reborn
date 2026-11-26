@@ -6,7 +6,6 @@ import com.ultikits.ultitools.bootstrap.ModuleClassPath;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.times;
@@ -74,7 +73,6 @@ class ModuleAdmissionClassPathTest {
                 }
             });
             UltiTools framework = mock(UltiTools.class);
-            when(framework.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
             when(framework.getDescription()).thenReturn(new PluginDescriptionFile("UltiTools", "7.0.0-SNAPSHOT", "unused.Main"));
             try (ModuleClassLoader loader = new ModuleClassLoader(urls.toArray(new URL[0]), getClass().getClassLoader());
                     MockedStatic<UltiTools> tools = mockStatic(UltiTools.class);

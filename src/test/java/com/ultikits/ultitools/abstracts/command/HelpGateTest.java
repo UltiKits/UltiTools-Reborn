@@ -60,12 +60,10 @@ class HelpGateTest {
 
     @BeforeEach
     void setUp() {
-        // The refusal messages are built through UltiTools.getInstance().i18n(...), so producing
-        // a failure result at all needs the singleton -- mirroring BaseCommandExecutorTest.
+        // Supply the framework singleton, as in BaseCommandExecutorTest.
         UltiTools instance = mock(UltiTools.class);
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(instance);
-        lenient().when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
         command = mock(Command.class);
         lenient().when(command.getName()).thenReturn("fixture");

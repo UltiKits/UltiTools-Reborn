@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -58,7 +57,6 @@ class SenderTypeValidatorTest {
     void setUp() {
         mockedUltiTools = mockStatic(UltiTools.class);
         mockedUltiTools.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-        lenient().when(mockUltiTools.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(mockCommand.getName()).thenReturn("test");
     }
 

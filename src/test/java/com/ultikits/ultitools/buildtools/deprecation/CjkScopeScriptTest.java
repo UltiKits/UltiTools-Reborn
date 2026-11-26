@@ -200,13 +200,22 @@ class CjkScopeScriptTest {
     @Test
     void structuralExclusionsAndUntrackedFilesRemainExcluded() throws Exception {
         prepare("class Sample {}\n");
-        write("src/main/resources/lang/en.json", "{\"key\":\"中文\"}\n");
-        write("src/main/resources/lang/zh.json", "{\"key\":\"中文\"}\n");
-        assertThat(command("git", "add", "--", "src/main/resources/lang").exit).isZero();
         write("src/main/java/Untracked.java", "// 中文\n");
         Result result = gate("--scope", "src/main", "--scope", ".github/scripts/testdata");
         assertThat(result.exit).as(result.output).isZero();
         assertThat(result.output).contains("SUMMARY: 0 CJK violation(s)");
+    }
+
+    @Test
+    void messageCataloguesAreOutsideTheDefaultSourceScope() throws Exception {
+        prepare("class Sample {}\n");
+        String catalogue = "src/main/resources/messages/zh.yml";
+        write(catalogue, "key: 中文\n");
+        assertThat(command("git", "add", "--", catalogue).exit).isZero();
+        assertThat(gate().exit).isZero();
+        Result explicit = gate("--scope", "src/main/resources");
+        assertThat(explicit.exit).isEqualTo(1);
+        assertThat(explicit.output).contains(catalogue + ":1:key: 中文");
     }
 
     @Test

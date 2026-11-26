@@ -3,7 +3,6 @@ package com.ultikits.ultitools.services.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
@@ -95,7 +94,6 @@ class InMemeryTeleportServiceTest {
             when(ultiTools.getLogger()).thenReturn(mockLogger);
             // i18n 原先在 6 个用例里各打一遍、内容完全相同。提到发布之前既消掉重复，
             // 也让这 6 处不再在「mock 已全进程可见」的窗口里打桩。见 issue #256。
-            lenient().when(ultiTools.i18n(any(String.class))).thenAnswer(inv -> inv.getArgument(0));
         });
 
         teleportService = new InMemeryTeleportService();

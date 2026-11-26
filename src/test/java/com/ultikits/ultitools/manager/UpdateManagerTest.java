@@ -55,7 +55,6 @@ class UpdateManagerTest {
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
 
                 // Mock i18n to return the key itself
-                when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
                 versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.3.0"));
 
@@ -83,7 +82,6 @@ class UpdateManagerTest {
                 when(pm.getPluginList()).thenReturn(Collections.emptyList());
                 when(instance.getPluginManager()).thenReturn(pm);
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
-                when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
                 versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.3.0"));
 
@@ -109,7 +107,6 @@ class UpdateManagerTest {
                 when(pm.getPluginList()).thenReturn(Collections.emptyList());
                 when(instance.getPluginManager()).thenReturn(pm);
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
-                when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
                 versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.failed("HTTP 500"));
 
@@ -142,7 +139,6 @@ class UpdateManagerTest {
                 when(pm.getPluginList()).thenReturn(Collections.singletonList(modulePlugin));
                 when(instance.getPluginManager()).thenReturn(pm);
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
-                when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
                 versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.2.0"));
                 installMock.when(() -> PluginInstallUtils.lookUpPluginLatestVersion(eq("ultichat"), any()))
@@ -178,7 +174,6 @@ class UpdateManagerTest {
                 when(pm.getPluginList()).thenReturn(Collections.singletonList(modulePlugin));
                 when(instance.getPluginManager()).thenReturn(pm);
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
-                when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
                 versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.2.0"));
 
@@ -400,7 +395,6 @@ class UpdateManagerTest {
                 PluginManager pm = mock(PluginManager.class);
                 when(pm.getPluginList()).thenReturn(Collections.singletonList(demo));
                 when(instance.getPluginManager()).thenReturn(pm);
-                when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
                 ultiMock.when(UltiTools::getInstance).thenReturn(instance);
                 versionMock.when(VersionUtils::lookUpUltiToolsNewestVersion).thenReturn(VersionLookup.found("6.3.0"));
 

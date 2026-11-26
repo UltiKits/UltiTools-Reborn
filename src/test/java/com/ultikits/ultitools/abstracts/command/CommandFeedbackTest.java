@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.abstracts.command;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -128,7 +127,6 @@ class CommandFeedbackTest {
 
     private static UltiTools legacyPlugin() {
         UltiTools plugin = mock(UltiTools.class);
-        when(plugin.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
         return plugin;
     }
 

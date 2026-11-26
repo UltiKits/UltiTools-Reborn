@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
 import java.util.ArrayList;
@@ -52,7 +51,6 @@ class EarlyLogCaptureTest {
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             lenient().when(ultiTools.getLogger()).thenReturn(Logger.getLogger("EarlyLogCaptureTest"));
             lenient().when(ultiTools.getConfig()).thenReturn(new YamlConfiguration());
-            lenient().when(ultiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         });
     }
 

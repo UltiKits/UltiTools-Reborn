@@ -11,7 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -458,7 +457,6 @@ public class DataEntityTest {
 
         private UltiTools stubUltiTools() {
             UltiTools mockUltiTools = mock(UltiTools.class);
-            when(mockUltiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
             return mockUltiTools;
         }
 

@@ -87,7 +87,6 @@ class BootstrapInstallRollbackTest {
         var manager = new PluginManager(start.admission());
         UltiTools framework = mock(UltiTools.class);
         when(framework.getDataFolder()).thenReturn(data);
-        when(framework.i18n("module.bootstrap.failed")).thenReturn("Skipped %s");
         var bukkitManager = mock(org.bukkit.plugin.PluginManager.class);
         try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
              MockedStatic<UltiTools> tools = mockStatic(UltiTools.class);

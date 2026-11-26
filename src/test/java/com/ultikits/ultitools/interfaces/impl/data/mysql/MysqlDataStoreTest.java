@@ -3,7 +3,6 @@ package com.ultikits.ultitools.interfaces.impl.data.mysql;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -145,7 +144,6 @@ class MysqlDataStoreTest {
         ultiToolsStaticMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
         lenient().when(mockUltiTools.getConfig()).thenReturn(mockConfig);
         lenient().when(mockUltiTools.getLogger()).thenReturn(mockLogger);
-        lenient().when(mockUltiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         // Used only by tests that call getOperator(); lenient() so tests that don't need it
         // (constructor/getStoreType/getDataSource/destroyAllOperators tests) aren't flagged for an
         // unused stub under Mockito's strict-stubs default.
@@ -664,8 +662,7 @@ class MysqlDataStoreTest {
                 // Act
                 MysqlDataStore store = new MysqlDataStore();
 
-                // MockedConstruction wraps the cause; verify catalogue wording and absence of legacy lookups.
-                verify(mockUltiTools, org.mockito.Mockito.never()).i18n(anyString());
+                // MockedConstruction wraps the cause; the failure still goes through the catalogue.
                 verify(mockLogger).log(eq(Level.SEVERE), contains("MySQL connection failed:"));
                 assertThat(store.getDataSource()).isNull();
             }

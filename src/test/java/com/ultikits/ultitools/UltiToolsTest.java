@@ -7,14 +7,12 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.List;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.DataStore;
@@ -73,12 +71,6 @@ class UltiToolsTest {
         @DisplayName("Should extend JavaPlugin")
         void shouldExtendJavaPlugin() {
             assertThat(org.bukkit.plugin.java.JavaPlugin.class.isAssignableFrom(UltiTools.class)).isTrue();
-        }
-
-        @Test
-        @DisplayName("Should implement Localized interface")
-        void shouldImplementLocalizedInterface() {
-            assertThat(com.ultikits.ultitools.interfaces.Localized.class.isAssignableFrom(UltiTools.class)).isTrue();
         }
 
         @Test
@@ -255,25 +247,6 @@ class UltiToolsTest {
     }
 
     @Nested
-    @DisplayName("Localized Interface Tests")
-    class LocalizedInterfaceTests {
-
-        @Test
-        @DisplayName("Should have supported method")
-        void shouldHaveSupportedMethod() throws NoSuchMethodException {
-            Method method = UltiTools.class.getMethod("supported");
-            assertThat(method.getReturnType()).isEqualTo(List.class);
-        }
-
-        @Test
-        @DisplayName("Should have i18n method")
-        void shouldHaveI18nMethod() throws NoSuchMethodException {
-            Method method = UltiTools.class.getMethod("i18n", String.class);
-            assertThat(method.getReturnType()).isEqualTo(String.class);
-        }
-    }
-
-    @Nested
     @DisplayName("Lifecycle Method Tests")
     class LifecycleMethodTests {
 
@@ -351,13 +324,6 @@ class UltiToolsTest {
         void shouldHaveSetDataStoreMethod() throws NoSuchMethodException {
             Method method = UltiTools.class.getMethod("setDataStore", DataStore.class);
             assertThat(method.getReturnType()).isEqualTo(void.class);
-        }
-
-        @Test
-        @DisplayName("Should have getLanguage method")
-        void shouldHaveGetLanguageMethod() throws NoSuchMethodException {
-            Method method = UltiTools.class.getMethod("getLanguage");
-            assertThat(method.getReturnType()).isEqualTo(Language.class);
         }
 
         @Test

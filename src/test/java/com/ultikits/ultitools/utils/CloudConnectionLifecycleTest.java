@@ -1,7 +1,9 @@
 package com.ultikits.ultitools.utils;
 
 import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.commands.CoreCommandKeys;
 import com.ultikits.ultitools.commands.CoreCommandMessageTestSupport;
+import com.ultikits.ultitools.text.Text;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.params.ParameterizedTest;
 import java.util.Locale;
@@ -234,21 +236,16 @@ class CloudConnectionLifecycleTest {
     }
 
     @Test
-    void serverIdMismatchLinesAreInBothCatalogues() throws Exception {
-        for (String key : new String[]{"Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to. "
-                        + "Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login."}) {
-            com.google.gson.JsonObject en = catalogue("en");
-            com.google.gson.JsonObject zh = catalogue("zh");
-            assertThat(en.has(key)).as("en.json: " + key).isTrue();
-            assertThat(en.get(key).getAsString()).isEqualTo(key);
-            assertThat(zh.has(key)).as("zh.json: " + key).isTrue();
-            assertThat(zh.get(key).getAsString()).isNotEqualTo(key).contains("/ulticloud login");
+    void serverIdMismatchLinesAreInBothCatalogues() {
+        String english = "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to. "
+                + "Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login.";
+        Text text = Text.of(CoreCommandKeys.ULTICLOUD_RECONNECT_SERVER_ID_MISMATCH);
+        try (var catalogue = new CommandMessageTestSupport("en")) {
+            assertThat(CommandMessageTestSupport.plain(catalogue.messages().render(text, Locale.ENGLISH)))
+                    .as("messages/en.yml").isEqualTo(english);
+            assertThat(CommandMessageTestSupport.plain(catalogue.messages().render(text, Locale.CHINESE)))
+                    .as("messages/zh.yml").isNotEqualTo(english).contains("/ulticloud login");
         }
-    }
-
-    private static com.google.gson.JsonObject catalogue(String language) throws java.io.IOException {
-        return com.google.gson.JsonParser.parseString(new String(Files.readAllBytes(java.nio.file.Paths.get(
-                "src/main/resources/lang/" + language + ".json")), StandardCharsets.UTF_8)).getAsJsonObject();
     }
 
     @Test

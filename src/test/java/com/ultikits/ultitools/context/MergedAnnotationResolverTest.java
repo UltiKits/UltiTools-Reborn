@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
 import com.ultikits.ultitools.annotations.AliasFor;
 import com.ultikits.ultitools.annotations.ComponentScan;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import com.ultikits.ultitools.annotations.I18n;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.exceptions.ContainerException;
 
@@ -48,8 +47,23 @@ class MergedAnnotationResolverTest {
     static class EventListenerDisabledFixture {
     }
 
-    @UltiToolsModule(i18n = {"zh", "en"})
-    static class I18nOverrideFixture {
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.ANNOTATION_TYPE)
+    @interface ArrayTarget {
+        String[] value() default {};
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.TYPE)
+    @ArrayTarget
+    @interface ArrayAlias {
+        @AliasFor(annotation = ArrayTarget.class, attribute = "value")
+        String[] names() default {};
+    }
+
+    @ArrayAlias(names = {"zh", "en"})
+    static class ArrayOverrideFixture {
+        // This type only carries the composed annotation.
     }
 
     // ===== Cyclic meta-annotation graph fixture (T-03-03) =====
@@ -129,9 +143,9 @@ class MergedAnnotationResolverTest {
     }
 
     @Test
-    @DisplayName("A String[]-typed @AliasFor (i18n -> I18n.value) merges correctly, not just boolean-typed ones")
+    @DisplayName("A String[]-typed @AliasFor merges correctly, not just boolean-typed ones")
     void shouldMergeStringArrayTypedAlias() {
-        I18n merged = MergedAnnotationResolver.find(I18nOverrideFixture.class, I18n.class);
+        ArrayTarget merged = MergedAnnotationResolver.find(ArrayOverrideFixture.class, ArrayTarget.class);
 
         assertNotNull(merged);
         assertArrayEquals(new String[] {"zh", "en"}, merged.value());
@@ -145,7 +159,7 @@ class MergedAnnotationResolverTest {
     }
 
     @Test
-    @DisplayName("Control: @UltiToolsModule's own six @AliasFor declarations pass structural validation")
+    @DisplayName("Control: @UltiToolsModule's own @AliasFor declarations pass structural validation")
     void validateAliasesAcceptsUltiToolsModuleItself() {
         // Regression control for Task 2's validateAliases: without this assertion, a validator
         // that rejected every declaration (not just malformed ones) would also make every

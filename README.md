@@ -114,11 +114,11 @@ language, configured fallback, module source language, then the key. Put only op
 `plugins/UltiTools/pluginConfig/<module>/messages/<locale>.yml`; framework overrides belong in
 `plugins/UltiTools/messages/<locale>.yml`. Generated `messages/reference/` files are framework-owned
 examples, overwritten at startup; edit the parent override file, not the reference. A module reload
-re-reads its overrides; framework catalogue overrides currently require a restart. **6.x language
-files and custom language names are not migrated.** Legacy `§` / `&` colour codes are not interpreted
-in new catalogues; use MiniMessage tags. While the legacy path coexists, its custom files still
-work there; new `Messages` resolve a custom configured name to its official prefix language
-(`zh-myserver` → `zh`, unmatched safe names → `en`) without importing the old file or adding a warning.
+re-reads its overrides; a full `/ul reload` also re-reads the framework overrides. **7.0 removes
+`i18n` and no longer reads, changes or imports old `lang/` files.** Convert changed translations
+to MiniMessage rather than `§` / `&` colour codes. A configured name such as `zh-myserver` still
+selects `zh` (an unmatched safe name selects `en`) without reading the old custom file. See the
+[legacy text migration guide](COMPATIBILITY.md#legacy-text-system-removed-as-of-700).
 
 中文补充：7.0 新装默认两个语言设置均为 `auto`；玩家按客户端语言显示。后备设置为 `auto`、空白
 或缺失时，先沿用具体 `language`（自定义名称取官方前缀语言）；`language` 也为自动、空白或缺失时，
@@ -127,11 +127,10 @@ work there; new `Messages` resolve a custom configured name to its official pref
 `/ul reload`；显式语言优先，已有 `language: zh/en` 且未写后备语言的配置不会被新默认覆盖，配置文件
 也不会自动改写。时区选择只在启动和配置重载时解析，玩家运行中改客户端语言仍立即生效。
 模块随包使用 `messages/<语言>.yml`，服主在上级覆盖文件里只写需要修改的条目；`reference/` 是每次
-启动重写的只读参考，不要修改。模块重载会重读模块覆盖，框架覆盖暂需重启。6.x 语言文件与自定义
-名称不自动迁移；新目录的 `§`、`&` 不解释为颜色码。语言键和值的标量均按原样文字读取，
-`Yes`、`null`、数字不必为避免 YAML 类型推断而加引号，列表不能作为消息。仅读取 UTF-8 的 `.yml`；
-提供 `zh_CN.yml` 等地区变体时也应提供 `zh.yml`。并存期间旧路径仍读取自定义文件；新引擎只按旧
-官方前缀选基础语言（`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不导入旧文件或新增告警。
+启动重写的只读参考，不要修改。单模块重载会重读该模块覆盖，完整重载也会重读框架覆盖。7.0 移除
+`i18n`，不读取、修改或导入旧 `lang/` 文件；新目录的 `§`、`&` 不解释为颜色码。语言键和值的标量
+均按原样读取，`Yes`、`null`、数字不必加引号，列表不能作为消息。仅读取 UTF-8 的 `.yml`；
+提供 `zh_CN.yml` 等地区变体时也应提供 `zh.yml`。`zh-myserver` 仍归到 `zh`，无匹配前缀的安全名称用 `en`。
 
 ### Add the Dependency
 

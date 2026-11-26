@@ -13,7 +13,6 @@ import net.kyori.adventure.text.Component;
 import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doAnswer;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,7 +32,6 @@ class FrameworkRepliesTest {
         try (var bukkit = mockStatic(Bukkit.class); var ulti = mockStatic(UltiTools.class)) {
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             var plugin = mock(UltiTools.class);
-            when(plugin.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
             var executor = new Fixture();
             List<String> replies = new ArrayList<>();
@@ -61,7 +59,6 @@ class FrameworkRepliesTest {
         try (var bukkit = mockStatic(Bukkit.class); var ulti = mockStatic(UltiTools.class)) {
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             var plugin = mock(UltiTools.class);
-            when(plugin.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
             Fixture executor = new Fixture();
             var dispatcher = CommandTestSupport.dispatcher(executor, "test");
@@ -77,7 +74,6 @@ class FrameworkRepliesTest {
         try (var bukkit = mockStatic(Bukkit.class); var ulti = mockStatic(UltiTools.class)) {
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             var plugin = mock(UltiTools.class);
-            when(plugin.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
             Fixture executor = new Fixture();
             var dispatcher = CommandTestSupport.dispatcher(executor, "test");
@@ -94,7 +90,6 @@ class FrameworkRepliesTest {
         try (var bukkit = mockStatic(Bukkit.class); var ulti = mockStatic(UltiTools.class)) {
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             var plugin = mock(UltiTools.class);
-            when(plugin.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
             Fixture executor = new Fixture();
             var invocation = new CommandInvocation(executor);

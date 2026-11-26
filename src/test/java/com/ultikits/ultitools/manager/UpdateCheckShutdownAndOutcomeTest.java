@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
@@ -182,7 +181,6 @@ class UpdateCheckShutdownAndOutcomeTest {
         PluginManager pm = mock(PluginManager.class);
         when(pm.getPluginList()).thenReturn(modules);
         when(instance.getPluginManager()).thenReturn(pm);
-        when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         ultiMock.when(UltiTools::getInstance).thenReturn(instance);
     }
 

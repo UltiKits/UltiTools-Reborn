@@ -63,7 +63,7 @@ class CustomCatalogueCommentRecognitionTest {
     private void start(String code) throws Exception {
         fixture.fallback(code);
         plugin = fixture.construct();
-        plugin.commitLanguageProvenance();
+        plugin.publishMessageCatalogue();
         configManager.register(plugin, new RecognitionConfig(CONFIG_PATH));
     }
 

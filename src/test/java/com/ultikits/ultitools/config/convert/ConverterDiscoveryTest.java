@@ -40,7 +40,6 @@ class ConverterDiscoveryTest {
     private static UltiToolsPlugin constructingPlugin;
     private static boolean constructed;
     private static int manualCalls;
-    private static boolean languageReady;
 
     @TempDir
     Path directory;
@@ -56,7 +55,6 @@ class ConverterDiscoveryTest {
         constructingPlugin = plugin;
         constructed = false;
         manualCalls = 0;
-        languageReady = false;
         TestHelper.mockUltiToolsInstance(ultiTools -> {
             YamlConfiguration config = new YamlConfiguration();
             config.set("language", "en");
@@ -153,7 +151,6 @@ class ConverterDiscoveryTest {
             assertThat(ConverterRegistry.forModule(connector).resolve(Value.class)).isInstanceOf(ValidConverter.class);
             assertThat(constructed).isFalse();
             assertThat(manualCalls).isEqualTo(1);
-            assertThat(languageReady).isTrue();
         }
     }
 
@@ -163,7 +160,6 @@ class ConverterDiscoveryTest {
             assertThatCode(() -> new UnannotatedConnector(directory.toString())).doesNotThrowAnyException();
             assertThat(constructed).isFalse();
             assertThat(manualCalls).isEqualTo(1);
-            assertThat(languageReady).isTrue();
         }
     }
 
@@ -383,7 +379,6 @@ class ConverterDiscoveryTest {
         }
         @Override public List<AbstractConfigEntity> getAllConfigs() {
             manualCalls++;
-            languageReady = getLanguage() != null;
             return Collections.emptyList();
         }
         @Override public boolean registerSelf() { return true; }
