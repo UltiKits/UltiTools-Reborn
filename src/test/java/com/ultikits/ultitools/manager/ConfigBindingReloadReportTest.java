@@ -19,8 +19,6 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.Collections;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -28,8 +26,6 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import org.bukkit.Bukkit;
@@ -88,6 +84,8 @@ import com.ultikits.ultitools.utils.TestHelper;
 @ExtendWith(CommandTestExtension.class)
 class ConfigBindingReloadReportTest {
 
+    private CommandMessageTestSupport textSupport;
+    private AutoCloseable textScope;
     private BindingTimingConfig config;
     private PluginManager pluginManager;
     private ModuleFixture module;
@@ -129,6 +127,7 @@ class ConfigBindingReloadReportTest {
     @BeforeEach
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // same reload fixture idiom as UltiToolsPluginReloadBindingStepTest
     void setUp() throws Exception {
+        useCatalogue("en");
         MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         host = MockBukkit.createMockPlugin();
@@ -155,7 +154,9 @@ class ConfigBindingReloadReportTest {
     }
 
     @AfterEach
-    void tearDown() {
+    void tearDown() throws Exception {
+        textScope.close();
+        textSupport.close();
         if (captureHandler != null) {
             Logger.getLogger(UltiToolsPlugin.class.getName()).removeHandler(captureHandler);
             Bukkit.getLogger().removeHandler(captureHandler);
@@ -491,22 +492,13 @@ class ConfigBindingReloadReportTest {
 
     /** Real shipped catalogue content, with only the singleton wiring mocked. */
     private void useCatalogue(String language) throws Exception {
-        JsonObject catalogue;
-        try (InputStreamReader reader = new InputStreamReader(getClass().getResourceAsStream("/lang/" + language + ".json"),
-                StandardCharsets.UTF_8)) {
-            catalogue = JsonParser.parseReader(reader).getAsJsonObject();
+        if (textScope != null) {
+            textScope.close();
+            textSupport.close();
         }
-        ConfigManager configs = UltiTools.getInstance().getConfigManager();
-        org.bukkit.configuration.file.FileConfiguration running = UltiTools.getInstance().getConfig();
-        TestHelper.mockUltiToolsInstance(framework -> {
-            when(framework.getConfigManager()).thenReturn(configs);
-            when(framework.getPluginManager()).thenReturn(pluginManager);
-            when(framework.getConfig()).thenReturn(running);
-            when(framework.i18n(Mockito.anyString())).thenAnswer(call -> {
-                String key = call.getArgument(0);
-                return catalogue.has(key) ? catalogue.get(key).getAsString() : key;
-            });
-        });
+        textSupport = new CommandMessageTestSupport(language);
+        textScope = com.ultikits.ultitools.text.internal.FrameworkMessages.overrideForTests(
+                textSupport.messages(), java.util.Locale.forLanguageTag(language));
     }
 
     @Test

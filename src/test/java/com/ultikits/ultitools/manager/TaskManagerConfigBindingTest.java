@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.spy;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.ultikits.ultitools.scheduling.internal.PaperBackend;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -73,6 +74,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("TaskManager config-bound @Scheduled (#531)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(FrameworkMessagesExtension.class)
 class TaskManagerConfigBindingTest {
 
     private ServerMock server;

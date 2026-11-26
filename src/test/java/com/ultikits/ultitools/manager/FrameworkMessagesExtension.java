@@ -1,0 +1,34 @@
+package com.ultikits.ultitools.manager;
+
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import java.util.Locale;
+import org.junit.jupiter.api.extension.AfterEachCallback;
+import org.junit.jupiter.api.extension.BeforeEachCallback;
+import org.junit.jupiter.api.extension.ExtensionContext;
+
+/** Real framework catalogue in the selected language for regression fixtures. */
+public final class FrameworkMessagesExtension implements BeforeEachCallback, AfterEachCallback {
+    private final String language;
+    private CommandMessageTestSupport support;
+    private AutoCloseable scope;
+
+    public FrameworkMessagesExtension() { this("en"); }
+
+    public FrameworkMessagesExtension(String language) { this.language = language; }
+
+    @Override
+    public void beforeEach(ExtensionContext context) {
+        support = new CommandMessageTestSupport(language);
+        scope = FrameworkMessages.overrideForTests(support.messages(), Locale.forLanguageTag(language));
+    }
+
+    @Override
+    public void afterEach(ExtensionContext context) throws Exception {
+        try {
+            scope.close();
+        } finally {
+            support.close();
+        }
+    }
+}

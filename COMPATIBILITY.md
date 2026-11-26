@@ -180,7 +180,7 @@ All thirteen framework keys use the `ultitools:` namespace:
 - `command.reply.unknown`, `command.reply.usage`, `command.reply.argument_error`.
 
 Override them in `plugins/UltiTools/messages/<locale>.yml` using dotted or nested YAML keys and
-MiniMessage values. Framework catalogue overrides currently require a restart. Arguments are
+MiniMessage values. `/ul reload` re-reads framework catalogue overrides as well (as of 7.0.0). Arguments are
 literal text or components, not MiniMessage templates: `<target>` and `<words...>` in usages
 remain visible. Native translatable argument-error components are retained where Paper supplies
 them; plain parser details are passed through literally.
@@ -216,7 +216,7 @@ has its own retirement rules. Cooldown seconds remain plain integers without loc
 
 中文补充：框架命令反馈已改用 `Messages`；`language: auto` 时按各玩家当前客户端语言渲染，
 控制台、命令方块和面板使用后备语言。上列 13 个键都属于 `ultitools` 命名空间，可在
-`plugins/UltiTools/messages/<locale>.yml` 中覆盖；框架目录覆盖目前须重启生效。原有回复措辞和
+`plugins/UltiTools/messages/<locale>.yml` 中覆盖；完整的 `/ul reload` 也会重读框架目录覆盖（自 7.0.0 起）。原有回复措辞和
 颜色保留，用法里的 `<target>`、`<words...>` 等参数不会当模板解析；模块帮助及解析器异常原文
 仍归模块所有，两个固定英文解析错误不翻译。校验失败先读取 `getErrorText()`；由 Text 构造的
 失败其 `getErrorMessage()` 为 null，旧 String 工厂及自定义字符串回复继续原样支持。
@@ -281,9 +281,20 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   `plugins/UltiTools/messages/<locale>.yml` for framework messages. New locale files add
   languages. The framework reads these files but never writes them. It rewrites its own
   `messages/reference/` examples from shipped bytes at startup; editing those examples has no
-  effect. `/ul reload <module>` reloads module overrides. **Known limitation:** framework
-  catalogue overrides currently reload only on restart, not `/ul reload`; locale configuration
-  itself does reload. A later text-migration change supplies the catalogue-reload hook.
+  effect. `/ul reload <module>` reloads module overrides. `/ul reload` reloads the framework's
+  overrides and its locale configuration.
+  Log lines, the `/ul reload` summary and module reload reasons are rendered in the server's
+  fallback language; chat replies and titles use each player's language.
+  If `language` and `fallback-language` are both set and differ, framework logs and reload summaries
+  follow `fallback-language`.
+  A malformed override file is ignored with a warning; its messages revert to the bundled text, not
+  the last valid override. Deleting the override file also restores the bundled text.
+  `/ul reload` also re-reads the bundled catalogue from the framework JAR on disk. Replacing or
+  partially copying the JAR while the server is running can break framework messages until restart;
+  stop the server before replacing the JAR.
+  `/ul reload` 同时重读框架覆盖文件与语言配置；日志、重载汇总及模块重载原因使用服务器回退语言，聊天回复与标题使用各玩家的语言。
+  两项语言配置不同时，框架日志与汇总跟随 `fallback-language`。覆盖文件格式错误时会告警并回到内置文案，而不是沿用上一次覆盖；删除覆盖文件也会恢复内置文案。
+  重载也会重读磁盘上框架 JAR 内的目录，运行中替换或只拷贝了一部分可能导致框架消息在重启前异常，请先停服再替换 JAR。
 - **Migration:** 6.x language files, sentence keys, custom language names and operator edits
   are not automatically converted to the new catalogues. Re-create the required overrides
   with dotted keys and MiniMessage syntax. The old `i18n` path remains temporarily while its
@@ -301,7 +312,7 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 若服主从已有文件删去了 `language`，7.0 按 `auto` 处理，不再取 6.x 的中文默认，也不把该键写回。
 时区在启动和配置重载时解析，玩家语言每次投递时读取。
 翻译顺序为请求语言、后备语言、模块源语言、键本身；参数仍按请求语言格式化。服主只改上级覆盖
-文件，`reference/` 是框架每次启动重写的只读参考；模块覆盖可重载，框架覆盖暂需重启。6.x 的语言
+文件，`reference/` 是框架每次启动重写的只读参考；`/ul reload <模块>` 重载该模块的覆盖，完整的 `/ul reload` 同时重读框架覆盖。6.x 的语言
 文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。
 并存期间旧路径照旧读取自定义文件；新 `Messages` 将自定义配置名按旧官方前缀归到基础语言
 （`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不读取该旧文件，也不新增非法 locale 警告。

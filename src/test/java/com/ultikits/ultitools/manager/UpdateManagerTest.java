@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.*;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
 import java.util.*;
 import java.util.logging.Logger;
 
@@ -20,6 +21,10 @@ import com.ultikits.ultitools.stub.StubCatalogue;
 
 @DisplayName("UpdateManager Tests")
 class UpdateManagerTest {
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages =
+            new FrameworkMessagesExtension("en");
+
 
     private UpdateManager updateManager;
 

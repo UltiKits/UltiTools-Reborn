@@ -1,5 +1,10 @@
 package com.ultikits.ultitools.manager;
 
+import static com.ultikits.ultitools.manager.ManagerKeys.*;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.ui.UiService;
 
@@ -118,29 +123,6 @@ public class PluginManager {
      */
     private static final String LEGACY_PLUGIN_LOADING_PROPERTY = "ultitools.useLegacyPluginLoading";
 
-    /** Framework i18n key: the {@code /ul reload} summary when every module reloaded (#509). */
-    static final String RELOAD_SUMMARY_ALL_KEY = "All %d modules reloaded.";
-
-    /** Framework i18n key: the {@code /ul reload} summary naming the modules that failed (#509). */
-    static final String RELOAD_SUMMARY_FAILED_KEY =
-            "Failed to reload %d of %d modules: %s. See the console for each failure.";
-
-    /**
-     * Framework i18n key: the line after {@link #RELOAD_SUMMARY_FAILED_KEY} when, besides the failed
-     * modules, some reloaded only partly; the partial modules' own lines follow it (#529; Codex
-     * review of #564, round 2).
-     */
-    static final String RELOAD_SUMMARY_MIXED_PARTIAL_KEY = "%d of the others reloaded only partially:";
-
-    /** Framework i18n key: the {@code /ul reload} summary when no module failed but some reloaded only partly (#529). */
-    static final String RELOAD_SUMMARY_PARTIAL_KEY = "Reloaded %d modules; %d only partially:";
-
-    /**
-     * Framework i18n key: one partially reloaded module and the parts that did not reload (#529).
-     * The same text {@code /ul reload <name>} replies; the literal is repeated in that command.
-     */
-    static final String RELOAD_PARTIAL_LINE_KEY = "Module %s reloaded partially; not reloaded: %s";
-
     /**
      * Whether an unmodified reload summary's indexed line is a per-module detail already logged
      * by that module. Internal command-output metadata, not a module API. Unknown lists keep all
@@ -199,15 +181,6 @@ public class PluginManager {
         private static final long serialVersionUID = 1L;
         private int headlineCount;
     }
-
-    /**
-     * Framework i18n key for the one line logged when a module cannot load because a plugin its
-     * {@code plugin.yml} lists under {@code depend:} is not installed or not enabled (#554).
-     * Arguments: the module, the missing plugins joined by {@code ", "}. Package-private so a test
-     * can assert both shipped catalogues translate it.
-     */
-    static final String MISSING_REQUIRED_PLUGIN_LOG_KEY =
-            "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded.";
 
     /**
      * The loaded modules, in load order. Only this manager changes it: a module is listed by
@@ -468,9 +441,9 @@ public class PluginManager {
             for (File jar : duplicate.getValue()) {
                 names.add(jar.getName());
             }
-            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(UltiTools.getInstance().i18n(
-                    "以下 JAR 文件都声明了同一个模块主类 %s：%s。该模块的类只从 %s 加载，其余副本不会加载；请只保留其中一个。"),
-                    duplicate.getKey(), String.join(", ", names), supplier.getName()));
+            Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + FrameworkMessages.plain(MODULE_DUPLICATE_MAIN_CLASS,
+                    Arg.string("main_class", String.valueOf(duplicate.getKey())),
+                    Arg.string("jars", String.join(", ", names)), Arg.string("loaded_from", supplier.getName())));
         }
     }
 
@@ -623,10 +596,10 @@ public class PluginManager {
         return true;
     }
 
-    /** Logs the one {@link #MISSING_REQUIRED_PLUGIN_LOG_KEY} line, without a trace (#554). */
+    /** Logs the one {@link ManagerKeys#MODULE_MISSING_REQUIRED_PLUGIN} line, without a trace (#554). */
     private static void logMissingRequiredPlugins(String moduleName, List<String> missing) {
-        Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + String.format(
-                UltiTools.getInstance().i18n(MISSING_REQUIRED_PLUGIN_LOG_KEY), moduleName, String.join(", ", missing)));
+        Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + FrameworkMessages.plain(MODULE_MISSING_REQUIRED_PLUGIN,
+                Arg.string("module", String.valueOf(moduleName)), Arg.string("plugins", String.join(", ", missing))));
     }
 
     /**
@@ -1235,7 +1208,7 @@ public class PluginManager {
                     "[UltiTools-API] %s: reload was called off the main thread (%s); config-bound @Scheduled and "
                             + "@CmdCD values were not applied. Run /ul reload from the console or in game.",
                     plugin.getPluginName(), Thread.currentThread().getName()));
-            report.partial(ConfigBindings.reloadReason(ConfigBindings.BINDING_OFF_THREAD_KEY));
+            report.partial(ConfigBindings.reloadReason(CONFIG_BINDING_OFF_THREAD));
             return;
         }
         runReloadHalf(plugin, "@Scheduled", report, () -> {
@@ -1264,9 +1237,11 @@ public class PluginManager {
             half.run();
         } catch (RuntimeException e) {
             Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + plugin.getPluginName() + ": "
-                    + String.format(ConfigBindings.BINDING_STEP_FAILED_KEY, what, e.getMessage()), e);
+                    + FrameworkMessages.plain(CONFIG_BINDING_STEP_FAILED, Arg.string("what", String.valueOf(what)),
+                            Arg.string("cause", String.valueOf(e.getMessage()))), e);
             String cause = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            report.partial(ConfigBindings.reloadReason(ConfigBindings.BINDING_STEP_FAILED_KEY, what, cause));
+            report.partial(ConfigBindings.reloadReason(CONFIG_BINDING_STEP_FAILED, Arg.string("what", String.valueOf(what)),
+                    Arg.string("cause", String.valueOf(cause))));
         }
     }
 
@@ -1309,8 +1284,8 @@ public class PluginManager {
         }
         if (!ConfigBindings.isValidCooldownSeconds(seconds)) {
             keepRunning(plugin, report, bindingKey, before, next, reported,
-                    ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_INVALID_KEY, seconds,
-                            ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_RULE_KEY, Integer.MAX_VALUE)));
+                    ConfigBindings.reloadReason(CONFIG_BINDING_COOLDOWN_INVALID, Arg.string("value", String.valueOf(seconds)),
+                            Arg.text("rule", Text.of(CONFIG_BINDING_COOLDOWN_RULE, Arg.number("max", Integer.MAX_VALUE)))));
             return;
         }
         int value = seconds.intValue();
@@ -1329,11 +1304,14 @@ public class PluginManager {
         }
         if (reported.add(bindingKey)) {
             Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + ConfigBindings.reloadReason(
-                    ConfigBindings.COOLDOWN_NOT_UPDATED_WARNING_KEY,
-                    plugin.getPluginName(), describeBindingKey(bindingKey), reportWhy, before));
+                    CONFIG_BINDING_COOLDOWN_NOT_UPDATED_WARNING,
+                    Arg.string("module", String.valueOf(plugin.getPluginName())),
+                    Arg.string("binding", describeBindingKey(bindingKey)), Arg.string("reason", String.valueOf(reportWhy)),
+                    Arg.number("seconds", before == null ? 0 : before)));
             // #595: one reason per binding key, like the warning.
-            report.partial(ConfigBindings.reloadReason(ConfigBindings.COOLDOWN_KEPT_KEY,
-                    describeBindingKey(bindingKey), reportWhy, before));
+            report.partial(ConfigBindings.reloadReason(CONFIG_BINDING_COOLDOWN_KEPT,
+                    Arg.string("binding", describeBindingKey(bindingKey)), Arg.string("reason", String.valueOf(reportWhy)),
+                    Arg.number("seconds", before == null ? 0 : before)));
         }
     }
 
@@ -1556,8 +1534,9 @@ public class PluginManager {
             try {
                 ReloadReport report = plugin.reloadWithReport();
                 if (report.isPartial()) {
-                    partialLines.add(String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_LINE_KEY),
-                            plugin.getPluginName(), String.join("; ", report.getPartialReasons())));
+                    partialLines.add(FrameworkMessages.plain(RELOAD_PARTIAL,
+                            Arg.string("module", String.valueOf(plugin.getPluginName())),
+                            Arg.string("reasons", String.join("; ", report.getPartialReasons()))));
                 }
             } catch (Exception | Error e) {
                 // reloadSelf() has already logged the failure line naming the module, with its
@@ -1568,17 +1547,17 @@ public class PluginManager {
         }
         ReloadSummary summary = new ReloadSummary();
         if (!failed.isEmpty()) {
-            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_FAILED_KEY),
-                    failed.size(), modules.size(), String.join(", ", failed)));
+            summary.add(FrameworkMessages.plain(RELOAD_SUMMARY_FAILED,
+                    Arg.number("failed", failed.size()), Arg.number("total", modules.size()),
+                    Arg.string("modules", String.join(", ", failed))));
             if (!partialLines.isEmpty()) {
-                summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_MIXED_PARTIAL_KEY),
-                        partialLines.size()));
+                summary.add(FrameworkMessages.plain(RELOAD_SUMMARY_MIXED_PARTIAL, Arg.number("partial", partialLines.size())));
             }
         } else if (!partialLines.isEmpty()) {
-            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_PARTIAL_KEY),
-                    modules.size(), partialLines.size()));
+            summary.add(FrameworkMessages.plain(RELOAD_SUMMARY_PARTIAL,
+                    Arg.number("total", modules.size()), Arg.number("partial", partialLines.size())));
         } else {
-            summary.add(String.format(UltiTools.getInstance().i18n(RELOAD_SUMMARY_ALL_KEY), modules.size()));
+            summary.add(FrameworkMessages.plain(RELOAD_SUMMARY_ALL, Arg.number("total", modules.size())));
         }
         summary.headlineCount = summary.size();
         Level summaryLevel = failed.isEmpty() && partialLines.isEmpty() ? Level.INFO : Level.WARNING;
@@ -1649,21 +1628,22 @@ public class PluginManager {
             String frameworkVersion = framework.getDescription().getVersion();
             if (admission.getApiLevel() == null) {
                 String raw = ymlInfo.getApiVersion();
-                String read = raw == null ? framework.i18n("<missing>") : "'" + raw + "'";
-                Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + String.format(framework.i18n(
-                        "Module '%s' has no valid api-version (read: %s); UltiTools-API %s requires an integer api-version of %d or higher -- refusing to load. Install a module rebuilt for the current UltiTools-API."),
-                        pluginJar.getName(), read, frameworkVersion, ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL));
+                Text read = raw == null ? Text.of(MODULE_API_VERSION_UNREADABLE) : Text.plain("'" + raw + "'");
+                Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + FrameworkMessages.plain(MODULE_API_VERSION_INVALID,
+                        Arg.string("module", pluginJar.getName()), Arg.text("read", read),
+                        Arg.string("framework_version", String.valueOf(frameworkVersion)),
+                        Arg.number("min_level", ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL)));
             } else {
-                Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + String.format(framework.i18n(
-                        "Module '%s' declares api-version %d, below the minimum %d required by UltiTools-API %s; refusing to load. Install a module rebuilt for the current UltiTools-API; changing api-version alone does not make an old module compatible."),
-                        pluginJar.getName(), admission.getApiLevel(), ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, frameworkVersion));
+                Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + FrameworkMessages.plain(MODULE_API_VERSION_TOO_LOW,
+                        Arg.string("module", pluginJar.getName()), Arg.number("level", admission.getApiLevel()),
+                        Arg.number("min_level", ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL),
+                        Arg.string("framework_version", String.valueOf(frameworkVersion))));
             }
             return null;
         }
 
         if (admission.getBootstrapFailure() != null) {
-            Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + String.format(
-                    UltiTools.getInstance().i18n("module.bootstrap.failed"), pluginJar.getName()));
+            Bukkit.getLogger().log(Level.SEVERE, "[UltiTools-API] " + FrameworkMessages.plain(MODULE_BOOTSTRAP_FAILED, Arg.string("module", pluginJar.getName())));
             return null;
         }
 

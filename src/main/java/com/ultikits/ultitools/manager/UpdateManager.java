@@ -1,5 +1,9 @@
 package com.ultikits.ultitools.manager;
 
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import static com.ultikits.ultitools.manager.ManagerKeys.*;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
@@ -164,7 +168,7 @@ public class UpdateManager {
             return;
         }
         try {
-            logger.log(Level.INFO, LOG_PREFIX + UltiTools.getInstance().i18n("正在检查版本更新..."));
+            logger.log(Level.INFO, LOG_PREFIX + FrameworkMessages.plain(UPDATE_CHECKING));
 
             List<String> failed = new ArrayList<>();
             checkFrameworkUpdate(failed);
@@ -284,27 +288,24 @@ public class UpdateManager {
 
     private void logResults(List<String> failed) {
         if (frameworkUpdate != null) {
-            info(String.format("[UltiTools-API] "
-                    + UltiTools.getInstance().i18n("UltiTools-API有新版本 %s 可用（当前：%s）"),
-                frameworkUpdate.getLatestVersion(), frameworkUpdate.getCurrentVersion()));
-            info(String.format("[UltiTools-API] "
-                    + UltiTools.getInstance().i18n("下载地址：%s"),
-                "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
+            info("[UltiTools-API] " + FrameworkMessages.plain(UPDATE_FRAMEWORK_AVAILABLE,
+                    Arg.string("latest", String.valueOf(frameworkUpdate.getLatestVersion())),
+                    Arg.string("current", String.valueOf(frameworkUpdate.getCurrentVersion()))));
+            info("[UltiTools-API] " + FrameworkMessages.plain(UPDATE_DOWNLOAD,
+                    Arg.string("url", "https://github.com/UltiKits/UltiTools-Reborn/releases/latest")));
         }
         if (!moduleUpdates.isEmpty()) {
-            info(String.format("[UltiTools-API] "
-                    + UltiTools.getInstance().i18n("模块更新可用（%d个）："), moduleUpdates.size()));
+            info("[UltiTools-API] " + FrameworkMessages.plain(UPDATE_MODULES_AVAILABLE, Arg.number("count", moduleUpdates.size())));
             for (UpdateInfo info : moduleUpdates.values()) {
                 info(String.format("[UltiTools-API]   %s %s -> %s",
                     info.getPluginName(), info.getCurrentVersion(), info.getLatestVersion()));
             }
         }
         if (!failed.isEmpty()) {
-            info(LOG_PREFIX + String.format(
-                    UltiTools.getInstance().i18n("更新检查未完成：无法确认 %s 的最新版本。"), String.join(", ", failed)));
+            info(LOG_PREFIX + FrameworkMessages.plain(UPDATE_INCOMPLETE, Arg.string("modules", String.join(", ", failed))));
         } else if (frameworkUpdate == null && moduleUpdates.isEmpty()) {
             info(LOG_PREFIX
-                    + UltiTools.getInstance().i18n("所有插件已是最新版本！"));
+                    + FrameworkMessages.plain(UPDATE_UP_TO_DATE));
         }
     }
 

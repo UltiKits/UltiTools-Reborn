@@ -1,5 +1,9 @@
 package com.ultikits.ultitools.manager;
 
+import static com.ultikits.ultitools.manager.ManagerKeys.*;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.Text;
+
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -445,12 +449,15 @@ public class TaskManager {
         if (source.lastReloadFailed()) {
             if (warnedKeys.add(source.key)) {
                 Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + ConfigBindings.reloadReason(
-                        ConfigBindings.SCHEDULED_NOT_VALIDATED_WARNING_KEY,
-                        plugin.getPluginName(), handle.owner, source.configName(), source.key,
-                        source.entity.getConfigFilePath(), currentTicks / ConfigBindings.TICKS_PER_SECOND));
-                report.partial(ConfigBindings.reloadReason(ConfigBindings.SCHEDULED_NOT_VALIDATED_KEY, handle.owner,
-                        source.entity.getConfigFilePath(), source.configName(), source.key,
-                        currentTicks / ConfigBindings.TICKS_PER_SECOND));
+                        CONFIG_BINDING_SCHEDULED_NOT_VALIDATED_WARNING,
+                        Arg.string("module", String.valueOf(plugin.getPluginName())), Arg.string("task", handle.owner),
+                        Arg.string("config", source.configName()), Arg.string("config_key", source.key),
+                        Arg.string("file", String.valueOf(source.entity.getConfigFilePath())),
+                        Arg.number("seconds", currentTicks / ConfigBindings.TICKS_PER_SECOND)));
+                report.partial(ConfigBindings.reloadReason(CONFIG_BINDING_SCHEDULED_NOT_VALIDATED,
+                        Arg.string("task", handle.owner), Arg.string("file", String.valueOf(source.entity.getConfigFilePath())),
+                        Arg.string("config", source.configName()), Arg.string("config_key", source.key),
+                        Arg.number("seconds", currentTicks / ConfigBindings.TICKS_PER_SECOND)));
             }
             return currentTicks;
         }
@@ -459,14 +466,17 @@ public class TaskManager {
             return seconds * ConfigBindings.TICKS_PER_SECOND;
         }
         if (warnedKeys.add(source.key)) {
-            String rule = ConfigBindings.reloadReason(ConfigBindings.TIMER_RULE_KEY, ConfigBindings.MAX_TICK_SECONDS);
+            Text rule = Text.of(CONFIG_BINDING_TIMER_RULE, Arg.number("max", ConfigBindings.MAX_TICK_SECONDS));
             Bukkit.getLogger().log(Level.WARNING, "[UltiTools-API] " + ConfigBindings.reloadReason(
-                    ConfigBindings.SCHEDULED_INVALID_WARNING_KEY,
-                    plugin.getPluginName(), handle.owner, source.configName(), source.key, seconds,
-                    rule, currentTicks / ConfigBindings.TICKS_PER_SECOND));
-            report.partial(ConfigBindings.reloadReason(ConfigBindings.SCHEDULED_KEPT_KEY, handle.owner,
-                    source.configName(), source.key, seconds, rule,
-                    currentTicks / ConfigBindings.TICKS_PER_SECOND));
+                    CONFIG_BINDING_SCHEDULED_INVALID_WARNING,
+                    Arg.string("module", String.valueOf(plugin.getPluginName())), Arg.string("task", handle.owner),
+                    Arg.string("config", source.configName()), Arg.string("config_key", source.key),
+                    Arg.string("value", String.valueOf(seconds)), Arg.text("rule", rule),
+                    Arg.number("seconds", currentTicks / ConfigBindings.TICKS_PER_SECOND)));
+            report.partial(ConfigBindings.reloadReason(CONFIG_BINDING_SCHEDULED_KEPT,
+                    Arg.string("task", handle.owner), Arg.string("config", source.configName()),
+                    Arg.string("config_key", source.key), Arg.string("value", String.valueOf(seconds)),
+                    Arg.text("rule", rule), Arg.number("seconds", currentTicks / ConfigBindings.TICKS_PER_SECOND)));
         }
         return currentTicks;
     }

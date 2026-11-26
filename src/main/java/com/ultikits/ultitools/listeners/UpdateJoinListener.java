@@ -1,6 +1,9 @@
 package com.ultikits.ultitools.listeners;
 
-import org.bukkit.ChatColor;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.manager.ManagerKeys;
+
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -41,10 +44,7 @@ public class UpdateJoinListener implements Listener {
             count++;
         }
 
-        event.getPlayer().sendMessage(
-            ChatColor.GREEN + "[UltiTools] " + ChatColor.YELLOW
-                + count + " update(s) available. Run /upm check for details."
-        );
+        FrameworkMessages.messages().send(event.getPlayer(), ManagerKeys.UPDATE_JOIN_NOTICE, Arg.number("count", count));
         updateManager.markPlayerNotified(event.getPlayer().getUniqueId());
     }
 }
