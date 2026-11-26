@@ -953,7 +953,7 @@ successfully with an empty module set.
 
 ## Module changes wait for a restart (as of 7.0.0)
 
-`/upm install`, `/upm update` and `/upm uninstall` record changes for the next start instead of changing running modules. Use `/upm pending` to see them and the results of this start, or `/upm revoke <module>` to undo one entry before restarting. Viewing and revoking through UltiCloud will be available with the follow-up panel integration.
+`/upm install`, `/upm update` and `/upm uninstall` record changes for the next start instead of changing running modules. Use `/upm pending` to see them and the results of this start, or `/upm revoke <module>` to undo one entry before restarting. When the server is connected to UltiCloud, its owner can view pending changes and revoke them individually in the panel; there is no server-side switch for this feature. An entry that failed to apply at the last start cannot be revoked in the panel either.
 
 - A module has one pending entry. Installing a different version of a running module queues an update.
 - Installing the exact running version is a no-op, or cancels a pending update or uninstall.
