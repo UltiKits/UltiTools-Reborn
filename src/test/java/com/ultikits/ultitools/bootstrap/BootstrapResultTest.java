@@ -8,6 +8,7 @@ import java.net.URL;
 import java.lang.reflect.Method;
 import java.util.Collections;
 import java.nio.file.Path;
+import java.util.logging.Logger;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -30,7 +31,8 @@ class BootstrapResultTest {
         failures.put(temporary.resolve("a.jar"), failure);
         failures.put(temporary.resolve("z.jar"), failure);
         try (ModuleClassLoader loader = ModuleClassLoader.create(new URL[0], getClass().getClassLoader())) {
-            BootstrapResult result = new BootstrapResult(transactions, admission, loader, failure, failures, 3);
+            BootstrapResult result = new BootstrapResult(transactions, admission, loader, failure, failures, 3,
+                    new ContributionRegistry(admission, Logger.getAnonymousLogger()), ContributionLedger.EMPTY);
             failures.clear();
             assertThat(result.transactions()).isSameAs(transactions);
             assertThat(result.admission()).isSameAs(admission);
@@ -62,9 +64,12 @@ class BootstrapResultTest {
     }
 
     @Test
-    void moduleContext_exposesOnlyTheThreeAgreedMembers() throws Exception {
+    void moduleContext_exposesOnlyTheAgreedMembersAndContentChannels() throws Exception {
         assertThat(ModuleBootstrapContext.class.getDeclaredMethods()).extracting(Method::getName)
-                .containsExactlyInAnyOrder("moduleName", "moduleJar", "logger");
+                .containsExactlyInAnyOrder("moduleName", "moduleJar", "logger", "enchantments", "tags", "datapacks");
+        assertThat(ModuleBootstrapContext.class.getMethod("enchantments").getReturnType()).isEqualTo(EnchantmentChannel.class);
+        assertThat(ModuleBootstrapContext.class.getMethod("tags").getReturnType()).isEqualTo(TagChannel.class);
+        assertThat(ModuleBootstrapContext.class.getMethod("datapacks").getReturnType()).isEqualTo(DatapackChannel.class);
         assertThat(ModuleBootstrap.class.getDeclaredMethod("bootstrap", ModuleBootstrapContext.class).getExceptionTypes())
                 .containsExactly(Exception.class);
     }

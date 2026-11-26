@@ -5,6 +5,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.logging.Logger;
 
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
@@ -26,22 +27,28 @@ public final class BootstrapResult {
     private final @Nullable IOException classPathFailure;
     private final Map<Path, Throwable> bootstrapFailures;
     private final int bootstrapsRun;
+    private final ContributionRegistry contributions;
+    private final ContributionLedger ledger;
 
     BootstrapResult(@Nullable ModuleFileTransactions transactions, ModuleJarAdmission admission, ModuleClassLoader classLoader,
-                    @Nullable IOException classPathFailure, Map<Path, Throwable> failures, int bootstrapsRun) {
+                    @Nullable IOException classPathFailure, Map<Path, Throwable> failures, int bootstrapsRun,
+                    ContributionRegistry contributions, ContributionLedger ledger) {
         this.transactions = transactions;
         this.admission = admission;
         this.classLoader = classLoader;
         this.classPathFailure = classPathFailure;
         this.bootstrapFailures = Collections.unmodifiableMap(new LinkedHashMap<>(failures));
         this.bootstrapsRun = bootstrapsRun;
+        this.contributions = contributions;
+        this.ledger = ledger;
     }
 
     // A failed handover must not repeat filesystem work that may itself have caused the failure.
     static BootstrapResult failed(IOException failure) {
-        return new BootstrapResult(null, new ModuleJarAdmission(),
+        ModuleJarAdmission admission = new ModuleJarAdmission();
+        return new BootstrapResult(null, admission,
                 ModuleClassLoader.create(new java.net.URL[0], BootstrapResult.class.getClassLoader()),
-                failure, Collections.emptyMap(), 0);
+                failure, Collections.emptyMap(), 0, new ContributionRegistry(admission, Logger.getLogger("UltiTools")), ContributionLedger.EMPTY);
     }
 
     /**
@@ -69,4 +76,22 @@ public final class BootstrapResult {
 
     /** @return the number of declared hooks attempted, including failed hooks */
     public int bootstrapsRun() { return bootstrapsRun; }
+
+    ContributionRegistry contributions() { return contributions; }
+
+    ContributionLedger ledger() { return ledger; }
+
+    /** Marks the start of enable, after which failed reload callbacks cannot refuse a running module. */
+    public void beginEnable() {
+        contributions().beginEnable();
+    }
+
+    /**
+     * Emits the enable-time custom content report after the server language is initialized.
+     *
+     * @param logger the runtime console logger
+     */
+    public void reportContent(Logger logger) {
+        BootstrapContentReport.enabled(contributions(), ledger(), logger);
+    }
 }

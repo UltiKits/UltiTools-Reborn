@@ -2,10 +2,12 @@ package com.ultikits.ultitools.bootstrap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -20,12 +22,17 @@ import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedConstruction;
 
 import com.ultikits.ultitools.ModuleClassLoader;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.utils.ModuleContentLedger;
+import com.ultikits.ultitools.utils.ModuleContentLedgers;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 
 import io.papermc.paper.plugin.bootstrap.BootstrapContext;
@@ -34,6 +41,11 @@ import net.kyori.adventure.text.logger.slf4j.ComponentLogger;
 
 class UltiToolsBootstrapTest {
     @TempDir Path server;
+
+    @AfterEach
+    void restoreContentLedger() {
+        ModuleContentLedgers.install(ModuleContentLedger.NONE);
+    }
 
     private Path dataFolder() throws IOException {
         return Files.createDirectories(server.resolve("plugins/UltiTools"));
@@ -111,6 +123,70 @@ class UltiToolsBootstrapTest {
         try (ModuleClassLoader loader = result.classLoader()) {
             assertThat(loader.getURLs()).isEmpty();
             assertThat(result.classPathFailure()).hasCauseInstanceOf(NoClassDefFoundError.class);
+        }
+    }
+
+    @Test
+    void bootstrapRemovesOnlyStaleFrameworkTemporaries() throws Exception {
+        Path data = dataFolder();
+        Path root = data.resolve("bootstrap");
+        Path packs = Files.createDirectories(root.resolve("datapacks"));
+        Path recordTemp = Files.writeString(root.resolve(".contributions-interrupted.tmp"), "partial record");
+        Path packTemp = Files.writeString(packs.resolve(".pack-interrupted.tmp"), "partial ZIP");
+        Path wrongDirectory = Files.writeString(root.resolve(".pack-not-ours.tmp"), "keep");
+        Path wrongSuffix = Files.writeString(packs.resolve(".pack-not-a-temp.txt"), "keep");
+        Path operator = Files.writeString(data.resolve(".contributions-operator.tmp"), "keep");
+        Path matchingDirectory = Files.createDirectory(packs.resolve(".pack-directory.tmp"));
+        Path nested = Files.writeString(matchingDirectory.resolve(".pack-nested.tmp"), "keep");
+        Path link = Files.createSymbolicLink(root.resolve(".contributions-link.tmp"), operator);
+
+        var bootstrap = new UltiToolsBootstrap();
+        bootstrap.bootstrap(context(data));
+        var result = bootstrap.result();
+        try (var ignored = result.classLoader()) {
+            assertThat(result.classPathFailure()).isNull();
+            assertAll(
+                    () -> assertThat(recordTemp).doesNotExist(),
+                    () -> assertThat(packTemp).doesNotExist());
+            assertThat(wrongDirectory).hasContent("keep");
+            assertThat(wrongSuffix).hasContent("keep");
+            assertThat(operator).hasContent("keep");
+            assertThat(nested).hasContent("keep");
+            assertThat(Files.isSymbolicLink(link)).isTrue();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"bootstrap", "bootstrap/datapacks"})
+    void bootstrapDoesNotCleanThroughSymlinkedDirectories(String directory) throws Exception {
+        Path data = dataFolder();
+        Path outside = Files.createDirectory(server.resolve("outside"));
+        Path recordTemp = Files.writeString(outside.resolve(".contributions-protected.tmp"), "keep");
+        Path packs = Files.createDirectory(outside.resolve("datapacks"));
+        Path packTemp = Files.writeString(packs.resolve(".pack-protected.tmp"), "keep");
+        Path link = data.resolve(directory);
+        Files.createDirectories(link.getParent());
+        Files.createSymbolicLink(link, directory.equals("bootstrap") ? outside : packs);
+
+        var bootstrap = new UltiToolsBootstrap();
+        bootstrap.bootstrap(context(data));
+        var result = bootstrap.result();
+        try (var ignored = result.classLoader()) {
+            assertThat(result.classPathFailure()).isNull();
+            assertThat(recordTemp).hasContent("keep");
+            assertThat(packTemp).hasContent("keep");
+        }
+    }
+
+    @Test
+    void overallPreparationFailureDoesNotInstallHandlers() throws Exception {
+        var context = context(dataFolder());
+        var bootstrap = spy(new UltiToolsBootstrap());
+        doThrow(new IllegalStateException("preparation failed")).when(bootstrap).classPath(any(), any(), any(), any());
+        bootstrap.bootstrap(context);
+        try (var ignored = bootstrap.result().classLoader()) {
+            assertThat(bootstrap.result().contributions().modules()).isEmpty();
+            verify(context, never()).getLifecycleManager();
         }
     }
 

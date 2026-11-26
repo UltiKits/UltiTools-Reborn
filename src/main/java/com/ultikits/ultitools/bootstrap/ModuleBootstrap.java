@@ -15,6 +15,10 @@ import org.jetbrains.annotations.ApiStatus;
  * is retained and reported during enable, which disables the framework.
  * No order is promised between different modules' bootstrappers.
  *
+ * <p>Declarations made through the context take effect only if this method returns normally;
+ * if it throws, none of them are written. Removing a module that added custom content has
+ * permanent effects on worlds; see COMPATIBILITY.md.
+ *
  * @since 7.0.0
  */
 @ApiStatus.Experimental

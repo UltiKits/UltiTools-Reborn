@@ -20,7 +20,7 @@ final class ModuleBootstraps {
         // Internal runner; there is no global bootstrap state.
     }
 
-    static Run runAll(ModuleJarAdmission admission, ClassLoader loader, Logger logger) {
+    static Run runAll(ModuleJarAdmission admission, ClassLoader loader, Logger logger, ContributionRegistry contributions) {
         Map<Path, Throwable> failures = new LinkedHashMap<>();
         Set<String> mains = new HashSet<>();
         int attempted = 0;
@@ -38,11 +38,12 @@ final class ModuleBootstraps {
             }
             String bootstrapper = metadata.getBootstrapper();
             if (bootstrapper == null || bootstrapper.isBlank()) {
+                contributions.recordWithoutHook(moduleName(module.getKey(), metadata));
                 continue;
             }
             attempted++;
             try {
-                runOne(module.getKey(), metadata, bootstrapper, loader, logger);
+                contributions.accept(runOne(module.getKey(), metadata, bootstrapper, loader, logger, contributions));
             } catch (VirtualMachineError failure) {
                 throw failure;
             } catch (Throwable cause) { // NOPMD - a module failure must never abort the framework bootstrap
@@ -58,8 +59,8 @@ final class ModuleBootstraps {
         return new Run(failures, attempted);
     }
 
-    private static void runOne(Path jar, PluginYmlReader.PluginYmlInfo metadata, String className,
-                               ClassLoader loader, Logger logger) throws Throwable {
+    private static ModuleContributions runOne(Path jar, PluginYmlReader.PluginYmlInfo metadata, String className,
+                               ClassLoader loader, Logger logger, ContributionRegistry registry) throws Throwable {
         Thread thread = Thread.currentThread();
         ClassLoader previous = thread.getContextClassLoader();
         try {
@@ -71,12 +72,29 @@ final class ModuleBootstraps {
                 throw new IllegalStateException("bootstrapper does not implement ModuleBootstrap");
             }
             ModuleBootstrap hook = construct(type);
-            String declaredName = metadata.getName();
-            String name = declaredName == null ? jar.getFileName().toString() : declaredName;
-            hook.bootstrap(new Context(name, jar, logger));
+            ModuleContributions contributions = new ModuleContributions(moduleName(jar, metadata), jar);
+            try {
+                hook.bootstrap(new Context(contributions, logger));
+            } finally {
+                contributions.seal();
+                var refusal = contributions.worldgenRefusal();
+                if (refusal != null) {
+                    registry.recordWorldgenRefusal(refusal);
+                }
+            }
+            var refusal = contributions.worldgenRefusal();
+            if (refusal != null) {
+                throw refusal.failure();
+            }
+            return contributions;
         } finally {
             thread.setContextClassLoader(previous);
         }
+    }
+
+    static String moduleName(Path jar, PluginYmlReader.PluginYmlInfo metadata) {
+        String declared = metadata.getName();
+        return declared == null ? jar.getFileName().toString() : declared;
     }
 
     private static ModuleBootstrap construct(Class<?> type) throws Throwable {
@@ -87,7 +105,7 @@ final class ModuleBootstraps {
         }
     }
 
-    private static String describe(Throwable failure) {
+    static String describe(Throwable failure) {
         String description = failure.getClass().getName() + ": " + safeMessage(failure);
         try {
             Throwable cause = failure.getCause();
@@ -112,8 +130,12 @@ final class ModuleBootstraps {
     }
 
     static void logFailure(Logger logger, String message, Throwable failure) {
+        log(logger, Level.SEVERE, message, failure);
+    }
+
+    static void log(Logger logger, Level level, String message, Throwable failure) {
         try {
-            logger.log(Level.SEVERE, message, failure);
+            logger.log(level, message, failure);
         } catch (VirtualMachineError fatal) {
             throw fatal;
         } catch (Throwable unavailable) { // NOPMD - a logging handler must not let a module abort bootstrap
@@ -141,18 +163,19 @@ final class ModuleBootstraps {
     }
 
     private static final class Context implements ModuleBootstrapContext {
-        private final String name;
-        private final Path jar;
+        private final ModuleContributions contributions;
         private final Logger logger;
 
-        Context(String name, Path jar, Logger parent) {
-            this.name = name;
-            this.jar = jar;
-            this.logger = BootstrapLogger.module(parent, name);
+        Context(ModuleContributions contributions, Logger parent) {
+            this.contributions = contributions;
+            this.logger = BootstrapLogger.module(parent, contributions.name());
         }
 
-        @Override public String moduleName() { return name; }
-        @Override public Path moduleJar() { return jar; }
+        @Override public String moduleName() { return contributions.name(); }
+        @Override public Path moduleJar() { return contributions.jar(); }
         @Override public Logger logger() { return logger; }
+        @Override public EnchantmentChannel enchantments() { return contributions.enchantments(); }
+        @Override public TagChannel tags() { return contributions.tags(); }
+        @Override public DatapackChannel datapacks() { return contributions.datapacks(); }
     }
 }

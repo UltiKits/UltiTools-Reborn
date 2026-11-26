@@ -61,6 +61,8 @@ class ModuleContentKindTest {
     @Test
     void unknownAlwaysHasAnUnknownCount() {
         assertThat(new ModuleContentKind(ModuleContentKind.UNKNOWN, 5).count()).isNull();
+        assertThat(new ModuleContentKind(ModuleContentKind.UNKNOWN, 0).count()).isNull();
+        assertThat(new ModuleContentKind(ModuleContentKind.UNKNOWN, -1).count()).isNull();
     }
 
     @Test

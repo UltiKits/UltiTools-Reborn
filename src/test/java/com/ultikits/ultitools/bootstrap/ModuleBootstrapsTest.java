@@ -31,7 +31,7 @@ class ModuleBootstrapsTest {
         ModuleJarAdmission admission = admission(module);
         ClassLoader previous = Thread.currentThread().getContextClassLoader();
         try (ModuleClassLoader loader = loader(module)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission, loader, logger);
+            ModuleBootstraps.Run run = runAll(admission, loader, logger);
             assertThat(run.attempted).isEqualTo(1);
             assertThat(run.failures).isEmpty();
             Class<?> early = loader.loadClass("fixture.Early");
@@ -53,7 +53,7 @@ class ModuleBootstrapsTest {
         ModuleJarAdmission admission = admission(good, bad);
         ClassLoader previous = Thread.currentThread().getContextClassLoader();
         try (ModuleClassLoader loader = loader(bad, good)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission, loader, logger);
+            ModuleBootstraps.Run run = runAll(admission, loader, logger);
             assertThat(run.attempted).isEqualTo(2);
             assertThat(run.failures).containsOnlyKeys(bad);
             assertThat(run.failures.get(bad)).isInstanceOf(NoClassDefFoundError.class);
@@ -71,7 +71,7 @@ class ModuleBootstrapsTest {
         Path borrower = jar(temporary.resolve("b-borrower.jar"), descriptor("Borrower", "fixture.Shared"), Collections.emptyMap());
         ModuleJarAdmission admission = admission(owner, borrower);
         try (ModuleClassLoader loader = loader(owner, borrower)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission, loader, logger);
+            ModuleBootstraps.Run run = runAll(admission, loader, logger);
             assertThat(run.failures).containsOnlyKeys(borrower);
             assertThat(run.failures.get(borrower)).isInstanceOf(IllegalStateException.class)
                     .hasMessage("bootstrapper class is not in this module's JAR");
@@ -86,7 +86,7 @@ class ModuleBootstrapsTest {
         Path wrong = jar(temporary.resolve("a-wrong.jar"), descriptor("Wrong", "fixture.Wrong"),
                 Collections.singletonMap("fixture.Wrong", BootstrapFixtures.plainClass("fixture.Wrong")));
         try (ModuleClassLoader loader = loader(missing, wrong)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission(missing, wrong), loader, logger);
+            ModuleBootstraps.Run run = runAll(admission(missing, wrong), loader, logger);
             assertThat(run.attempted).isEqualTo(2);
             assertThat(run.failures.keySet()).containsExactly(wrong, missing);
             assertThat(run.failures.get(wrong)).isInstanceOf(IllegalStateException.class)
@@ -103,7 +103,7 @@ class ModuleBootstrapsTest {
                 Collections.singletonMap("fixture.Early", hook("fixture.Early", null)));
         ModuleJarAdmission admission = admission(first, duplicate);
         try (ModuleClassLoader loader = loader(first, duplicate)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission, loader, logger);
+            ModuleBootstraps.Run run = runAll(admission, loader, logger);
             assertThat(run.attempted).isEqualTo(1);
             assertThat(run.failures).isEmpty();
             assertThat(admission.inspect(duplicate.toFile()).getBootstrapFailure()).isNull();
@@ -116,7 +116,7 @@ class ModuleBootstrapsTest {
         Path duplicate = jar(temporary.resolve("z-duplicate.jar"), descriptor("Same", "fixture.Early"),
                 Collections.singletonMap("fixture.Early", hook("fixture.Early", null)));
         try (ModuleClassLoader loader = loader(first, duplicate)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission(first, duplicate), loader, logger);
+            ModuleBootstraps.Run run = runAll(admission(first, duplicate), loader, logger);
             assertThat(run.attempted).isZero();
             assertThat(run.failures).isEmpty();
         }
@@ -128,7 +128,7 @@ class ModuleBootstrapsTest {
         Path refused = jar(temporary.resolve("refused.jar"), descriptor("Refused", "fixture.Refused").replace("700", "630"),
                 Collections.singletonMap("fixture.Refused", hook("fixture.Refused", "java/lang/AssertionError")));
         try (ModuleClassLoader loader = loader(ordinary, refused)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission(refused, ordinary), loader, logger);
+            ModuleBootstraps.Run run = runAll(admission(refused, ordinary), loader, logger);
             assertThat(run.attempted).isZero();
             assertThat(run.failures).isEmpty();
         }
@@ -138,7 +138,7 @@ class ModuleBootstrapsTest {
     void parentClasspathBootstrapper_cannotMasqueradeAsTheModulesOwnHook() throws Exception {
         Path module = jar(temporary.resolve("parent.jar"), descriptor("Parent", "java.lang.String"), Collections.emptyMap());
         try (ModuleClassLoader loader = loader(module)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission(module), loader, logger);
+            ModuleBootstraps.Run run = runAll(admission(module), loader, logger);
             assertThat(run.failures.get(module)).isInstanceOf(IllegalStateException.class)
                     .hasMessage("bootstrapper class is not in this module's JAR");
         }
@@ -152,7 +152,7 @@ class ModuleBootstrapsTest {
         Path good = jar(temporary.resolve("z-good.jar"), descriptor("Good", "fixture.Good"),
                 Collections.singletonMap("fixture.Good", hook("fixture.Good", null)));
         try (ModuleClassLoader loader = loader(bad, good)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission(bad, good), loader, logger);
+            ModuleBootstraps.Run run = runAll(admission(bad, good), loader, logger);
             assertThat(run.failures).containsOnlyKeys(bad);
             assertThat(run.attempted).isEqualTo(2);
             assertThat(loader.loadClass("fixture.Good").getField("context").get(null)).isNotNull();
@@ -172,7 +172,7 @@ class ModuleBootstrapsTest {
             @Override public void close() { /* No owned resource. */ }
         });
         try (ModuleClassLoader loader = loader(module)) {
-            ModuleBootstraps.Run run = ModuleBootstraps.runAll(admission(module), loader, capture);
+            ModuleBootstraps.Run run = runAll(admission(module), loader, capture);
             assertThat(run.failures.get(module)).isInstanceOf(ExceptionInInitializerError.class);
             assertThat(logs).singleElement().satisfies(record -> assertThat(record.getMessage())
                     .contains("java.lang.ExceptionInInitializerError", "java.lang.IllegalStateException", "initialization cause")
@@ -188,7 +188,7 @@ class ModuleBootstrapsTest {
         ClassLoader previous = Thread.currentThread().getContextClassLoader();
         try (ModuleClassLoader loader = loader(module)) {
             org.assertj.core.api.Assertions.assertThatThrownBy(
-                    () -> ModuleBootstraps.runAll(admission(module), loader, logger))
+                    () -> runAll(admission(module), loader, logger))
                     .isInstanceOf(InternalError.class).hasMessage("fixture failure");
             assertThat(Thread.currentThread().getContextClassLoader()).isSameAs(previous);
         }
@@ -209,5 +209,8 @@ class ModuleBootstrapsTest {
         URL[] urls = new URL[jars.length];
         for (int i = 0; i < jars.length; i++) { urls[i] = jars[i].toUri().toURL(); }
         return ModuleClassLoader.create(urls, getClass().getClassLoader());
+    }
+    private static ModuleBootstraps.Run runAll(ModuleJarAdmission admission, ClassLoader loader, Logger logger) {
+        return ModuleBootstraps.runAll(admission, loader, logger, new ContributionRegistry(admission, logger));
     }
 }

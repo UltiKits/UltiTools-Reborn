@@ -192,6 +192,17 @@ ulticloud:
     status: "<white>/ulticloud status<gray> - Show link and connection status"
     reconnect: "<white>/ulticloud reconnect<gray> - Retry the UltiCloud connection now"
 
+bootstrap_content:
+  summary: "Module '<module>' added custom content at this start: <enchantments> enchantment(s), <tags> tag change(s), <datapacks> data pack(s)."
+  removed: "<yellow>Module '<module>' is no longer installed, but it had added custom content (<content>)."
+  dropped: "<yellow>Module '<module>' no longer adds: <content>."
+  unknown: "The record of which modules added custom content could not be read; warnings about removing such modules may be incomplete until every module has started once."
+  list: "<enchantments> enchantment(s), <tags> tag(s), <datapacks> data pack(s)"
+  consequence:
+    enchantment: "<red>  This enchantment is lost for good from every item that carries it, once the item's chunk is loaded and saved."
+    datapack: "<red>  The recipes and advancements its data packs brought are gone."
+    tag: "  The item categories it added no longer apply."
+  worldgen_refused: "<red>Module '<module>' was not loaded: its data pack '<pack>' adds world-generation content (<path>), which UltiTools 7.0.0 does not allow."
 upm:
   help:
     pending: "/upm pending - List module changes waiting for a restart"

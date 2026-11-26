@@ -45,14 +45,13 @@ public record ModuleContentKind(String kind, @Nullable Integer count) {
         if (!PATTERN.matcher(kind).matches()) {
             throw new IllegalArgumentException("Content kind must match " + PATTERN.pattern() + ": " + kind);
         }
-        if (count != null) {
+        if (UNKNOWN.equals(kind)) {
+            count = null;
+        } else if (count != null) {
             if (count < 1) {
                 throw new IllegalArgumentException("Content count must be at least 1: " + count);
             }
             count = Math.min(count, MAX_COUNT);
-        }
-        if (UNKNOWN.equals(kind)) {
-            count = null;
         }
     }
 }

@@ -5952,3 +5952,89 @@ Server owners are advised to keep up with Paper builds, security builds in parti
 
 If you disagree with this policy, or your module is affected by the removals above, please open a
 [GitHub issue](https://github.com/UltiKits/UltiTools-Reborn/issues).
+
+## Module bootstrap content channels (as of 7.0.0)
+
+An optional `ModuleBootstrap` declared by `bootstrapper:` in the module's `plugin.yml` can declare
+new enchantments, item and enchantment tag changes, and data packs bundled in its own JAR. Calls
+only declare intent until the hook returns normally; if it throws, no declarations from that hook
+are written. Modules must not retain these channels for use during enable or reload. For example:
+
+```java
+public final class MyBootstrap implements ModuleBootstrap {
+    @Override
+    public void bootstrap(ModuleBootstrapContext context) {
+        // plugin.yml name: MyModule
+        Key edge = Key.key("mymodule:frost_edge");
+        Key sword = Key.key("minecraft:diamond_sword");
+        context.enchantments().register(edge, (builder, tags) -> builder
+                .description(Component.text("Frost Edge"))
+                .supportedItems(RegistrySet.keySet(RegistryKey.ITEM, RegistryKey.ITEM.typedKey(sword)))
+                .weight(5).maxLevel(3)
+                .minimumCost(EnchantmentRegistryEntry.EnchantmentCost.of(1, 10))
+                .maximumCost(EnchantmentRegistryEntry.EnchantmentCost.of(21, 10))
+                .anvilCost(2).activeSlots(EquipmentSlotGroup.MAINHAND));
+        context.tags().addToTag(RegistryKey.ENCHANTMENT, Key.key("minecraft:in_enchanting_table"), List.of(edge));
+        context.tags().setTag(RegistryKey.ITEM, Key.key("mymodule:frost_weapons"), List.of(sword));
+        context.datapacks().embedded("frost");
+    }
+}
+```
+
+Use the module name's `MessageKey.namespaceFor` namespace (lowercase, with characters other than
+`a-z`, `0-9`, `_`, `.` and `-` replaced with `_`) for new enchantments and tags created or replaced
+via `setTag`. `addToTag` can extend tags in other namespaces. Only the `ITEM` and `ENCHANTMENT`
+registries are supported by the tag channel. Tags and data pack discovery replay the declared data
+on a native data reload; module code is not run again.
+
+Data pack names use `[a-z0-9_-]{1,32}`. A declared pack appears as `UltiTools/mymodule.frost` in
+`datapack list`. The module supplies its own `datapacks/frost/pack.mcmeta` and resources in the JAR;
+merely shipping the directory does not activate it. World-generation data under
+`data/<namespace>/{worldgen,dimension,dimension_type}/`, including in pack overlays, refuses the
+entire module in 7.0.0. This can be reconsidered after platform testing. `timeline/` and
+`world_clock/` are outside this check; removing overrides for those registries has not been verified.
+
+Before removing a module, back up your world and check which kinds of content it provided:
+
+- **Enchantments:** Items carrying a removed enchantment lose it permanently when their chunks are loaded and saved.
+- **Data packs:** Their recipes and advancements disappear.
+- **Tags:** The item categories they added no longer apply.
+
+`bootstrap/contributions.json` and `bootstrap/datapacks/` under the UltiTools data directory are
+framework-owned; do not edit them. The record tracks what modules declared, not what Paper
+accepted. If a Paper callback fails after some of a module's entries have already been written,
+Paper cannot undo those writes during the same start; they remain until the next restart. A module
+whose bootstrap succeeds but whose enable fails contributes its content again on every start that
+its JAR remains installed and its bootstrap succeeds. To stop those contributions, remove the
+module's JAR and restart the server.
+
+**Known limitations:**
+
+- At startup, if a tag refers to another module's enchantment and that enchantment fails to register,
+  the module declaring the tag also fails to load.
+- If a failed start for a module causes its generated data pack ZIP to be pruned, a prior
+  `datapack disable` for that pack is reset. Paper enables the pack again when it reappears.
+
+These channels are experimental because they depend on experimental Paper APIs. Future 7.x releases
+may change them when Paper changes; any such changes will be listed here.
+
+**中文补充：** 模块可在 `plugin.yml` 的 `bootstrapper:` 中声明引导器。用 `enchantments()` 登记新附魔，
+用 `tags()` 增补或建立物品与附魔标签，用 `datapacks()` 声明 JAR 内的数据包；引导器正常返回后才生效。
+新附魔和 `setTag` 的键使用 `MessageKey.namespaceFor` 从模块名得出的命名空间；`addToTag` 可以增补其他
+命名空间的标签。模块自行提供 `datapacks/<包名>/pack.mcmeta`；如 `MyModule` 的 `frost` 包在
+`datapack list` 中显示为 `UltiTools/mymodule.frost`。7.0.0 拒绝任何包含 `worldgen/`、`dimension/`
+或 `dimension_type/` 世界生成数据（含叠加目录）的模块数据包；该模块不加载，待实测后再考虑放开。
+限制不检查 `timeline/` 和 `world_clock/`，移除对这两种注册表的覆盖尚未经验证。
+
+移除模块前请备份世界：加载并保存区块后，物品上的自定义附魔会永久丢失；数据包带来的配方与进度会消失；
+新增的物品分类会失效。UltiTools 数据目录下的 `bootstrap/contributions.json` 和 `bootstrap/datapacks/`
+由框架维护，不要手动编辑。台账记录的是声明，不是 Paper 的写入结果；写入过程中失败时，已写入的内容
+可能留到下次重启。如果模块引导成功却在启用阶段加载失败，只要 JAR 还在且引导成功，每次启动仍会写入其内容。
+要停止写入，请移走该模块的 JAR，再重启服务器。
+
+**已知限制：**
+
+- 启动时，如果模块的标签引用了另一个模块的附魔，而该附魔未能注册，声明标签的模块也会加载失败。
+- 如果模块某次启动失败导致生成的数据包 ZIP 被清理，先前对该包执行的 `datapack disable` 会失效；数据包再次出现时，Paper 会重新启用它。
+
+这些通道依赖 Paper 的实验性接口，后续 7.x 版本如有调整会记在本文。
