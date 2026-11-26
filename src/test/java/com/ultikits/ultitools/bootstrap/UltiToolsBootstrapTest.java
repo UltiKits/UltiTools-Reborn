@@ -225,11 +225,11 @@ class UltiToolsBootstrapTest {
             @Override public void close() { /* No owned resource. */ }
         });
         try (ModuleClassLoader loader = result.classLoader()) {
-            result.transactions().flushReports(logger, text -> text, null);
+            result.transactions().flushReports(logger, null);
             assertThat(loader.getURLs()).contains(module.toUri().toURL());
             assertThat(result.classPathFailure()).isNull();
             assertThat(reports).anySatisfy(record -> assertThat(record.getMessage())
-                    .contains(records.toString(), "无法列出"));
+                    .contains("ultitools:upm.start.records.unlistable", records.toString(), "cannot be listed"));
         }
     }
 

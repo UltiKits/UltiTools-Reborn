@@ -127,7 +127,7 @@ class BootstrapEnableHandoffTest {
             framework.initPluginModules();
             verify(managers.constructed().get(0)).init(loader);
             verify(transactions).observeAfterLoad(eq(Collections.emptyList()), any());
-            verify(transactions).flushReports(any(), any(), any(Messages.class));
+            verify(transactions).flushReports(any(), any(Messages.class));
             assertThat(field(framework, "moduleFileTransactions")).isSameAs(transactions);
         }
     }
@@ -148,7 +148,7 @@ class BootstrapEnableHandoffTest {
         var loadFailure = new IOException("injected module load failure");
         var reportFailure = new IllegalStateException("injected report failure");
         if (!missingMessages) {
-            doThrow(reportFailure).when(transactions).flushReports(any(), any(), eq(null));
+            doThrow(reportFailure).when(transactions).flushReports(any(), eq(null));
         }
         try (MockedConstruction<PluginManager> managers = mockConstruction(PluginManager.class,
                      (manager, context) -> doThrow(loadFailure).when(manager).init(loader));
@@ -165,7 +165,7 @@ class BootstrapEnableHandoffTest {
                     });
             assertThat(managers.constructed()).hasSize(1);
             verify(transactions).observeAfterLoad(eq(Collections.emptyList()), any());
-            verify(transactions).flushReports(any(), any(), eq(null));
+            verify(transactions).flushReports(any(), eq(null));
         }
     }
 

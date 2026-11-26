@@ -156,7 +156,7 @@ class ModuleUpdateRecoveryInvariantTest {
         if (scenario.recordFile.exists() && scenario.held()) {
             assertThat(first.pendingReports()).as("a record held for the operator is reported once, SEVERE")
                     .anySatisfy(report -> {
-                        assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
+                        assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_NEEDS_OPERATOR.translationKey());
                         assertThat(report.getLevel()).isEqualTo(java.util.logging.Level.SEVERE);
                     });
         }

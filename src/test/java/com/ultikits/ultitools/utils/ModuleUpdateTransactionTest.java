@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.utils;
 
+import static com.ultikits.ultitools.utils.UpmReportAssertions.unparsedValues;
+
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.catalogue;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.downloading;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.loadedModule;
@@ -134,8 +136,8 @@ class ModuleUpdateTransactionTest {
         List<ModuleFileTransactions.Report> reports = nextStart.pendingReports();
         assertThat(reports).hasSize(1);
         assertThat(reports.get(0).getLevel()).isEqualTo(Level.INFO);
-        assertThat(reports.get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.COMMITTED);
-        assertThat(reports.get(0).getArgs()).containsExactly("Demo", "1.0", "1.1");
+        assertThat(reports.get(0).getKey()).isEqualTo(UpmKeys.START_UPDATE_COMMITTED.translationKey());
+        assertThat(unparsedValues(reports.get(0))).containsExactly("Demo", "1.0", "1.1");
     }
 
     private String recordText() throws IOException {

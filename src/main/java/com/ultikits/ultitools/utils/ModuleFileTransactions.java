@@ -35,11 +35,13 @@ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import static com.ultikits.ultitools.text.Arg.string;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -1395,7 +1397,9 @@ public final class ModuleFileTransactions {
             recordFiles = recordFiles();
         } catch (IOException e) {
             // Nothing is carried out and nothing is deleted: the records stay for a start that can read them.
-            report(Level.SEVERE, Keys.RECORDS_UNLISTABLE, transactionsFolder.getAbsolutePath(), describe(e));
+            report(Level.SEVERE, UpmKeys.START_RECORDS_UNLISTABLE,
+                    string("folder", String.valueOf(transactionsFolder.getAbsolutePath())),
+                    string("error", String.valueOf(describe(e))));
             return;
         }
         deleteTemporaryRecords();
@@ -1444,7 +1448,9 @@ public final class ModuleFileTransactions {
             appliedThisStart.remove(record);
         } catch (IOException | RecordRefused refused) {
             outcome(record, StartOutcome.Result.NOT_APPLIED);
-            report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(), refused.getMessage());
+            report(Level.WARNING, UpmKeys.START_RECORD_REFUSED,
+                    string("file", String.valueOf(recordFileOf(record).getAbsolutePath())),
+                    string("reason", String.valueOf(refused.getMessage())));
         } catch (RuntimeException unexpected) {
             failUnexpectedly(record, entryState, unexpected);
         }
@@ -1476,14 +1482,18 @@ public final class ModuleFileTransactions {
             }
         }
         outcome(record, StartOutcome.Result.NOT_APPLIED);
-        report(Level.SEVERE, Keys.TRANSACTION_ERROR, recordFileOf(record).getAbsolutePath(), describe(error));
+        report(Level.SEVERE, UpmKeys.START_RECORD_TRANSACTION_ERROR,
+                string("file", String.valueOf(recordFileOf(record).getAbsolutePath())),
+                string("error", String.valueOf(describe(error))));
     }
 
     private void applyRecord(Record record) throws RecordRefused {
         if (Record.NEEDS_OPERATOR.equals(record.state)) {
             outcome(record, StartOutcome.Result.NEEDS_OPERATOR);
-            report(Level.SEVERE, Keys.NEEDS_OPERATOR, displayName(record), record.failure,
-                    recordFileOf(record).getAbsolutePath());
+            report(Level.SEVERE, UpmKeys.START_UPDATE_NEEDS_OPERATOR,
+                    string("module", String.valueOf(displayName(record))),
+                    string("failure", String.valueOf(record.failure)),
+                    string("file", String.valueOf(recordFileOf(record).getAbsolutePath())));
             return;
         }
         if (Record.REMOVE.equals(record.type)) {
@@ -1565,30 +1575,30 @@ public final class ModuleFileTransactions {
                 continue;
             } catch (RecordRefused refused) {
                 outcome(record, StartOutcome.Result.NOT_APPLIED);
-                report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(),
-                        refused.getMessage());
+                report(Level.WARNING, UpmKeys.START_RECORD_REFUSED,
+                        string("file", String.valueOf(recordFileOf(record).getAbsolutePath())),
+                        string("reason", String.valueOf(refused.getMessage())));
             } catch (RuntimeException unexpected) {
                 // One transaction's problem never ends the start, and never hides a load failure.
                 outcome(record, StartOutcome.Result.NOT_APPLIED);
-                report(Level.WARNING, Keys.RECORD_REFUSED, recordFileOf(record).getAbsolutePath(),
-                        describe(unexpected));
+                report(Level.WARNING, UpmKeys.START_RECORD_REFUSED,
+                        string("file", String.valueOf(recordFileOf(record).getAbsolutePath())),
+                        string("reason", String.valueOf(describe(unexpected))));
             }
         }
     }
 
     /**
-     * Writes the lines this start collected, translated.
+     * Writes the lines this start collected in the server language. If the text engine is unavailable,
+     * logs the catalogue key and its argument values instead.
      *
      * @param logger where to write them
-     * @param i18n   legacy translation lookup
      * @param messages the text engine, or null if it could not be initialized
      */
-    public void flushReports(Logger logger, Function<String, String> i18n, Messages messages) {
+    public void flushReports(Logger logger, @Nullable Messages messages) {
         for (Report report : reports) {
             String line;
-            if (report.messageKey == null) {
-                line = String.format(i18n.apply(report.getKey()), report.getArgs());
-            } else if (messages != null) {
+            if (messages != null) {
                 line = PlainTextComponentSerializer.plainText().serialize(
                         messages.render(report.messageKey, Bukkit.getConsoleSender(), report.messageArgs));
             } else {
@@ -1598,7 +1608,7 @@ public final class ModuleFileTransactions {
                             case Arg.Numeric number -> number.value().toString();
                             case Arg.Moment moment -> moment.value().toString();
                             case Arg.Localized text -> text.value().toString();
-                        }).collect(java.util.stream.Collectors.joining(", "));
+                        }).collect(Collectors.joining(", "));
             }
             logger.log(report.getLevel(), line);
         }
@@ -1781,8 +1791,12 @@ public final class ModuleFileTransactions {
         Throwable error = MISSING.equals(actual)
                 ? new NoSuchFileException(staged.getAbsolutePath(), null, detail)
                 : new IOException(detail);
-        failApply(record, staged, error, new Report(Level.SEVERE, Keys.STAGED_JAR_MISMATCH, record.moduleName,
-                staged.getAbsolutePath(), record.stagedSha256, actual));
+        failApply(record, staged, error,
+                new Report(Level.SEVERE, UpmKeys.START_UPDATE_STAGED_JAR_MISMATCH,
+                        string("module", String.valueOf(record.moduleName)),
+                        string("file", String.valueOf(staged.getAbsolutePath())),
+                        string("expected", String.valueOf(record.stagedSha256)),
+                        string("actual", String.valueOf(actual))));
     }
 
     /**
@@ -1814,7 +1828,9 @@ public final class ModuleFileTransactions {
         deleteTree(work);
         deleteQuietly(recordFileOf(record));
         outcome(record, StartOutcome.Result.NOT_APPLIED);
-        report(Level.WARNING, Keys.UPDATE_ABANDONED, record.moduleName, record.newVersion, old.getAbsolutePath());
+        report(Level.WARNING, UpmKeys.START_UPDATE_ABANDONED, string("module", String.valueOf(record.moduleName)),
+                string("version", String.valueOf(record.newVersion)),
+                string("file", String.valueOf(old.getAbsolutePath())));
         return true;
     }
 
@@ -1861,21 +1877,36 @@ public final class ModuleFileTransactions {
             record.failure = "the modules folder " + modulesFolder.getAbsolutePath() + " and the update folder "
                     + transactionsFolder.getAbsolutePath() + " are on different file systems: " + describe(error);
             persist(record);
-            report(Level.SEVERE, Keys.APPLY_CROSS_FILE_SYSTEM, record.moduleName, record.oldVersion,
-                    record.newVersion, modulesFolder.getAbsolutePath(), transactionsFolder.getAbsolutePath(),
-                    record.oldVersion);
+            report(Level.SEVERE, UpmKeys.START_UPDATE_APPLY_CROSS_FILE_SYSTEM,
+                    string("module", String.valueOf(record.moduleName)),
+                    string("old_version", String.valueOf(record.oldVersion)),
+                    string("new_version", String.valueOf(record.newVersion)),
+                    string("modules_folder", String.valueOf(modulesFolder.getAbsolutePath())),
+                    string("update_folder", String.valueOf(transactionsFolder.getAbsolutePath())),
+                    string("loaded", String.valueOf(record.oldVersion)));
             return;
         }
         record.failure = file.getAbsolutePath() + ": " + describe(error)
                 + (restoreError == null ? "" : "; moving the previous JAR back also failed: " + restoreError);
         persist(record);
         if (restoreError == null) {
-            report(Level.SEVERE, Keys.APPLY_FAILED, record.moduleName, record.oldVersion, record.newVersion,
-                    file.getAbsolutePath(), describe(error), record.oldVersion);
+            report(Level.SEVERE, UpmKeys.START_UPDATE_APPLY_FAILED,
+                    string("module", String.valueOf(record.moduleName)),
+                    string("old_version", String.valueOf(record.oldVersion)),
+                    string("new_version", String.valueOf(record.newVersion)),
+                    string("file", String.valueOf(file.getAbsolutePath())),
+                    string("error", String.valueOf(describe(error))),
+                    string("loaded", String.valueOf(record.oldVersion)));
         } else {
-            report(Level.SEVERE, Keys.APPLY_FAILED_UNRESTORED, record.moduleName, record.oldVersion,
-                    record.newVersion, file.getAbsolutePath(), describe(error), restoreError,
-                    backupOf(record).getAbsolutePath(), confined(modulesFolder, record.oldName).getAbsolutePath());
+            report(Level.SEVERE, UpmKeys.START_UPDATE_APPLY_FAILED_UNRESTORED,
+                    string("module", String.valueOf(record.moduleName)),
+                    string("old_version", String.valueOf(record.oldVersion)),
+                    string("new_version", String.valueOf(record.newVersion)),
+                    string("file", String.valueOf(file.getAbsolutePath())),
+                    string("error", String.valueOf(describe(error))),
+                    string("restore_error", String.valueOf(restoreError)),
+                    string("backup", String.valueOf(backupOf(record).getAbsolutePath())),
+                    string("target", String.valueOf(confined(modulesFolder, record.oldName).getAbsolutePath())));
         }
     }
 
@@ -1984,7 +2015,9 @@ public final class ModuleFileTransactions {
         record.failure = detail;
         persist(record);
         outcome(record, StartOutcome.Result.NEEDS_OPERATOR);
-        report(Level.SEVERE, Keys.NEEDS_OPERATOR, record.moduleName, detail, recordFileOf(record).getAbsolutePath());
+        report(Level.SEVERE, UpmKeys.START_UPDATE_NEEDS_OPERATOR, string("module", String.valueOf(record.moduleName)),
+                string("failure", String.valueOf(detail)),
+                string("file", String.valueOf(recordFileOf(record).getAbsolutePath())));
         throw new NeedsOperator(detail);
     }
 
@@ -2033,8 +2066,11 @@ public final class ModuleFileTransactions {
         if (restoreError != null && Record.INSTALL.equals(record.type)) {
             reportInstall(Level.SEVERE, UpmKeys.START_INSTALL_ROLLBACK_DEFERRED, record, string("error", restoreError));
         } else if (restoreError != null) {
-            report(Level.SEVERE, Keys.RESTORE_FAILED, record.moduleName, backupOf(record).getAbsolutePath(),
-                    confined(modulesFolder, record.oldName).getAbsolutePath(), restoreError);
+            report(Level.SEVERE, UpmKeys.START_UPDATE_RESTORE_FAILED,
+                    string("module", String.valueOf(record.moduleName)),
+                    string("backup", String.valueOf(backupOf(record).getAbsolutePath())),
+                    string("target", String.valueOf(confined(modulesFolder, record.oldName).getAbsolutePath())),
+                    string("error", String.valueOf(restoreError)));
         }
     }
 
@@ -2116,10 +2152,14 @@ public final class ModuleFileTransactions {
         outcome(record, StartOutcome.Result.APPLIED);
         if (!deleteTree(workFolder(record)) || !deleteQuietly(recordFileOf(record))) {
             // Kept as COMMITTING: the next start finishes it. The module is updated either way.
-            report(Level.WARNING, Keys.CLEANUP_DEFERRED, record.moduleName, workFolder(record).getAbsolutePath());
+            report(Level.WARNING, UpmKeys.START_UPDATE_CLEANUP_DEFERRED,
+                    string("module", String.valueOf(record.moduleName)),
+                    string("folder", String.valueOf(workFolder(record).getAbsolutePath())));
             return;
         }
-        report(Level.INFO, Keys.COMMITTED, record.moduleName, record.oldVersion, record.newVersion);
+        report(Level.INFO, UpmKeys.START_UPDATE_COMMITTED, string("module", String.valueOf(record.moduleName)),
+                string("old_version", String.valueOf(record.oldVersion)),
+                string("new_version", String.valueOf(record.newVersion)));
     }
 
     /**
@@ -2147,8 +2187,10 @@ public final class ModuleFileTransactions {
             boolean noBackup = isStagedJar(target, record);
             outcome(record, noBackup ? StartOutcome.Result.NOT_APPLIED : StartOutcome.Result.ROLLED_BACK);
             if (noBackup) {
-                report(Level.WARNING, Keys.ROLLBACK_NO_BACKUP, record.moduleName, backup.getAbsolutePath(),
-                        target.getAbsolutePath());
+                report(Level.WARNING, UpmKeys.START_UPDATE_ROLLBACK_NO_BACKUP,
+                        string("module", String.valueOf(record.moduleName)),
+                        string("backup", String.valueOf(backup.getAbsolutePath())),
+                        string("target", String.valueOf(target.getAbsolutePath())));
             }
             deleteTree(workFolder(record));
             deleteQuietly(recordFileOf(record));
@@ -2165,22 +2207,34 @@ public final class ModuleFileTransactions {
             ops.move(backup.toPath(), old.toPath());
         } catch (IOException | RuntimeException e) {
             outcome(record, StartOutcome.Result.NOT_APPLIED);
-            report(Level.SEVERE, phase == RollbackPhase.AFTER_LOAD ? Keys.ROLLBACK_DEFERRED
-                    : Keys.ROLLBACK_FAILED_BEFORE_LOAD, record.moduleName, record.newVersion, record.oldVersion,
-                    describe(e));
+            report(Level.SEVERE, phase == RollbackPhase.AFTER_LOAD ? UpmKeys.START_UPDATE_ROLLBACK_DEFERRED
+                    : UpmKeys.START_UPDATE_ROLLBACK_FAILED_BEFORE_LOAD,
+                    string("module", String.valueOf(record.moduleName)),
+                    string("new_version", String.valueOf(record.newVersion)),
+                    string("old_version", String.valueOf(record.oldVersion)),
+                    string("error", String.valueOf(describe(e))));
             return;
         }
         deleteTree(workFolder(record));
         deleteQuietly(recordFileOf(record));
         outcome(record, StartOutcome.Result.ROLLED_BACK);
         if (phase == RollbackPhase.AFTER_LOAD) {
-            report(Level.WARNING, Keys.ROLLED_BACK, record.moduleName, record.newVersion, record.oldVersion,
-                    record.oldVersion);
+            report(Level.WARNING, UpmKeys.START_UPDATE_ROLLED_BACK,
+                    string("module", String.valueOf(record.moduleName)),
+                    string("new_version", String.valueOf(record.newVersion)),
+                    string("old_version", String.valueOf(record.oldVersion)),
+                    string("loaded", String.valueOf(record.oldVersion)));
         } else if (phase == RollbackPhase.UNCONFIRMED) {
-            report(Level.WARNING, Keys.UNCONFIRMED_ROLLED_BACK, record.moduleName, record.newVersion,
-                    record.oldVersion, record.oldVersion);
+            report(Level.WARNING, UpmKeys.START_UPDATE_UNCONFIRMED_ROLLED_BACK,
+                    string("module", String.valueOf(record.moduleName)),
+                    string("new_version", String.valueOf(record.newVersion)),
+                    string("old_version", String.valueOf(record.oldVersion)),
+                    string("loaded", String.valueOf(record.oldVersion)));
         } else {
-            report(Level.INFO, Keys.ROLLBACK_FINISHED, record.moduleName, record.oldVersion, record.oldVersion);
+            report(Level.INFO, UpmKeys.START_UPDATE_ROLLBACK_FINISHED,
+                    string("module", String.valueOf(record.moduleName)),
+                    string("old_version", String.valueOf(record.oldVersion)),
+                    string("loaded", String.valueOf(record.oldVersion)));
         }
     }
 
@@ -2376,12 +2430,16 @@ public final class ModuleFileTransactions {
             Record record = readRecord(recordFile);
             String problem = record == null ? "unrecognised record" : problemWith(record, recordFile);
             if (problem != null) {
-                report(Level.WARNING, Keys.RECORD_REFUSED, recordFile.getAbsolutePath(), problem);
+                report(Level.WARNING, UpmKeys.START_RECORD_REFUSED,
+                        string("file", String.valueOf(recordFile.getAbsolutePath())),
+                        string("reason", String.valueOf(problem)));
                 return null;
             }
             return record;
         } catch (IOException | JsonParseException e) {
-            report(Level.WARNING, Keys.RECORD_UNREADABLE, recordFile.getAbsolutePath(), describe(e));
+            report(Level.WARNING, UpmKeys.START_RECORD_UNREADABLE,
+                    string("file", String.valueOf(recordFile.getAbsolutePath())),
+                    string("error", String.valueOf(describe(e))));
             return null;
         }
     }
@@ -2501,7 +2559,9 @@ public final class ModuleFileTransactions {
             writeRecord(record);
             return true;
         } catch (IOException e) {
-            report(Level.SEVERE, Keys.RECORD_WRITE_FAILED, recordFileOf(record).getAbsolutePath(), describe(e));
+            report(Level.SEVERE, UpmKeys.START_RECORD_WRITE_FAILED,
+                    string("file", String.valueOf(recordFileOf(record).getAbsolutePath())),
+                    string("error", String.valueOf(describe(e))));
             return false;
         }
     }
@@ -2548,8 +2608,9 @@ public final class ModuleFileTransactions {
             File backups = new File(folder, BACKUP_FOLDER);
             if (mayHoldFiles(backups)) {
                 String[] kept = namesIn(backups);
-                report(Level.WARNING, Keys.ORPHAN_BACKUP, backups.getAbsolutePath(),
-                        kept == null ? "(the folder cannot be listed)" : String.join(", ", kept));
+                report(Level.WARNING, UpmKeys.START_UPDATE_ORPHAN_BACKUP,
+                        string("folder", String.valueOf(backups.getAbsolutePath())),
+                        string("files", String.valueOf(kept == null ? "(the folder cannot be listed)" : String.join(", ", kept))));
             } else {
                 deleteTree(folder);
             }
@@ -2778,10 +2839,6 @@ public final class ModuleFileTransactions {
             LOGGER.log(Level.FINE, "Could not read " + file, e);
             return null;
         }
-    }
-
-    private void report(Level level, String key, Object... args) {
-        reports.add(new Report(level, key, args));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -3049,25 +3106,13 @@ public final class ModuleFileTransactions {
     /** One line for the start-up log, with its catalogue key and arguments. */
     public static final class Report {
         private final Level level;
-        private final String key;
-        private final Object[] args;
         private final MessageKey messageKey;
         private final Arg[] messageArgs;
 
         Report(Level level, MessageKey key, Arg... args) {
             this.level = level;
-            this.key = key.translationKey();
-            this.args = args.clone();
             this.messageKey = key;
             this.messageArgs = args.clone();
-        }
-
-        Report(Level level, String key, Object... args) {
-            this.level = level;
-            this.key = key;
-            this.args = args.clone();
-            this.messageKey = null;
-            this.messageArgs = null;
         }
 
         /** @return the log level */
@@ -3075,14 +3120,14 @@ public final class ModuleFileTransactions {
             return level;
         }
 
-        /** @return the catalogue key */
+        /** @return the namespaced catalogue key */
         public String getKey() {
-            return key;
+            return messageKey.translationKey();
         }
 
-        /** @return the format arguments */
+        /** @return a copy of the named message arguments */
         public Object[] getArgs() {
-            return args.clone();
+            return messageArgs.clone();
         }
     }
 
@@ -3230,63 +3275,6 @@ public final class ModuleFileTransactions {
         /** @return the reason's format arguments */
         public Arg[] getReasonArgs() {
             return reasonArgs.clone();
-        }
-    }
-
-    /**
-     * The catalogue keys of every line this class produces. Each has an entry in {@code en.json}
-     * and {@code zh.json}; {@code ModuleFileCatalogueTest} holds that.
-     */
-    public static final class Keys {
-        public static final String COMMITTED = "模块 %s 已从 %s 更新到 %s：本次启动确认新版本已加载，旧版本 JAR 已删除。";
-        public static final String ROLLED_BACK = "模块 %s 更新到 %s 后没有加载，已恢复为 %s；%s 将在下次启动时加载。";
-        public static final String ROLLBACK_NO_BACKUP = "模块 %s 保留的旧版本 JAR（%s）不见了，无法回滚；%s 保持不动。";
-        public static final String UNCONFIRMED_ROLLED_BACK =
-                "上次启动在确认模块 %s 的 %s 版本是否加载之前就结束了；已恢复为 %s，本次启动加载 %s。";
-        public static final String ROLLBACK_DEFERRED =
-                "模块 %s 更新到 %s 后没有加载；恢复 %s 未能在本次完成（%s），将在下次启动、加载模块之前完成。";
-        public static final String ROLLBACK_FAILED_BEFORE_LOAD = "模块 %s 从 %s 恢复为 %s 未能完成（%s）；下次启动会再试。";
-        public static final String ROLLBACK_FINISHED = "模块 %s 的回滚已完成：已恢复为 %s，本次启动加载 %s。";
-        public static final String APPLY_FAILED =
-                "模块 %s 的更新（%s → %s）未能应用：%s：%s。模块目录未改变，本次启动加载 %s；下次执行 /upm update 时会再次报告。";
-        public static final String APPLY_CROSS_FILE_SYSTEM =
-                "模块 %s 的更新（%s → %s）未能应用：模块目录 %s 与更新目录 %s 不在同一个文件系统上，无法原子移动。模块目录未改变，本次启动加载 %s；请把两个目录放到同一个文件系统上，再执行 /upm update。";
-        public static final String STAGED_JAR_MISMATCH =
-                "模块 %s 暂存的 JAR %s 已不是暂存时下载的文件（预期 SHA-256 %s，实际 %s），更新未应用；模块目录未改变，下次执行 /upm update 时会再次报告。";
-        public static final String APPLY_FAILED_UNRESTORED =
-                "模块 %s 的更新（%s → %s）未能应用：%s：%s；把旧版本移回也失败了（%s）。旧版本 JAR 在 %s，请停止服务器后手动移回 %s。";
-        public static final String RESTORE_FAILED = "模块 %s 的旧版本 JAR 仍在 %s，未能移回 %s（%s）；请停止服务器后手动移回。";
-        public static final String RECORDS_UNLISTABLE =
-                "更新目录 %s 无法列出（%s）；本次启动没有执行任何暂存的更新或卸载时记录的删除，它们保持原样，下次启动会再试。";
-        public static final String TRANSACTION_ERROR =
-                "更新记录 %s 处理时出错（%s）；记录保持原样，下次启动会从它记录的步骤继续。";
-        public static final String CLEANUP_DEFERRED = "模块 %s 的更新已确认，但更新目录 %s 未能清理，下次启动会再清理。";
-        public static final String ORPHAN_BACKUP = "更新目录 %s 中有不属于任何更新记录的旧版本 JAR，已保留：%s";
-        public static final String UPDATE_ABANDONED = "模块 %s 暂存的 %s 版本更新已放弃：它的 JAR %s 在暂存之后已不在模块目录中（例如已卸载）。";
-        public static final String NEEDS_OPERATOR =
-                "模块 %s 的更新已暂停，等待处理：%s。在这些文件与更新记录一致之前，更新不会移动或删除任何文件，/upm update 和 /upm uninstall 也会拒绝该模块。请检查这些文件（需要的 JAR 可从更新目录中取回），然后删除更新记录 %s 及其同名文件夹，以放弃这次更新。";
-        public static final String RECORD_REFUSED = "更新记录 %s 已拒绝执行：%s";
-        public static final String RECORD_UNREADABLE = "更新记录 %s 无法读取，已跳过：%s";
-        public static final String RECORD_WRITE_FAILED = "更新记录 %s 无法写入：%s";
-
-        private Keys() {
-        }
-
-        /**
-         * Every key, for the catalogue test.
-         *
-         * @return the keys
-         */
-        static List<String> all() {
-            List<String> keys = new ArrayList<>();
-            for (java.lang.reflect.Field field : Keys.class.getFields()) {
-                try {
-                    keys.add((String) field.get(null));
-                } catch (IllegalAccessException e) {
-                    throw new IllegalStateException(e);
-                }
-            }
-            return keys;
         }
     }
 }

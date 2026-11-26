@@ -14,6 +14,7 @@ import org.bukkit.command.CommandSender;
 import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import static com.ultikits.ultitools.text.Arg.number;
 import static com.ultikits.ultitools.text.Arg.string;
 import static com.ultikits.ultitools.utils.ModuleFileTransactions.text;
@@ -49,10 +50,6 @@ import com.ultikits.ultitools.manager.PluginManager;
 public class PluginInstallUtils {
     private static final Logger LOGGER = Logger.getLogger(PluginInstallUtils.class.getName());
     private static final String CATALOGUE_URL_PROPERTY = "ultitools.catalogue.url";
-    private static final String REASON_INTEGRITY_FAILED =
-            "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。";
-    private static final String REASON_LICENCE_REQUIRED =
-            "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。";
 
     /** How the uninstall asks a loaded module which JAR it came from; a test passes its own. */
     static final Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
@@ -463,8 +460,8 @@ public class PluginInstallUtils {
             String version = metadata.version();
             if (!metadata.downloadable()) {
                 if (licenceRequired(metadata)) {
-                    LOGGER.log(Level.WARNING, FrameworkText.format(REASON_LICENCE_REQUIRED, requested,
-                            version));
+                    LOGGER.log(Level.WARNING, FrameworkMessages.plain(UtilsKeys.INSTALL_REASON_LICENCE_REQUIRED,
+                            string("module", requested), string("version", version)));
                     refusal = PendingResult.reply(UpmKeys.INSTALL_REFUSED_LICENCE_REQUIRED,
                             string("module", requested), string("version", version));
                 } else {
@@ -545,7 +542,7 @@ public class PluginInstallUtils {
      * version and the reason, and that nothing was installed. A withdrawn version, a transport
      * failure and an integrity failure cannot be mistaken for one another; every integrity failure
      * (hash, size, hash header, no usable hash or size) is the catalogue text
-     * {@link UpmKeys#INSTALL_REFUSED_INTEGRITY_FAILED} in the server's language (plan 22-22), and
+     * {@link UtilsKeys#INSTALL_REASON_INTEGRITY_FAILED} in the server's language (plan 22-22), and
      * which check failed is on the FINE line beside it. Only short hash prefixes may join it in the
      * local log, never a whole URL.
      *
@@ -556,7 +553,8 @@ public class PluginInstallUtils {
      */
     static String failureLine(String module, String version, VerifiedDownload.Kind kind) {
         if (isIntegrityFailure(kind)) {
-            return FrameworkText.format(REASON_INTEGRITY_FAILED, module, version);
+            return FrameworkMessages.plain(UtilsKeys.INSTALL_REASON_INTEGRITY_FAILED,
+                    string("module", module), string("version", version));
         }
         switch (kind) {
             case NOT_AVAILABLE:

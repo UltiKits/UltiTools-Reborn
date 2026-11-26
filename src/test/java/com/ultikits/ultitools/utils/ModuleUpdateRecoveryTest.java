@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.utils;
 
+import static com.ultikits.ultitools.utils.UpmReportAssertions.unparsedValues;
+
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.catalogue;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.downloading;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.loadedModule;
@@ -140,8 +142,8 @@ class ModuleUpdateRecoveryTest {
             assertThat(treeOf(transactions)).isEmpty();
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.WARNING);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.ROLLED_BACK);
-            assertThat(report.getArgs()).containsExactly("Demo", "1.1", "1.0", "1.0");
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_ROLLED_BACK.translationKey());
+            assertThat(unparsedValues(report)).containsExactly("Demo", "1.1", "1.0", "1.0");
         }
 
         @Test
@@ -157,7 +159,7 @@ class ModuleUpdateRecoveryTest {
                     new ModuleUpdateFixtures.CodeSources().with(loadedFromStray, stray));
 
             assertOnlyTheOldVersionIsInstalled();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.ROLLED_BACK);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_ROLLED_BACK.translationKey());
         }
 
         @Test
@@ -181,7 +183,7 @@ class ModuleUpdateRecoveryTest {
             observeAbsent(start);
 
             assertThat(onlyReport(start).getLevel()).isEqualTo(Level.SEVERE);
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.ROLLBACK_DEFERRED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_ROLLBACK_DEFERRED.translationKey());
             assertThat(recordText()).contains("\"state\": \"ROLLING_BACK\"");
 
             ModuleFileTransactions next = transactions();
@@ -189,7 +191,7 @@ class ModuleUpdateRecoveryTest {
 
             assertOnlyTheOldVersionIsInstalled();
             assertThat(treeOf(transactions)).isEmpty();
-            assertThat(onlyReport(next).getKey()).isEqualTo(ModuleFileTransactions.Keys.ROLLBACK_FINISHED);
+            assertThat(onlyReport(next).getKey()).isEqualTo(UpmKeys.START_UPDATE_ROLLBACK_FINISHED.translationKey());
         }
     }
 
@@ -225,9 +227,9 @@ class ModuleUpdateRecoveryTest {
             assertOnlyTheOldVersionIsInstalled();
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.APPLY_FAILED);
-            assertThat(report.getArgs()).contains("Demo", "1.0", "1.1", oldJar.getAbsolutePath());
-            assertThat(String.valueOf(report.getArgs()[4])).contains("injected");
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_APPLY_FAILED.translationKey());
+            assertThat(unparsedValues(report)).contains("Demo", "1.0", "1.1", oldJar.getAbsolutePath());
+            assertThat(unparsedValues(report).get(4)).contains("injected");
             assertThat(recordText()).contains("\"state\": \"FAILED\"");
 
             observeAbsent(start);
@@ -268,8 +270,8 @@ class ModuleUpdateRecoveryTest {
             assertOnlyTheOldVersionIsInstalled();
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.APPLY_CROSS_FILE_SYSTEM);
-            assertThat(report.getArgs()).containsExactly("Demo", "1.0", "1.1", modules.getAbsolutePath(),
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_APPLY_CROSS_FILE_SYSTEM.translationKey());
+            assertThat(unparsedValues(report)).containsExactly("Demo", "1.0", "1.1", modules.getAbsolutePath(),
                     transactions.getAbsolutePath(), "1.0");
             assertThat(recordText()).contains("\"state\": \"FAILED\"");
             // No copy fallback: the staged JAR is still only in the records folder.
@@ -295,7 +297,7 @@ class ModuleUpdateRecoveryTest {
 
                 start.applyBeforeLoad();
 
-                assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.APPLY_FAILED);
+                assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_APPLY_FAILED.translationKey());
             } finally {
                 Files.setPosixFilePermissions(modules.toPath(), PosixFilePermissions.fromString("rwx------"));
             }
@@ -312,7 +314,7 @@ class ModuleUpdateRecoveryTest {
             start.applyBeforeLoad();
 
             assertOnlyTheOldVersionIsInstalled();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.APPLY_FAILED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_APPLY_FAILED.translationKey());
             assertThat(recordText()).contains("\"state\": \"FAILED\"");
         }
 
@@ -343,8 +345,8 @@ class ModuleUpdateRecoveryTest {
             assertThat(treeOf(transactions)).isEmpty();
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.WARNING);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.UPDATE_ABANDONED);
-            assertThat(report.getArgs()).containsExactly("Demo", "1.1", oldJar.getAbsolutePath());
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_ABANDONED.translationKey());
+            assertThat(unparsedValues(report)).containsExactly("Demo", "1.1", oldJar.getAbsolutePath());
         }
 
         @Test
@@ -365,8 +367,8 @@ class ModuleUpdateRecoveryTest {
             assertThat(recordText()).contains("\"state\": \"NEEDS_OPERATOR\"");
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
-            assertThat(String.valueOf(report.getArgs()[1])).contains(oldJar.getAbsolutePath());
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_NEEDS_OPERATOR.translationKey());
+            assertThat(unparsedValues(report).get(1)).contains(oldJar.getAbsolutePath());
         }
 
         @Test
@@ -403,8 +405,8 @@ class ModuleUpdateRecoveryTest {
             assertOnlyTheOldVersionIsInstalled();
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORDS_UNLISTABLE);
-            assertThat(report.getArgs()[0]).isEqualTo(transactions.getAbsolutePath());
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_RECORDS_UNLISTABLE.translationKey());
+            assertThat(unparsedValues(report).get(0)).isEqualTo(transactions.getAbsolutePath());
             assertThat(recordText()).contains("\"state\": \"PENDING\"");
         }
 
@@ -427,7 +429,7 @@ class ModuleUpdateRecoveryTest {
             }
 
             assertOnlyTheOldVersionIsInstalled();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORDS_UNLISTABLE);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_RECORDS_UNLISTABLE.translationKey());
         }
 
         /** Leaves a kept old JAR whose record is gone, as a crash after the old JAR moved and a lost record would. */
@@ -483,8 +485,8 @@ class ModuleUpdateRecoveryTest {
 
             assertThat(new File(backups, "demo-1.0.jar")).exists();
             ModuleFileTransactions.Report report = onlyReport(start);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.ORPHAN_BACKUP);
-            assertThat(report.getArgs()[0]).isEqualTo(backups.getAbsolutePath());
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_ORPHAN_BACKUP.translationKey());
+            assertThat(unparsedValues(report).get(0)).isEqualTo(backups.getAbsolutePath());
         }
 
         /**
@@ -528,8 +530,8 @@ class ModuleUpdateRecoveryTest {
             assertOnlyTheOldVersionIsInstalled();
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORDS_UNLISTABLE);
-            assertThat(String.valueOf(report.getArgs()[1])).contains("injected");
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_RECORDS_UNLISTABLE.translationKey());
+            assertThat(unparsedValues(report).get(1)).contains("injected");
             assertThat(recordText()).contains("\"state\": \"PENDING\"");
         }
 
@@ -589,8 +591,8 @@ class ModuleUpdateRecoveryTest {
             assertOnlyTheOldVersionIsInstalled();
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
-            assertThat(String.valueOf(report.getArgs()[1])).contains(staged.getAbsolutePath(), expected, actual);
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_NEEDS_OPERATOR.translationKey());
+            assertThat(unparsedValues(report).get(1)).contains(staged.getAbsolutePath(), expected, actual);
             assertThat(recordText()).contains("\"state\": \"NEEDS_OPERATOR\"");
             assertThat(ModuleFileTransactions.sha256Of(staged)).isEqualTo(actual);
         }
@@ -609,8 +611,8 @@ class ModuleUpdateRecoveryTest {
             assertOnlyTheOldVersionIsInstalled();
             ModuleFileTransactions.Report report = onlyReport(start);
             assertThat(report.getLevel()).isEqualTo(Level.SEVERE);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.STAGED_JAR_MISMATCH);
-            assertThat(report.getArgs()).containsExactly("Demo", staged.getAbsolutePath(), expected,
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_STAGED_JAR_MISMATCH.translationKey());
+            assertThat(unparsedValues(report)).containsExactly("Demo", staged.getAbsolutePath(), expected,
                     ModuleFileTransactions.MISSING);
             assertThat(recordText()).contains("\"state\": \"FAILED\"");
         }
@@ -633,8 +635,8 @@ class ModuleUpdateRecoveryTest {
             assertThat(namesIn(modules)).isEmpty();
             assertThat(treeOf(transactions)).anyMatch(path -> path.endsWith("backup/demo-1.0.jar"));
             ModuleFileTransactions.Report report = onlyReport(start);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
-            assertThat(String.valueOf(report.getArgs()[1])).contains(staged.getAbsolutePath());
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_NEEDS_OPERATOR.translationKey());
+            assertThat(unparsedValues(report).get(1)).contains(staged.getAbsolutePath());
             assertThat(recordText()).contains("\"state\": \"NEEDS_OPERATOR\"");
         }
 
@@ -669,8 +671,8 @@ class ModuleUpdateRecoveryTest {
             assertThat(namesIn(modules)).containsExactly("demo-1.0.jar", "demo-1.1.jar");
             assertThat(Files.readAllBytes(newJar().toPath())).isEqualTo(squatter);
             assertThat(Files.readAllBytes(oldJar.toPath())).isEqualTo(oldBytes);
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.NEEDS_OPERATOR);
-            assertThat(String.valueOf(onlyReport(start).getArgs()[1])).contains(newJar().getAbsolutePath());
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_NEEDS_OPERATOR.translationKey());
+            assertThat(unparsedValues(onlyReport(start)).get(1)).contains(newJar().getAbsolutePath());
             assertThat(recordText()).contains("\"state\": \"NEEDS_OPERATOR\"");
         }
     }
@@ -692,7 +694,7 @@ class ModuleUpdateRecoveryTest {
 
             assertThat(namesIn(modules)).containsExactly("demo-1.1.jar");
             assertThat(treeOf(transactions)).isEmpty();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.COMMITTED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_COMMITTED.translationKey());
         }
 
         @Test
@@ -712,7 +714,7 @@ class ModuleUpdateRecoveryTest {
             observeLoaded(start);
 
             assertThat(treeOf(transactions)).isEmpty();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.COMMITTED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_COMMITTED.translationKey());
         }
 
         @Test
@@ -732,7 +734,7 @@ class ModuleUpdateRecoveryTest {
 
             assertOnlyTheOldVersionIsInstalled();
             assertThat(treeOf(transactions)).isEmpty();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.ROLLED_BACK);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_ROLLED_BACK.translationKey());
         }
 
         @Test
@@ -751,8 +753,8 @@ class ModuleUpdateRecoveryTest {
             assertOnlyTheOldVersionIsInstalled();
             assertThat(treeOf(transactions)).isEmpty();
             ModuleFileTransactions.Report report = onlyReport(start);
-            assertThat(report.getKey()).isEqualTo(ModuleFileTransactions.Keys.UNCONFIRMED_ROLLED_BACK);
-            assertThat(report.getArgs()).containsExactly("Demo", "1.1", "1.0", "1.0");
+            assertThat(report.getKey()).isEqualTo(UpmKeys.START_UPDATE_UNCONFIRMED_ROLLED_BACK.translationKey());
+            assertThat(unparsedValues(report)).containsExactly("Demo", "1.1", "1.0", "1.0");
         }
 
         @Test
@@ -771,7 +773,7 @@ class ModuleUpdateRecoveryTest {
 
             assertThat(namesIn(modules)).containsExactly("demo-1.1.jar");
             assertThat(treeOf(transactions)).isEmpty();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.COMMITTED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_COMMITTED.translationKey());
         }
 
         @Test
@@ -790,7 +792,7 @@ class ModuleUpdateRecoveryTest {
 
             assertOnlyTheOldVersionIsInstalled();
             assertThat(treeOf(transactions)).isEmpty();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.ROLLBACK_FINISHED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_UPDATE_ROLLBACK_FINISHED.translationKey());
         }
     }
 
@@ -812,8 +814,8 @@ class ModuleUpdateRecoveryTest {
                 observeLoaded(start);
 
                 assertThat(start.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
-                        .doesNotContain(ModuleFileTransactions.Keys.COMMITTED)
-                        .contains(ModuleFileTransactions.Keys.RECORD_WRITE_FAILED);
+                        .doesNotContain(UpmKeys.START_UPDATE_COMMITTED.translationKey())
+                        .contains(UpmKeys.START_RECORD_WRITE_FAILED.translationKey());
                 assertThat(treeOf(transactions)).anyMatch(p -> p.endsWith("/backup/demo-1.0.jar"));
             } finally {
                 Files.setPosixFilePermissions(transactions.toPath(), PosixFilePermissions.fromString("rwx------"));
@@ -823,7 +825,7 @@ class ModuleUpdateRecoveryTest {
             next.applyBeforeLoad();
 
             assertOnlyTheOldVersionIsInstalled();
-            assertThat(onlyReport(next).getKey()).isEqualTo(ModuleFileTransactions.Keys.UNCONFIRMED_ROLLED_BACK);
+            assertThat(onlyReport(next).getKey()).isEqualTo(UpmKeys.START_UPDATE_UNCONFIRMED_ROLLED_BACK.translationKey());
         }
     }
 
@@ -879,9 +881,9 @@ class ModuleUpdateRecoveryTest {
                 }
             }
             assertThat(severe).hasSize(1);
-            assertThat(severe.get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.TRANSACTION_ERROR);
-            assertThat(severe.get(0).getArgs()[0]).isEqualTo(demoRecord.getAbsolutePath());
-            assertThat(String.valueOf(severe.get(0).getArgs()[1])).contains("injected");
+            assertThat(severe.get(0).getKey()).isEqualTo(UpmKeys.START_RECORD_TRANSACTION_ERROR.translationKey());
+            assertThat(unparsedValues(severe.get(0)).get(0)).isEqualTo(demoRecord.getAbsolutePath());
+            assertThat(unparsedValues(severe.get(0)).get(1)).contains("injected");
 
             // The next start, with the file access back, finishes the rollback the record describes.
             ModuleFileTransactions third = transactions();
@@ -954,9 +956,9 @@ class ModuleUpdateRecoveryTest {
                 }
             }
             assertThat(severe).hasSize(1);
-            assertThat(severe.get(0).getKey()).isEqualTo(ModuleFileTransactions.Keys.APPLY_FAILED);
-            assertThat(severe.get(0).getArgs()[0]).isEqualTo("Demo");
-            assertThat(String.valueOf(severe.get(0).getArgs()[4])).contains("injected");
+            assertThat(severe.get(0).getKey()).isEqualTo(UpmKeys.START_UPDATE_APPLY_FAILED.translationKey());
+            assertThat(unparsedValues(severe.get(0)).get(0)).isEqualTo("Demo");
+            assertThat(unparsedValues(severe.get(0)).get(4)).contains("injected");
             File[] records = transactions.listFiles((dir, name) -> name.endsWith(".json"));
             assertThat(records).isNotNull();
             List<String> states = new java.util.ArrayList<>();
@@ -1054,7 +1056,7 @@ class ModuleUpdateRecoveryTest {
 
             assertOnlyTheOldVersionIsInstalled();
             assertThat(new File(outside, "demo-1.0.jar")).exists();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORD_REFUSED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_RECORD_REFUSED.translationKey());
         }
 
         @Test
@@ -1067,7 +1069,7 @@ class ModuleUpdateRecoveryTest {
             start.applyBeforeLoad();
 
             assertOnlyTheOldVersionIsInstalled();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORD_REFUSED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_RECORD_REFUSED.translationKey());
         }
 
         @Test
@@ -1084,7 +1086,7 @@ class ModuleUpdateRecoveryTest {
             observeAbsent(start);
 
             assertOnlyTheOldVersionIsInstalled();
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORD_REFUSED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_RECORD_REFUSED.translationKey());
         }
 
         @Test
@@ -1100,7 +1102,7 @@ class ModuleUpdateRecoveryTest {
 
             assertOnlyTheOldVersionIsInstalled();
             assertThat(start.pendingReports()).extracting(ModuleFileTransactions.Report::getKey)
-                    .doesNotContain(ModuleFileTransactions.Keys.UNCONFIRMED_ROLLED_BACK);
+                    .doesNotContain(UpmKeys.START_UPDATE_UNCONFIRMED_ROLLED_BACK.translationKey());
         }
 
         @Test
@@ -1117,7 +1119,7 @@ class ModuleUpdateRecoveryTest {
             assertThat(Files.readAllBytes(outside.toPath())).isEqualTo(outsideBytes);
             assertOnlyTheOldVersionIsInstalled();
             assertThat(onlyReport(start).getLevel()).isEqualTo(Level.WARNING);
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORD_REFUSED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_RECORD_REFUSED.translationKey());
         }
 
         @Test
@@ -1139,7 +1141,7 @@ class ModuleUpdateRecoveryTest {
             assertThat(outside).exists();
             assertThat(Files.isSymbolicLink(link)).isTrue();
             assertThat(namesIn(modules)).containsExactly("demo-1.0.jar", "link.jar");
-            assertThat(onlyReport(start).getKey()).isEqualTo(ModuleFileTransactions.Keys.RECORD_REFUSED);
+            assertThat(onlyReport(start).getKey()).isEqualTo(UpmKeys.START_RECORD_REFUSED.translationKey());
         }
     }
 }
