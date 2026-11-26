@@ -13,6 +13,9 @@ public final class ManagerKeys {
     public static final MessageKey MODULE_API_VERSION_TOO_LOW = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "module.api_version.too_low");
     public static final MessageKey MODULE_BOOTSTRAP_FAILED = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "module.bootstrap.failed");
     public static final MessageKey RELOAD_PARTIAL = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "reload.partial");
+    public static final MessageKey RELOAD_MODULE_DONE = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "reload.module_done");
+    public static final MessageKey RELOAD_MODULE_FAILED = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "reload.module_failed");
+    public static final MessageKey RELOAD_LANGUAGE_PENDING = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "reload.language_pending");
     public static final MessageKey RELOAD_SUMMARY_FAILED = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "reload.summary.failed");
     public static final MessageKey RELOAD_SUMMARY_MIXED_PARTIAL = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "reload.summary.mixed_partial");
     public static final MessageKey RELOAD_SUMMARY_PARTIAL = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "reload.summary.partial");

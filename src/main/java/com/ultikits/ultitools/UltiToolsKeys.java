@@ -10,6 +10,8 @@ public final class UltiToolsKeys {
     public static final MessageKey STARTUP_ENABLED = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "startup.enabled");
     public static final MessageKey STARTUP_SERVER_UUID = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "startup.server_uuid");
     public static final MessageKey STARTUP_SERVER_UUID_FAILED = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "startup.server_uuid_failed");
+    public static final MessageKey STARTUP_LEGACY_LANG_FOLDERS = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "startup.legacy_lang_folders");
+    public static final MessageKey STARTUP_LEGACY_LANG_FOLDERS_MORE = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "startup.legacy_lang_folders_more");
     public static final MessageKey RELOAD_FRAMEWORK_OVERRIDES_FAILED = MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "reload.framework_overrides_failed");
 
     private UltiToolsKeys() {
