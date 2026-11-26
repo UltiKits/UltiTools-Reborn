@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "ts": 1761274800000,
+  "type": "upm.pending.revoke.result",
+  "payload": {
+    "status": "error",
+    "code": "pending_not_found",
+    "message": "该待生效项已改变或不存在"
+  },
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW"
+}

@@ -1,10 +1,10 @@
 {
-  "contractVersion": "2.1.0",
-  "manifestSha256": "8555f80b793d8b057ed2d93b9a6d9e1faf75e03dd4970cf91e8d5020b0a2d187",
+  "contractVersion": "2.2.0",
+  "manifestSha256": "994ced7b056c8ae98ebb832774bbf48b5e28a11eb54f36fb9caa0fe3b318e8ee",
   "sourceRepository": "UltiKits/ulticloud",
   "sourceRef": "main",
-  "sourceCommit": "73f651e70a235b7418cee7f9c5a62d8fcfe3cab8",
-  "sourcePath": "packages/contracts/generated/protocol/v2/2.1.0",
+  "sourceCommit": "9e11f309b838f6d4e6b5f0e4f5b5efda1591078a",
+  "sourcePath": "packages/contracts/generated/protocol/v2/2.2.0",
   "frozen": true,
-  "provenance": "Frozen release 2.1.0 (RELEASES.json), extracted with git archive and never edited."
+  "provenance": "Frozen release 2.2.0 (RELEASES.json), extracted with git archive and never edited."
 }

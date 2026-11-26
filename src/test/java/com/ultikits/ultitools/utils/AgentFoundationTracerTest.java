@@ -53,7 +53,7 @@ class AgentFoundationTracerTest {
                 .filter(path -> path.startsWith("schemas/agent/"))
                 .map(path -> path.substring("schemas/agent/".length(), path.length() - ".schema.json".length()))
                 .collect(Collectors.toSet());
-        assertThat(AgentMessageTypes.types()).hasSize(60).containsExactlyInAnyOrderElementsOf(schemaTypes);
+        assertThat(AgentMessageTypes.types()).hasSize(64).containsExactlyInAnyOrderElementsOf(schemaTypes);
         int rows = 0;
         for (String line : ContractFixtures.text("PROTOCOL.md").split("\n")) {
             if (!line.contains("[schema](schemas/agent/")) {
@@ -71,6 +71,6 @@ class AgentFoundationTracerTest {
                     : "—".equals(capability) ? null : capability);
             rows++;
         }
-        assertThat(rows).isEqualTo(60);
+        assertThat(rows).isEqualTo(64);
     }
 }

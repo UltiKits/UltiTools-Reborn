@@ -1,0 +1,99 @@
+{
+  "v": 2,
+  "id": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW",
+  "ts": 1761274800000,
+  "type": "upm.pending.list.result",
+  "payload": {
+    "status": "ok",
+    "data": {
+      "entries": [
+        {
+          "id": "install-0123456789abcdef",
+          "revision": "0123456789abcdef",
+          "kind": "install",
+          "module": "UltiMail",
+          "fromVersion": null,
+          "toVersion": "7.0.0",
+          "files": [
+            "UltiMail-7.0.0.jar"
+          ],
+          "requestedAt": 1761274800000,
+          "requestedBy": {
+            "kind": "console",
+            "name": null
+          },
+          "state": "pending",
+          "failure": null,
+          "warnings": []
+        },
+        {
+          "id": "update-fedcba9876543210",
+          "revision": null,
+          "kind": "update",
+          "module": "UltiMail",
+          "fromVersion": "6.5.0",
+          "toVersion": "7.0.0",
+          "files": [
+            "UltiMail-7.0.0.jar"
+          ],
+          "requestedAt": 1761274800000,
+          "requestedBy": {
+            "kind": "console",
+            "name": null
+          },
+          "state": "downloading",
+          "failure": null,
+          "warnings": []
+        },
+        {
+          "id": "remove-0123456789abcdef",
+          "revision": "0123456789abcdef",
+          "kind": "uninstall",
+          "module": "UltiMail",
+          "fromVersion": "6.5.0",
+          "toVersion": null,
+          "files": [
+            "UltiMail-6.5.0.jar"
+          ],
+          "requestedAt": 1761274800000,
+          "requestedBy": {
+            "kind": "console",
+            "name": null
+          },
+          "state": "pending",
+          "failure": null,
+          "warnings": [
+            {
+              "warning": "custom_content",
+              "kinds": [
+                {
+                  "kind": "enchantment",
+                  "count": 2
+                },
+                {
+                  "kind": "datapack",
+                  "count": 1
+                },
+                {
+                  "kind": "tag",
+                  "count": 1
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "lastStart": [
+        {
+          "kind": "update",
+          "module": "UltiChat",
+          "fromVersion": "6.5.0",
+          "toVersion": "7.0.0",
+          "result": "rolled_back"
+        }
+      ],
+      "truncated": false
+    }
+  },
+  "replyTo": "01JB2Z8Y3K4M5N6P7Q8R9S0TVW"
+}
