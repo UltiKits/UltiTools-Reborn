@@ -1,12 +1,10 @@
 package com.ultikits.ultitools.abstracts;
 
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
-import com.ultikits.testfixtures.textwiring.ConfigTextProbeModule;
 import com.ultikits.testfixtures.textwiring.TextFixtureModule;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.context.SimpleContainer;
@@ -62,7 +60,6 @@ final class ConfigMessageModuleFixture implements AutoCloseable {
         when(framework.getDataFolder()).thenReturn(rootFolder.toFile());
         when(framework.getPluginManager()).thenReturn(plugins);
         when(framework.getLogger()).thenReturn(logger);
-        when(framework.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
         singleton = mockStatic(UltiTools.class, CALLS_REAL_METHODS);
         singleton.when(UltiTools::getInstance).thenReturn(framework);
     }

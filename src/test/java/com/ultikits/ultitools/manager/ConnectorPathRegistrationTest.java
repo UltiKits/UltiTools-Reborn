@@ -5,7 +5,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -95,7 +94,6 @@ class ConnectorPathRegistrationTest {
         var module = mock(ModuleFixture.class);
         when(module.getContext()).thenReturn(container);
         when(module.getPluginName()).thenReturn("module");
-        when(module.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
         return module;
     }
 

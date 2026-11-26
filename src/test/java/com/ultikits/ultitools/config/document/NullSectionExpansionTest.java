@@ -2,7 +2,6 @@ package com.ultikits.ultitools.config.document;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
 import java.io.IOException;
@@ -110,7 +109,6 @@ class NullSectionExpansionTest {
         lenient().when(plugin.getPluginName()).thenReturn("ExpansionModule");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
-        lenient().when(plugin.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
         frameworkLogger.addHandler(capture);
     }
 

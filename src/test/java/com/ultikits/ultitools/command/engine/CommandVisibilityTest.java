@@ -3,7 +3,6 @@ package com.ultikits.ultitools.command.engine;
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
 import net.kyori.adventure.text.Component;
 import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
@@ -48,8 +47,6 @@ class CommandVisibilityTest {
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             var plugin = mock(UltiTools.class);
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
-            when(plugin.i18n(anyString())).thenAnswer(call -> call.getArgument(0).equals("指令正确用法")
-                    ? "usage /%s %s" : call.getArgument(0));
             Fixture executor = new Fixture();
             var dispatcher = dispatcher(executor);
             CommandSender sender = mock(CommandSender.class);

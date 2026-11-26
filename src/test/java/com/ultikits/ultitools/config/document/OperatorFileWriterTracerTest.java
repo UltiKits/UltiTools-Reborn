@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.config.document;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
 import java.nio.charset.StandardCharsets;
@@ -94,7 +93,6 @@ class OperatorFileWriterTracerTest {
         lenient().when(plugin.getPluginName()).thenReturn("Tracer");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
-        lenient().when(plugin.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
         frameworkLogger.addHandler(capture);
     }
 

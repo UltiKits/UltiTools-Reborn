@@ -97,7 +97,6 @@ class ExcludedLoggerDefaultsTest {
         UltiTools ultiTools = mock(UltiTools.class);
         when(ultiTools.getConfig()).thenReturn(config);
         when(ultiTools.getLogger()).thenReturn(Logger.getLogger("ExcludedLoggerDefaultsTest"));
-        when(ultiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         setInstance(ultiTools);
         SystemLogHandler handler = new SystemLogHandler(transmitter);
 

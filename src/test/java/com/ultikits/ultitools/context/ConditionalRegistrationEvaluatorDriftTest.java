@@ -12,7 +12,6 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -224,8 +223,6 @@ class ConditionalRegistrationEvaluatorDriftTest {
         UltiToolsPlugin plugin = mock(FixturePlugin.class);
         registeredPlugins.add(plugin);
         when(plugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
-        when(plugin.getLanguageCode()).thenReturn("en");
-        when(plugin.supported()).thenReturn(Collections.singletonList("en"));
         when(plugin.getPluginName()).thenReturn("TestModule");
         PluginLogger mockLogger = mock(PluginLogger.class);
         when(plugin.getLogger()).thenReturn(mockLogger);

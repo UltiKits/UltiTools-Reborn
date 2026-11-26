@@ -81,8 +81,6 @@ class CapabilityGateIndependenceTest {
             lenient().when(ultiTools.getErrorReportCollector()).thenReturn(mockErrorReportCollector);
             lenient().when(ultiTools.getRemoteActionLog()).thenReturn(mockRemoteActionLog);
             lenient().when(ultiTools.getConfigManager()).thenReturn(mockConfigManager);
-            lenient().when(ultiTools.i18n(org.mockito.ArgumentMatchers.anyString()))
-                    .thenAnswer(invocation -> invocation.getArgument(0));
         });
 
         PluginInitiationUtils.enableCloud();

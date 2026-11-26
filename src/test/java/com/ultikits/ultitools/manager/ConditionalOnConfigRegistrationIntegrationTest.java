@@ -3,7 +3,6 @@ package com.ultikits.ultitools.manager;
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -97,7 +96,6 @@ class ConditionalOnConfigRegistrationIntegrationTest {
             UltiToolsPlugin mockPlugin = mock(UltiToolsPlugin.class);
             when(mockPlugin.getPluginName()).thenReturn("conditional-module");
             when(mockPlugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
-            when(mockPlugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
             SimpleContainer container = new SimpleContainer();
             try {

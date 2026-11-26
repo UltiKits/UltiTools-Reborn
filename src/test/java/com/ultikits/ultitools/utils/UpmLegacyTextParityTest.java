@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.text.FixedLocaleResolver;
 import com.ultikits.ultitools.text.MessageKey;
@@ -14,8 +13,6 @@ import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.text.internal.CatalogueLoader;
 import com.ultikits.ultitools.text.internal.MessageRenderer;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -235,7 +232,7 @@ class UpmLegacyTextParityTest {
     @MethodSource("translations")
     void everyNewKeyPreservesLegacyTextAndColours(Locale locale, Row row) throws IOException {
         List<LogRecord> warnings = new ArrayList<>();
-        String expected = legacyText(readLegacy(locale), row);
+        String expected = legacyText(LegacyTextBaseline.read(locale), row);
         Component actual = render(locale, row.path(), warnings, row.args().toArray(Arg[]::new));
         assertThat(warnings).as("no missing key or format warning for %s", row.path()).isEmpty();
         assertThat(PLAIN.serialize(actual)).isEqualTo(HEX.matcher(expected).replaceAll("").replaceAll("§.", ""));
@@ -410,9 +407,4 @@ class UpmLegacyTextParityTest {
                 .map(row -> Arguments.of(locale, row)));
     }
 
-    private static JsonObject readLegacy(Locale locale) throws IOException {
-        try (var reader = Files.newBufferedReader(Path.of("src/main/resources/lang", locale.getLanguage() + ".json"))) {
-            return JsonParser.parseReader(reader).getAsJsonObject();
-        }
-    }
 }

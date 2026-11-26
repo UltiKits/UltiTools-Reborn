@@ -12,7 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.atLeastOnce;
@@ -81,7 +80,6 @@ class CooldownValidatorConfigBindingTest {
     @BeforeEach
     void setUp() {
         UltiTools ultiTools = mock(UltiTools.class);
-        lenient().when(ultiTools.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
         mockedUltiTools = mockStatic(UltiTools.class);
         mockedUltiTools.when(UltiTools::getInstance).thenReturn(ultiTools);
         player = mock(Player.class);

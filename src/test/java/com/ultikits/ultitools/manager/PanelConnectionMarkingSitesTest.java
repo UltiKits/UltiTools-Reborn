@@ -49,7 +49,6 @@ class PanelConnectionMarkingSitesTest {
         lenient().when(pluginLogger.getName()).thenReturn("UltiTools");
         UltiTools plugin = mock(UltiTools.class);
         lenient().when(plugin.getLogger()).thenReturn(pluginLogger);
-        lenient().when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         instanceMock = mockStatic(UltiTools.class);
         instanceMock.when(UltiTools::getInstance).thenReturn(plugin);
     }

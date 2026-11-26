@@ -4,14 +4,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
 
 import com.ultikits.ultitools.UltiTools;
-import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.manager.DependenceManagers;
 import java.io.InputStreamReader;
-import java.lang.reflect.Method;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import com.ultikits.ultitools.manager.ManagerKeys;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Text;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,7 +41,7 @@ class TextEngineLocaleConfigurationTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"Asia/Shanghai", "UTC"})
-    void existingStartupAndReloadSeam_refreshesTheSharedResolverAndReportsItsReason(String initialZone) throws Exception {
+    void existingStartupAndReloadSeam_refreshesTheSharedResolverAndReportsItsReason(String initialZone) throws Throwable {
         String original = "# operator configuration\nlanguage: auto\nfallback-language: auto\n";
         Path file = temporary.resolve("config.yml");
         Files.writeString(file, original);
@@ -61,18 +65,14 @@ class TextEngineLocaleConfigurationTest {
                 Locale next = chinese ? Locale.ENGLISH : Locale.CHINESE;
                 String nextZone = chinese ? "UTC" : "Asia/Shanghai";
                 assertThat(engine.fallback()).isEqualTo(first);
-                assertThat(core.i18n("Module '%s' reloaded.")).isEqualTo(legacyReloadMessage(first));
+                assertThat(renderReloadMessage(engine)).isEqualTo(expectedReloadMessage(first));
                 assertThat(info(records)).containsExactly(selectionMessage(first, initialZone));
                 zone.set(ZoneId.of(nextZone));
-                try (var singleton = mockStatic(UltiTools.class)) {
-                    singleton.when(UltiTools::getInstance).thenReturn(core);
-                    UltiToolsPlugin module = mock(UltiToolsPlugin.class, CALLS_REAL_METHODS);
-                    assertThat(module.getConfiguredLanguage()).isEqualTo(first.getLanguage());
-                    assertThat(reads).hasValue(1);
-                    initialize(core);
-                    assertThat(module.getConfiguredLanguage()).isEqualTo(next.getLanguage());
-                }
+                assertThat(engine.fallback()).isEqualTo(first);
+                assertThat(reads).hasValue(1);
+                initialize(core);
                 assertThat(engine.fallback()).isEqualTo(next);
+                assertThat(renderReloadMessage(engine)).isEqualTo(expectedReloadMessage(next));
                 assertThat(info(records)).hasSize(2);
                 assertThat(info(records).getLast()).isEqualTo(selectionMessage(next, nextZone));
                 assertThat(reads).hasValue(2);
@@ -86,7 +86,7 @@ class TextEngineLocaleConfigurationTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"zh", "en"})
-    void existingSixXConfig_doesNotInheritTheNewShippedFallbackOrChangeItsBytes(String code) throws Exception {
+    void existingSixXConfig_doesNotInheritTheNewShippedFallbackOrChangeItsBytes(String code) throws Throwable {
         String original = "# keep this operator comment\nlanguage: " + code + "\n";
         Path file = temporary.resolve("config.yml");
         Files.writeString(file, original);
@@ -109,8 +109,8 @@ class TextEngineLocaleConfigurationTest {
                 initialize(core);
                 assertThat(engine.fallback()).isEqualTo(Locale.forLanguageTag(code));
                 assertThat(resolver.forced()).contains(Locale.forLanguageTag(code));
-                assertThat(core.i18n("Module '%s' reloaded."))
-                        .isEqualTo(code.equals("zh") ? "模块 '%s' 已重载。" : "Module '%s' reloaded.");
+                assertThat(renderReloadMessage(engine))
+                        .isEqualTo(code.equals("zh") ? "模块 'Probe' 已重载。" : "Module 'Probe' reloaded.");
                 assertThat(info(records)).hasSize(1);
                 // nosemgrep: java.lang.security.audit.path-traversal.path-traversal
                 assertThat(Files.readString(file)).isEqualTo(original); // Test-owned fixed config file.
@@ -123,7 +123,7 @@ class TextEngineLocaleConfigurationTest {
     @ParameterizedTest
     @CsvSource({"zh-myserver,zh", "en-myserver,en", "myserver,en", "zh_custom,en", "ZH-myserver,en",
             "zh-CN-myserver,zh"})
-    void customLanguageWithRootEngine_usesTheLegacyBaseWithoutNewWarnings(String name, String base) throws Exception {
+    void customLanguageWithRootEngine_usesTheOfficialBaseWithoutNewWarnings(String name, String base) throws Throwable {
         YamlConfiguration config = new YamlConfiguration();
         config.set("language", name);
         List<LogRecord> records = new ArrayList<>();
@@ -143,7 +143,7 @@ class TextEngineLocaleConfigurationTest {
                 assertThat(records).noneMatch(record -> Level.WARNING.equals(record.getLevel()));
                 UltiTools core = core(config, logger, root);
                 initialize(core);
-                assertThat(core.i18n("Module '%s' reloaded.")).isEqualTo(legacyReloadMessage(expected));
+                assertThat(renderReloadMessage(engine)).isEqualTo(expectedReloadMessage(expected));
                 assertThat(records).noneMatch(record -> record.getMessage().startsWith("Invalid language locale:"));
                 assertThat(reads).hasValue(0);
             } finally {
@@ -169,8 +169,8 @@ class TextEngineLocaleConfigurationTest {
                 : "Fallback language: en (system time zone " + zone + "; set fallback-language in config.yml to override)";
     }
 
-    private static String legacyReloadMessage(Locale locale) {
-        return locale.equals(Locale.CHINESE) ? "模块 '%s' 已重载。" : "Module '%s' reloaded.";
+    private static String expectedReloadMessage(Locale locale) {
+        return locale.equals(Locale.CHINESE) ? "模块 'Probe' 已重载。" : "Module 'Probe' reloaded.";
     }
 
     private TextEngine frameworkEngine(ConfiguredLocaleResolver resolver, Logger logger) {
@@ -189,11 +189,15 @@ class TextEngineLocaleConfigurationTest {
         return core;
     }
 
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
-    private static void initialize(UltiTools core) throws Exception {
-        Method method = UltiTools.class.getDeclaredMethod("initLanguage");
-        method.setAccessible(true); // NOPMD - Exercise the existing private startup/full-reload seam.
-        method.invoke(core);
+    private static void initialize(UltiTools core) throws Throwable {
+        MethodHandles.privateLookupIn(UltiTools.class, MethodHandles.lookup())
+                .findVirtual(UltiTools.class, "initializeTextFallback", MethodType.methodType(void.class))
+                .invokeExact(core);
+    }
+
+    private static String renderReloadMessage(TextEngine engine) {
+        return PlainTextComponentSerializer.plainText().serialize(engine.messagesFor(MessageKey.FRAMEWORK_NAMESPACE)
+                .render(Text.of(ManagerKeys.RELOAD_MODULE_DONE, Arg.string("module", "Probe")), engine.fallback()));
     }
 
     private static List<String> info(List<LogRecord> records) {

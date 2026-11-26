@@ -2,10 +2,8 @@ package com.ultikits.ultitools.config.document;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -106,7 +104,6 @@ class EmptySectionRefusalWordingTest {
         lenient().when(plugin.getPluginName()).thenReturn("WordingModule");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
-        lenient().when(plugin.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
         frameworkLogger.addHandler(capture);
     }
 

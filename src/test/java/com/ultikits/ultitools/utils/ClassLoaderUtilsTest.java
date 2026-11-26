@@ -180,9 +180,9 @@ class ClassLoaderUtilsTest {
         @Test
         @DisplayName("成功加载类但不初始化")
         void shouldSuccessfullyLoadClassWithoutInitialization() throws Exception {
-            Class<?> clazz = ClassLoaderUtils.loadClass("com.ultikits.ultitools.entities.Language", false);
+            Class<?> clazz = ClassLoaderUtils.loadClass("com.ultikits.ultitools.entities.Colors", false);
             assertThat(clazz).isNotNull();
-            assertThat(clazz.getName()).isEqualTo("com.ultikits.ultitools.entities.Language");
+            assertThat(clazz.getName()).isEqualTo("com.ultikits.ultitools.entities.Colors");
         }
 
         @Test
@@ -222,7 +222,7 @@ class ClassLoaderUtilsTest {
         void shouldThrowSecurityExceptionForNonPluginUltikitsClass() {
             // UltiTools 不是 UltiToolsPlugin 的子类，应该抛出安全异常
             assertThatThrownBy(() -> 
-                ClassLoaderUtils.loadPluginClass("com.ultikits.ultitools.entities.Language"))
+                ClassLoaderUtils.loadPluginClass("com.ultikits.ultitools.entities.Colors"))
                 .isInstanceOf(SecurityException.class)
                 .hasMessageContaining("not a valid UltiToolsPlugin");
         }
@@ -551,13 +551,13 @@ class ClassLoaderUtilsTest {
                 
                 try {
                     // 配置 mock：第一次调用返回一个类，第二次调用（加载 UltiToolsPlugin）抛出异常
-                    when(mockClassLoader.loadClass("com.ultikits.ultitools.entities.Language"))
+                    when(mockClassLoader.loadClass("com.ultikits.ultitools.entities.Colors"))
                         .thenReturn((Class) Object.class);
                     when(mockClassLoader.loadClass("com.ultikits.ultitools.abstracts.UltiToolsPlugin"))
                         .thenThrow(new ClassNotFoundException("UltiToolsPlugin not found"));
                     
                     assertThatThrownBy(() -> 
-                        ClassLoaderUtils.loadPluginClass("com.ultikits.ultitools.entities.Language"))
+                        ClassLoaderUtils.loadPluginClass("com.ultikits.ultitools.entities.Colors"))
                         .isInstanceOf(SecurityException.class)
                         .hasMessageContaining("Cannot validate plugin class hierarchy");
                 } catch (ClassNotFoundException e) {

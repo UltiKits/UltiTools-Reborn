@@ -1,10 +1,8 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
-import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,7 +46,6 @@ class ConfigUnreadableInitializationTest {
         plugin = Mockito.mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn("UnreadableModule");
         when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
-        when(plugin.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
     }
 

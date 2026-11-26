@@ -9,14 +9,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
-import java.lang.reflect.Field;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -27,11 +21,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
-import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.FrameworkMessagesExtension;
+import com.ultikits.ultitools.manager.ManagerKeys;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.internal.Catalogue;
+import com.ultikits.ultitools.text.internal.CatalogueLoader;
+import java.util.Locale;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.utils.TestHelper;
 
@@ -42,6 +40,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  * reload printed "Module 'X' reloaded." followed by a stack trace.
  */
 @DisplayName("reloadSelf() reports a failed reload as a failure, never as a success (#509)")
+@ExtendWith(FrameworkMessagesExtension.class)
 class UltiToolsPluginReloadFailureTest {
 
     private final List<LogRecord> capturedLogs = new ArrayList<>();
@@ -83,14 +82,9 @@ class UltiToolsPluginReloadFailureTest {
         Logger.getLogger(UltiToolsPlugin.class.getName()).removeHandler(captureHandler);
     }
 
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // same idiom as UltiToolsPluginLifecycleHookTest
-    private FixturePlugin reloadSafePlugin(String name) throws Exception {
+    private FixturePlugin reloadSafePlugin(String name) {
         FixturePlugin plugin = mock(FixturePlugin.class);
         when(plugin.getPluginName()).thenReturn(name);
-        when(plugin.getLogger()).thenReturn(mock(PluginLogger.class));
-        Field resourceFolderPathField = UltiToolsPlugin.class.getDeclaredField("resourceFolderPath");
-        resourceFolderPathField.setAccessible(true);
-        resourceFolderPathField.set(plugin, System.getProperty("java.io.tmpdir"));
         doCallRealMethod().when(plugin).reloadSelf();
         // #529: the framework calls onReload(ReloadReport), whose default body calls onReload().
         doCallRealMethod().when(plugin).onReload(any(ReloadReport.class));
@@ -105,14 +99,6 @@ class UltiToolsPluginReloadFailureTest {
             }
         }
         return result;
-    }
-
-    private static Map<String, String> catalogue(String resource) throws IOException {
-        try (InputStream in = UltiToolsPlugin.class.getResourceAsStream(resource);
-             Reader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
-            return new Gson().fromJson(reader, new TypeToken<Map<String, String>>() {
-            }.getType());
-        }
     }
 
     @Test
@@ -182,13 +168,12 @@ class UltiToolsPluginReloadFailureTest {
 
     @Test
     @DisplayName("the failure line resolves through both shipped catalogues")
-    void failureLineIsTranslatedInBothCatalogues() throws IOException {
-        Map<String, String> en = catalogue("/lang/en.json");
-        Map<String, String> zh = catalogue("/lang/zh.json");
-
-        assertThat(en).containsKey(UltiToolsPlugin.RELOAD_FAILED_LOG_MESSAGE_KEY);
-        assertThat(zh).containsKey(UltiToolsPlugin.RELOAD_FAILED_LOG_MESSAGE_KEY);
-        assertThat(zh.get(UltiToolsPlugin.RELOAD_FAILED_LOG_MESSAGE_KEY))
-                .isNotEqualTo(UltiToolsPlugin.RELOAD_FAILED_LOG_MESSAGE_KEY);
+    void failureLineIsTranslatedInBothCatalogues() {
+        String path = ManagerKeys.RELOAD_MODULE_FAILED.path();
+        Catalogue catalogue = new CatalogueLoader().load(MessageKey.FRAMEWORK_NAMESPACE, Locale.ENGLISH,
+                ManagerKeys.class.getProtectionDomain().getCodeSource().getLocation()).catalogue();
+        assertThat(catalogue.lookup(path, List.of(Locale.ENGLISH))).isPresent();
+        assertThat(catalogue.lookup(path, List.of(Locale.CHINESE))).isPresent()
+                .isNotEqualTo(catalogue.lookup(path, List.of(Locale.ENGLISH)));
     }
 }

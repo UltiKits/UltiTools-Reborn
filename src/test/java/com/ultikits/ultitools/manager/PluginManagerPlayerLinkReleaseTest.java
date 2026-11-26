@@ -2,7 +2,6 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -90,7 +89,6 @@ class PluginManagerPlayerLinkReleaseTest {
     private LinkModule loadModule(String name) {
         LinkModule module = mock(LinkModule.class);
         when(module.getPluginName()).thenReturn(name);
-        lenient().when(module.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(module.getContext()).thenReturn(mock(SimpleContainer.class));
         PluginListSeeding.add(pluginManager, module);
         return module;

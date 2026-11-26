@@ -3,7 +3,6 @@ package com.ultikits.ultitools.utils;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,6 +12,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -24,7 +24,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 
 /**
  * #556: no text the framework shows an operator, a player, the panel or an e-mail reader is a Chinese
@@ -33,8 +32,6 @@ import com.google.gson.JsonParser;
  * Every string literal in {@code src/main/java} holding Han (extensions included), CJK symbols and
  * punctuation or full-width forms must be one of
  * <ol>
- *   <li>the direct first argument of an {@code i18n(...)}, {@code localize(...)} or
- *       {@code FrameworkText.text/format(...)} call, with the key present in {@code en.json};</li>
  *   <li>a named exemption in {@link #EXEMPTIONS}, each with its reason and its exact literal count,
  *       so a new literal in an exempt file still fails;</li>
  *   <li>the whole initializer of a {@code static final String} declared in a nested class named
@@ -51,14 +48,6 @@ import com.google.gson.JsonParser;
 class FrameworkTextCatalogueInvariantTest {
 
     private static final Path MAIN_JAVA = Paths.get("src/main/java");
-    private static final Path LANG = Paths.get("src/main/resources/lang");
-
-    /** Method names that resolve their first argument through the language catalogue. */
-    private static final Set<String> TRANSLATORS = new HashSet<>(Arrays.asList("i18n", "localize"));
-
-    /** The helper class added by #556; its calls are checked against both catalogues. */
-    private static final String HELPER = "FrameworkText";
-
     /** Simple name of a nested class whose {@code static final String} constants are catalogue keys. */
     private static final String HOLDER = "Keys";
 
@@ -107,12 +96,6 @@ class FrameworkTextCatalogueInvariantTest {
         }
     }
 
-    private static JsonObject catalogue(String code) throws IOException {
-        try (Reader reader = Files.newBufferedReader(LANG.resolve(code + ".json"), StandardCharsets.UTF_8)) {
-            return JsonParser.parseReader(reader).getAsJsonObject();
-        }
-    }
-
     /** Every {@code .java} file under {@code src/main/java}, keyed by its path relative to that root. */
     private static Map<String, String> mainSources() throws IOException {
         List<Path> files;
@@ -148,7 +131,7 @@ class FrameworkTextCatalogueInvariantTest {
      * The invariant itself, over any set of sources and catalogues, so the fixtures below exercise the
      * same code path as the real scan.
      *
-     * @return one line per Chinese literal that is neither translated, listed, exempt nor accepted
+     * @return one line per Chinese literal that is neither exempt nor accepted
      */
     static List<String> findViolations(Map<String, String> sources, JsonObject en, JsonObject zh) {
         List<JavaLiteralScanner.Literal> literals = cjkLiterals(sources);
@@ -161,7 +144,7 @@ class FrameworkTextCatalogueInvariantTest {
         Map<String, String> misused = holderMisuses(sources, holderConstants);
         List<String> violations = new ArrayList<>();
         for (JavaLiteralScanner.Literal literal : literals) {
-            if (isTranslated(literal) || exemptionFor(literal) != null) {
+            if (exemptionFor(literal) != null) {
                 continue;
             }
             if (!isHolderConstant(literal)) {
@@ -244,32 +227,6 @@ class FrameworkTextCatalogueInvariantTest {
         return !token.isEmpty() && Character.isJavaIdentifierStart(token.charAt(0));
     }
 
-    private static boolean isTranslated(JavaLiteralScanner.Literal literal) {
-        if (literal.characterLiteral || !literal.wholeArgument || literal.callName == null) {
-            return false;
-        }
-        if (isHelperCall(literal)) {
-            return true;
-        }
-        if (!TRANSLATORS.contains(literal.callName)) {
-            return false;
-        }
-        if ("i18n".equals(literal.callName) && "UltiTools.getInstance()".equals(literal.receiver)) {
-            return true;
-        }
-        // Only these declaring classes own implicit translator calls in the framework today.
-        return literal.receiver == null && (("i18n".equals(literal.callName)
-                && "UltiTools".equals(literal.enclosingType)
-                && "com/ultikits/ultitools/UltiTools.java".equals(literal.file))
-                || ("localize".equals(literal.callName) && "DataStoreManager".equals(literal.enclosingType)
-                && "com/ultikits/ultitools/manager/DataStoreManager.java".equals(literal.file)));
-    }
-
-    private static boolean isHelperCall(JavaLiteralScanner.Literal literal) {
-        return HELPER.equals(literal.receiver)
-                && ("text".equals(literal.callName) || "format".equals(literal.callName));
-    }
-
     private static Exemption exemptionFor(JavaLiteralScanner.Literal literal) {
         for (Exemption exemption : EXEMPTIONS) {
             if (exemption.file.equals(literal.file)) {
@@ -282,13 +239,8 @@ class FrameworkTextCatalogueInvariantTest {
     @Test
     @DisplayName("no Chinese literal in src/main/java bypasses the catalogue")
     void noChineseLiteralBypassesTheCatalogue() throws IOException {
-        List<JavaLiteralScanner.Literal> literals = cjkLiterals();
-        // The /upm migration removed the last literal translator call; T3 removes the API itself.
-        assertThat(literals.stream().filter(FrameworkTextCatalogueInvariantTest::isTranslated).count())
-                .as("no literal translator calls remain in main sources")
-                .isZero();
-
-        List<String> violations = findViolations(mainSources(), catalogue("en"), catalogue("zh"));
+        List<String> violations = findViolations(mainSources(), LegacyTextBaseline.read(Locale.ENGLISH),
+                LegacyTextBaseline.read(Locale.CHINESE));
         assertThat(violations)
                 .as("Chinese string literals that are neither catalogue keys nor named exemptions")
                 .isEmpty();
@@ -300,7 +252,7 @@ class FrameworkTextCatalogueInvariantTest {
         List<JavaLiteralScanner.Literal> literals = cjkLiterals();
         for (Exemption exemption : EXEMPTIONS) {
             long found = literals.stream()
-                    .filter(l -> l.file.equals(exemption.file) && !isTranslated(l))
+                    .filter(l -> l.file.equals(exemption.file))
                     .count();
             assertThat(found).as("untranslated CJK literals in exempt file %s", exemption.file)
                     .isEqualTo(exemption.count);
@@ -309,19 +261,17 @@ class FrameworkTextCatalogueInvariantTest {
     }
 
     @Test
-    void literalTranslatorControlUsesFixtureSource() {
-        List<JavaLiteralScanner.Literal> literals = cjkLiterals(Map.of("Fixture.java", """
+    void sourceFixtureDetectsABareChineseLiteral() {
+        Map<String, String> fixture = Map.of("Fixture.java", """
                 class Fixture {
-                    void example(String x) {
-                        UltiTools.getInstance().i18n("夹具翻译");
-                        FrameworkText.format("夹具格式：%s", x);
+                    void example() {
+                        player.sendMessage("夹具检测：裸文字");
+                        messages.send(player, messages.key("fixture.allowed"));
                     }
                 }
-                """));
-        assertThat(literals).extracting(literal -> literal.value).containsExactly("夹具翻译", "夹具格式：%s");
-        assertThat(literals).allMatch(FrameworkTextCatalogueInvariantTest::isTranslated);
-        assertThat(literals).filteredOn(FrameworkTextCatalogueInvariantTest::isHelperCall)
-                .extracting(literal -> literal.value).containsExactly("夹具格式：%s");
+                """);
+        assertThat(findViolations(fixture, new JsonObject(), new JsonObject()))
+                .containsExactly("Fixture.java:3 \"夹具检测：裸文字\"");
     }
 
     /** Legacy keys predate source-text format specifiers; never rename those public lookup keys. */
@@ -346,7 +296,7 @@ class FrameworkTextCatalogueInvariantTest {
     @Test
     void legacyTranslationsKeepTheirExplicitFormatSignatures() throws IOException {
         for (String code : Arrays.asList("en", "zh")) {
-            JsonObject translations = catalogue(code);
+            JsonObject translations = LegacyTextBaseline.read(Locale.forLanguageTag(code));
             for (Map.Entry<String, List<String>> entry : legacyFormatSignatures().entrySet()) {
                 assertThat(formatSignature(entry.getKey())).as("legacy source key has no placeholders").isEmpty();
                 assertThat(translations.has(entry.getKey())).isTrue();
@@ -494,8 +444,8 @@ class FrameworkTextCatalogueInvariantTest {
     }
 
     @Test
-    @DisplayName("fixture: genuine direct translator calls stay accepted; a raw literal stays a violation")
-    void existingRulesAreUnchanged() {
+    @DisplayName("fixture: legacy translators no longer exempt their literal arguments")
+    void legacyTranslatorCallsDoNotExemptRawText() {
         String source = String.join("\n",
                 "class Plain {",
                 "    void use() {",
@@ -507,7 +457,8 @@ class FrameworkTextCatalogueInvariantTest {
         Map<String, String> sources = new LinkedHashMap<>();
         sources.put("fixture/Plain.java", source);
         assertThat(findViolations(sources, fixtureCatalogue(false), fixtureCatalogue(true)))
-                .containsExactly("fixture/Plain.java:5 \"夹具：原样发给玩家\"");
+                .containsExactly("fixture/Plain.java:3 \"夹具键：直接翻译\"",
+                        "fixture/Plain.java:4 \"夹具键：直接翻译\"", "fixture/Plain.java:5 \"夹具：原样发给玩家\"");
     }
 
     @Test
@@ -537,14 +488,14 @@ class FrameworkTextCatalogueInvariantTest {
         assertThat(plainViolations("other.i18n(\"夹具键：直接翻译\");")).hasSize(1);
         assertThat(plainViolations("other.localize(\"夹具键：直接翻译\");")).hasSize(1);
         assertThat(plainViolations("i18n(\"夹具键：直接翻译\");")).hasSize(1);
-        assertThat(plainViolations("UltiTools.getInstance().i18n(\"夹具键：直接翻译\");")).isEmpty();
+        assertThat(plainViolations("UltiTools.getInstance().i18n(\"夹具键：直接翻译\");")).hasSize(1);
     }
 
     @Test
-    void translatorFirstArgumentMustBeAWholeLiteral() {
+    void legacyHelpersCannotExemptConcatenationsOrCommentedArguments() {
         assertThat(plainViolations("UltiTools.getInstance().i18n(\"夹具键：直接翻译\" + suffix);")).hasSize(1);
         assertThat(plainViolations("FrameworkText.format(\"夹具键：直接翻译\" + suffix, 1);")).hasSize(1);
-        assertThat(plainViolations("FrameworkText.text(\"夹具键：直接翻译\" /* comment */);")).isEmpty();
+        assertThat(plainViolations("FrameworkText.text(\"夹具键：直接翻译\" /* comment */);")).hasSize(1);
     }
 
     private static List<String> plainViolations(String statement) {
@@ -598,7 +549,7 @@ class FrameworkTextCatalogueInvariantTest {
         assertThat(byValue.get("后半").callName).as("the second operand of a concatenation").isNull();
         assertThat(byValue.get("已翻译").callName).isEqualTo("i18n");
         assertThat(byValue.get("格式 %s").callName).isEqualTo("format");
-        assertThat(byValue.get("格式 %s").receiver).isEqualTo(HELPER);
+        assertThat(byValue.get("格式 %s").receiver).isEqualTo("FrameworkText");
         assertThat(JavaLiteralScanner.containsCjkOrFullWidth("Install Command：")).isTrue();
         assertThat(JavaLiteralScanner.containsCjkOrFullWidth("plain ascii")).isFalse();
     }

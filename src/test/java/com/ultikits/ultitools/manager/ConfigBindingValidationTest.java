@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -1310,7 +1309,6 @@ class ConfigBindingValidationTest {
             InterceptedBoundInheritor proxy = proxyOf(InterceptedBoundInheritor.class);
             Method mapping = assertStoredMappingIsAProxyOverride(proxy);
             PluginManager.validateConfigBindings(module, containerWith(proxy));
-            when(UltiTools.getInstance().i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
             UUID playerId = UUID.fromString("00000000-0000-0000-0000-000000000036");
             Player player = mock(Player.class);
             lenient().when(player.getUniqueId()).thenReturn(playerId);
