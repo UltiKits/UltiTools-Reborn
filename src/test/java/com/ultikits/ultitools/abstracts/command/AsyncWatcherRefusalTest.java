@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -22,7 +21,6 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import java.util.concurrent.RejectedExecutionException;
-import org.bukkit.plugin.Plugin;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import java.time.Duration;
 import org.junit.jupiter.api.AfterEach;
@@ -109,7 +107,6 @@ class AsyncWatcherRefusalTest {
     @BeforeEach
     void setUp() {
         UltiTools ultiTools = mock(UltiTools.class);
-        lenient().when(ultiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(ultiTools);
         bukkitMock = mockStatic(Bukkit.class);

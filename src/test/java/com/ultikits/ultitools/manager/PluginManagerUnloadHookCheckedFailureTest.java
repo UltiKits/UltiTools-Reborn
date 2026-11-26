@@ -287,7 +287,6 @@ class PluginManagerUnloadHookCheckedFailureTest {
         LoadedModule loaded = new LoadedModule();
         HookModule module = mock(HookModule.class);
         when(module.getPluginName()).thenReturn(MODULE_NAME);
-        when(module.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
         SimpleContainer context = mock(SimpleContainer.class);
         when(module.getContext()).thenReturn(context);
         HookModuleListener listener = new HookModuleListener();

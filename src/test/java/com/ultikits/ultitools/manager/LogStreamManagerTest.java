@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
@@ -49,7 +48,6 @@ class LogStreamManagerTest {
         Logger logger = mock(Logger.class);
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(ultiTools -> {
             lenient().when(ultiTools.getLogger()).thenReturn(logger);
-            lenient().when(ultiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         });
         resetSingleton();
         logStreamManager = LogStreamManager.getInstance();

@@ -297,22 +297,13 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   重载也会重读磁盘上框架 JAR 内的目录，运行中替换或只拷贝了一部分可能导致框架消息在重启前异常，请先停服再替换 JAR。
 - **Migration:** 6.x language files, sentence keys, custom language names and operator edits
   are not automatically converted to the new catalogues. Re-create the required overrides
-  with dotted keys and MiniMessage syntax. The old `i18n` path remains temporarily while its
-  callers migrate; its eventual removal is a separate change, not part of this engine addition.
-  During coexistence, the legacy path still loads custom files as before. New `Messages` use the
-  official prefix of a custom configured name (`zh-myserver` → `zh`, unmatched safe names → `en`)
-  without treating that custom file as a new catalogue or adding an invalid-locale warning.
-- **Legacy language directory notice:** On startup, 7.0 logs one console notice if it finds a
-  leftover `lang/` directly under the framework data directory or an immediate module directory
-  under `pluginConfig`. It lists up to 20 paths and reports only a count for the rest. It follows
-  symlinks for the data directory and `pluginConfig` themselves, but skips symlinked module and
-  `lang` entries and does not scan recursively. It does not rename or delete directories, read legacy
-  translations, or run on `/ul reload`.
+  with dotted keys and MiniMessage syntax; see [Legacy text system removed](#legacy-text-system-removed-as-of-700).
 - **Module annotation text:** `@ConfigEntry(comment = "{path}")`, `@CmdExecutor(description = …)`,
   and `@CmdParam(suggest = …)` without a matching provider method look up names only if they match
   `[a-z0-9_-]+(\.[a-z0-9_-]+)*` and are at most 128 characters. A matching key in the server fallback
   language or the module's source language renders as plain text. Other spellings and missing keys
-  stay literal: comments keep their token and warn once per field; descriptions and hints keep their
+  stay literal: comments keep their token and warn once per field per configuration load (at startup and on
+  each reload); descriptions and hints keep their
   original text. A single lowercase word such as `amount` is also a valid path and resolves if the
   module has a top-level message with that name. Use a full sentence for literal descriptions and
   hints, or an explicit dotted key for translations.
@@ -340,7 +331,7 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 时区在启动和配置重载时解析，玩家语言每次投递时读取。
 模块的注释令牌、命令描述及无对应方法的补全提示，只有名称符合 `[a-z0-9_-]+(\.[a-z0-9_-]+)*`
 且最多 128 个字符，才会按服务器后备语言、再按模块源语言查找模块 `messages/` 中的纯文本。
-不符合规则或找不到键时，描述和提示照原文显示，注释保留令牌并按字段告警一次。
+不符合规则或找不到键时，描述和提示照原文显示，注释保留令牌；每次加载配置（启动以及每次重载）时，每个字段最多告警一次。
 `amount` 之类的单个小写词也是合法路径；若与目录中的顶层消息同名，就会被解析。
 不需要翻译的描述和提示建议写成完整句子，需要翻译时用带点的键。
 6.x 的令牌译文须搬到 `messages/<locale>.yml`；若措辞有变，须把 6.x 的旧文字列入
@@ -355,14 +346,82 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 翻译顺序为请求语言、后备语言、模块源语言、键本身；参数仍按请求语言格式化。服主只改上级覆盖
 文件，`reference/` 是框架每次启动重写的只读参考；`/ul reload <模块>` 重载该模块的覆盖，完整的 `/ul reload` 同时重读框架覆盖。6.x 的语言
 文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。
-并存期间旧路径照旧读取自定义文件；新 `Messages` 将自定义配置名按旧官方前缀归到基础语言
-（`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不读取该旧文件，也不新增非法 locale 警告。
-7.0 启动时只检查框架数据目录直属的 `lang/`，以及 `pluginConfig` 下各直接模块目录里的 `lang/`。
-若发现遗留目录，控制台只提示一行，最多列出 20 个路径，其余只报数量。框架数据目录和 `pluginConfig` 本身可以是符号链接，
-但扫描遇到的模块目录或 `lang` 条目若是符号链接则跳过，且不会递归扫描。提示不会给目录改名、删除目录或读取旧译文；`/ul reload` 不会触发提示。
+旧接口和文件的替换方式见下方「[7.0 移除旧文本体系](#legacy-text-system-removed-as-of-700)」。
 语言标量键和值一律按文字读取（`yes`、`No`、`123`、`null`、`~` 不做 YAML 类型转换），列表与非标量键
 拒绝并告警，嵌套映射仍用于点分键分组。仅读取 `.yml`，`.yaml` 会告警；文件必须为 UTF-8，允许 BOM。
 只带 `zh_CN.yml` 等地区文件却没有 `zh.yml` 时会提示补基础语言文件，不把地区变体回退规则改成模糊匹配。
+
+## Legacy text system removed (as of 7.0.0)
+
+7.0 has one text system: `Messages`, with dotted keys and MiniMessage values. It removes the
+legacy `Language`, `Localized`, `MessageUtils`, `FrameworkText`, `OfficialLanguageFiles`, and
+`@I18n` types, as well as the `i18n` attribute of `@UltiToolsModule`. The framework no longer
+implements `Localized`. Remove overrides of `Localized#supported()` when rebuilding a module.
+
+The removed entry points are `UltiToolsPlugin#i18n(String)`, `UltiToolsPlugin#i18n(String, String)`,
+`UltiToolsPlugin#getLanguageCode()`, `UltiToolsPlugin#getConfiguredLanguage()`,
+`UltiToolsPlugin#getLanguage()`, `UltiToolsPlugin#overrideLostPlaceholders(...)`,
+`UltiToolsPlugin#supported()` (inherited from `Localized`),
+`UltiToolsPlugin#commitLanguageProvenance()` (internal; renamed to `publishMessageCatalogue()`),
+`UltiTools#i18n(String)`, `UltiTools#i18n(String, String)` (inherited from `Localized`),
+`UltiTools#getLanguage()`, and `UltiTools#supported()`. Module code that calls
+`UltiToolsPlugin#supported()` no longer compiles against 7.0.
+
+| 6.x | 7.0 |
+| --- | --- |
+| `i18n("original sentence")` | Inject `Messages` and call `messages.send(sender, messages.key("a.b"), args…)`. |
+| `String.format(i18n(k), x)` | Put a named tag such as `<name>` in the catalogue and pass `Arg.string("name", x)` (or `Arg.number` for a number). |
+| `getLanguageCode()` | Inject `LocaleResolver`; call `fallback()` for the server's fallback `Locale`. Use `Messages` directly for per-recipient text. |
+| Override `supported()` or declare `@I18n` / `@UltiToolsModule(i18n = …)` | Remove the override or declaration and ship `messages/<locale>.yml`. |
+| `lang/<code>.json`, `.yml`, or `.yaml` | Ship `messages/<code>.yml` with dotted keys instead of sentence keys. |
+| `MessageUtils.sendMessage(...)` | `Messages.send(...)` (use `Text.literal(component)` for an already built Adventure component). |
+| Text for `@ConfigEntry(comment = "{k}")` | Put `k` in the module's `messages/<locale>.yml`; see **Module annotation text** in the section above for keys and `previousComments`. |
+
+For example, move the translated template out of the Java call site. `recipient` below is a
+player or another Adventure `Audience`.
+
+```java
+// Before (6.x, in the module)
+void greet(Player recipient, String name) {
+    recipient.sendMessage(String.format(i18n("Welcome, %s!"), name));
+}
+
+// After (7.0, in a managed module component)
+@Autowired
+private Messages messages;
+
+void greet(Player recipient, String name) {
+    messages.send(recipient, messages.key("greeting.welcome"), Arg.string("name", name));
+}
+```
+
+```yaml
+# messages/en.yml
+# Supply the same key in messages/zh.yml with a Chinese value.
+greeting.welcome: "Welcome, <name>!"
+```
+
+Module JARs no longer load or extract `lang/` resources, and the framework no longer ships its
+own `lang/` catalogue. At startup, 7.0 checks only `plugins/UltiTools/lang/` and the `lang/`
+folder directly inside each module directory under `plugins/UltiTools/pluginConfig/`. If it
+finds any, it logs one INFO line with up to 20 paths and only a count for the rest. It does not
+recurse or follow symlinked module directories or `lang` entries; the framework data directory
+and `pluginConfig` may themselves be symlinks. The check does not run on `/ul reload`. It does
+not read, modify, rename, or delete any legacy files or change the directories. Move any
+translations you changed to the new override files manually; there is no automatic import.
+A configured custom name such as `zh-myserver` still selects its official base (`zh`), and an
+unmatched safe name selects `en`, without reading the old file or adding an invalid-locale warning.
+
+中文补充：7.0 移除上述旧类、注解和方法。模块须删掉 `supported()` 的覆盖；调用从 `Localized` 继承的
+`UltiToolsPlugin#supported()` 也无法通过编译。`UltiTools#i18n(String, String)` 同样是从 `Localized`
+继承的，现已移除。内部方法 `UltiToolsPlugin#commitLanguageProvenance()` 更名为 `publishMessageCatalogue()`。
+模块须改为注入 `Messages`，用点分键和 MiniMessage 编写 `messages/<locale>.yml`，格式参数使用
+`Arg.string` 或 `Arg.number`。
+需要服务器后备语言时注入 `LocaleResolver` 并调用 `fallback()`；注释令牌按上一节的约定迁移。
+7.0 启动时只检查 `plugins/UltiTools/lang/`，以及 `plugins/UltiTools/pluginConfig/` 下各直接模块目录里的 `lang/`。
+若发现遗留目录，控制台只记录一行 INFO，最多列出 20 个路径，其余只报数量。检查不递归，也不跟随遇到的模块目录或 `lang` 符号链接；
+框架数据目录与 `pluginConfig` 本身可以是符号链接。`/ul reload` 不触发此检查。框架不读取、修改、重命名或删除旧文件，也不改动这些目录。
+服主改过的翻译需手动搬到新覆盖文件，不会自动导入。`zh-myserver` 仍按 `zh` 选择基础语言，无匹配前缀的安全名称用 `en`。
 
 ## UI storage waits at shutdown (as of 7.0.0)
 
@@ -956,7 +1015,8 @@ When an accepted module still declares languages without matching resources in i
 loading logs one WARN per module instance naming all missing codes. Both declarations are checked
 and duplicate codes appear once. Complete or empty declarations produce no extra deprecation log.
 On-disk custom files and `supported()` overrides do not satisfy this packaged-resource check;
-existing `supported()` overrides and language selection remain unchanged.
+existing `supported()` overrides and language selection remain unchanged in 6.5.0.
+Both declarations were removed in 7.0.0; see [Legacy text system removed](#legacy-text-system-removed-as-of-700).
 
 ## Player cache save declarations (as of 6.5.0)
 

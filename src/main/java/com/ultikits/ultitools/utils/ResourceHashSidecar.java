@@ -25,20 +25,18 @@ import com.google.gson.JsonParseException;
 import com.google.gson.reflect.TypeToken;
 
 /**
- * Records the SHA-256 digest of every resource file {@link
- * com.ultikits.ultitools.abstracts.UltiToolsPlugin#saveResources(boolean)} extracts, so a later boot can
- * distinguish "the operator edited this file" from "an old jar extracted this and nobody has
- * touched it since" (#441, D-05/D-06/D-07).
+ * Records SHA-256 digests for resources extracted during {@link
+ * com.ultikits.ultitools.abstracts.UltiToolsPlugin#UltiToolsPlugin() module construction} through
+ * {@code saveResources()}. A later boot can distinguish "the operator edited this file" from
+ * "an old jar extracted this and nobody has touched it since" (#441, D-05/D-06/D-07).
  * <p>
  * The digest is deliberately computed over a file's raw bytes, never over decoded text: an
  * encoding-preserving rewrite of the same logical content must read as a difference, and a
  * byte-identical copy must not.
  * <p>
  * The sidecar file is named {@value #SIDECAR_FILE_NAME}. It lives directly under the module's
- * resource folder root -- never under {@code lang/}, {@code res/} or {@code config/} -- and its
- * name is dot-prefixed and starts with none of those three strings, so it can never collide with a
- * real extracted resource: {@code saveResources(boolean)} only ever extracts jar entries whose name
- * starts with {@code "res"}, {@code "lang"} or {@code "config"}.
+ * resource folder root. Its dot-prefixed name cannot collide with an extracted resource:
+ * {@code saveResources()} selects jar entries whose names start with {@code "res"} or {@code "config"}.
  * <p>
  * A missing or unparsable sidecar degrades to "no record" rather than throwing (T-16-04-03): an
  * operator who can edit the sidecar can already edit the files it describes, so treating a corrupt
@@ -73,7 +71,7 @@ public final class ResourceHashSidecar {
      * Files#readAllBytes} -- the previous implementation allocated a byte array as large as the
      * entire file, so a sufficiently large bundled resource (a module's web dashboard assets,
      * audio, etc.) could exhaust the server heap and abort module initialization, even though the
-     * extraction path that produced the file ({@code saveResources(boolean)}) already streams with a
+     * extraction path that produced the file ({@code saveResources()}) already streams with a
      * fixed-size buffer. Streaming here keeps peak memory bounded regardless of file size.
      *
      * @param file the file to hash; must exist and be readable
@@ -125,7 +123,7 @@ public final class ResourceHashSidecar {
     }
 
     /**
-     * Returns the digest previously recorded for {@code resourcePath} (e.g. {@code "lang/en.json"})
+     * Returns the digest previously recorded for {@code resourcePath} (e.g. {@code "res/defaults.json"})
      * under {@code resourceFolder}, or {@link Optional#empty()} when there is no record --
      * including when the sidecar file itself is absent or cannot be parsed.
      *
@@ -164,7 +162,7 @@ public final class ResourceHashSidecar {
     /**
      * Records every {@code resourcePath -> hash} pair in {@code newEntries} in ONE
      * read-modify-write cycle, instead of the one-cycle-per-entry cost calling {@link #record}
-     * once per entry in a loop would pay (Codex round 4, P2): {@code saveResources(boolean)} extracts
+     * once per entry in a loop would pay (Codex round 4, P2): {@code saveResources()} extracts
      * every jar entry across a single pass, so collecting that pass's hashes and persisting them
      * together avoids parsing and atomically rewriting an increasingly large sidecar once per
      * extracted file -- quadratic for a module bundling many resources (e.g. thousands of web

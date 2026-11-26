@@ -5,7 +5,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -110,7 +109,6 @@ class NestedCommandCurrentUserTest {
     @BeforeEach
     void setUp() {
         UltiTools ultiTools = mock(UltiTools.class);
-        lenient().when(ultiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(ultiTools);
         bukkitMock = mockStatic(Bukkit.class);

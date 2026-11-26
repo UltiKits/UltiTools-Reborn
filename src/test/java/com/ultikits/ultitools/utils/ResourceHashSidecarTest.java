@@ -10,8 +10,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
@@ -438,19 +438,20 @@ class ResourceHashSidecarTest {
     }
 
     @Test
-    @DisplayName("saveResources() records a hash for every file it extracts under all three prefixes, "
+    @DisplayName("saveResources() records a hash for every file it extracts under both supported prefixes, "
             + "and none for a file it skipped")
-    void saveResourcesRecordsHashForEveryExtractedFileAcrossAllThreePrefixesAndSkipsAlreadyPresentFiles()
+    void saveResourcesRecordsHashForEveryExtractedFileAcrossBothSupportedPrefixesAndSkipsAlreadyPresentFiles()
             throws Throwable {
         Map<String, byte[]> entries = new LinkedHashMap<>();
         entries.put("lang/en.json", "{\"greeting\":\"Hi\"}".getBytes(StandardCharsets.UTF_8));
+        entries.put("res/art.png", "bundled-png-bytes".getBytes(StandardCharsets.UTF_8));
         entries.put("res/icon.png", "fake-png-bytes".getBytes(StandardCharsets.UTF_8));
         entries.put("config/default.yml", "enabled: true\n".getBytes(StandardCharsets.UTF_8));
         File jar = buildFixtureJar("fixture-full.jar", entries);
 
         File resourceFolder = new File(tempDir, "resource-folder-1");
         Files.createDirectories(resourceFolder.toPath());
-        // Pre-existing file under one of the three prefixes: saveResources() must skip it (leave
+        // Pre-existing file under one of the supported prefixes: saveResources() must skip it (leave
         // its bytes untouched) and must not write a record for it.
         File preExisting = new File(resourceFolder, "res" + File.separator + "icon.png");
         Files.createDirectories(preExisting.getParentFile().toPath());
@@ -466,11 +467,14 @@ class ResourceHashSidecarTest {
 
             File extractedLang = new File(resourceFolder, "lang" + File.separator + "en.json");
             File extractedConfig = new File(resourceFolder, "config" + File.separator + "default.yml");
-            assertThat(extractedLang).isFile();
+            File art = new File(resourceFolder, "res" + File.separator + "art.png");
+            assertThat(extractedLang).doesNotExist();
+            assertThat(art).isFile();
             assertThat(extractedConfig).isFile();
 
-            assertThat(ResourceHashSidecar.readRecordedHash(resourceFolder, "lang/en.json"))
-                    .contains(ResourceHashSidecar.sha256(extractedLang));
+            assertThat(ResourceHashSidecar.readRecordedHash(resourceFolder, "lang/en.json")).isEmpty();
+            assertThat(ResourceHashSidecar.readRecordedHash(resourceFolder, "res/art.png"))
+                    .contains(ResourceHashSidecar.sha256(art));
             assertThat(ResourceHashSidecar.readRecordedHash(resourceFolder, "config/default.yml"))
                     .contains(ResourceHashSidecar.sha256(extractedConfig));
 
@@ -501,8 +505,8 @@ class ResourceHashSidecarTest {
 
         char nul = (char) 0;
         Map<String, byte[]> entries = new LinkedHashMap<>();
-        entries.put("lang/en.json", "{\"greeting\":\"Hi\"}".getBytes(StandardCharsets.UTF_8));
-        entries.put("lang/bad" + nul + "name.json", "{}".getBytes(StandardCharsets.UTF_8));
+        entries.put("res/first.json", "{\"greeting\":\"Hi\"}".getBytes(StandardCharsets.UTF_8));
+        entries.put("res/bad" + nul + "name.json", "{}".getBytes(StandardCharsets.UTF_8));
         File jar = buildFixtureJar("fixture-abort.jar", entries);
 
         File resourceFolder = new File(tempDir, "resource-folder-abort");
@@ -517,10 +521,10 @@ class ResourceHashSidecarTest {
 
             // The first entry extracted fine, BEFORE the second entry's canonical-path resolution
             // threw and aborted the loop -- its hash must still be persisted, not discarded.
-            File extractedLang = new File(resourceFolder, "lang" + File.separator + "en.json");
-            assertThat(extractedLang).isFile();
-            assertThat(ResourceHashSidecar.readRecordedHash(resourceFolder, "lang/en.json"))
-                    .contains(ResourceHashSidecar.sha256(extractedLang));
+            File extracted = new File(resourceFolder, "res" + File.separator + "first.json");
+            assertThat(extracted).isFile();
+            assertThat(ResourceHashSidecar.readRecordedHash(resourceFolder, "res/first.json"))
+                    .contains(ResourceHashSidecar.sha256(extracted));
         }
     }
 
@@ -609,20 +613,9 @@ class ResourceHashSidecarTest {
         field.set(plugin, path);
     }
 
-    /**
-     * Runs both halves of the extraction, as a construction ({@code config/}, {@code res/}) followed by the commit
-     * step ({@code lang/}) does. #567 item 1 (contract-batching decision of 2026-10-06) split {@code saveResources()}
-     * into {@code saveResources(boolean)}; each half records the hashes of the files it extracts exactly as the
-     * single pass did.
-     */
     private static void invokeSaveResources(Object plugin) throws Throwable {
-        Method method = UltiToolsPlugin.class.getDeclaredMethod("saveResources", boolean.class);
-        method.setAccessible(true);
-        try {
-            method.invoke(plugin, false);
-            method.invoke(plugin, true);
-        } catch (InvocationTargetException e) {
-            throw e.getCause();
-        }
+        MethodHandles.privateLookupIn(UltiToolsPlugin.class, MethodHandles.lookup())
+                .findVirtual(UltiToolsPlugin.class, "saveResources", MethodType.methodType(void.class))
+                .invokeExact((UltiToolsPlugin) plugin);
     }
 }

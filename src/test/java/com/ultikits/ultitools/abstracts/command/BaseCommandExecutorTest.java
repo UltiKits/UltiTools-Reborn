@@ -86,7 +86,6 @@ class BaseCommandExecutorTest {
     void setUp() {
         ultiToolsMock = mockStatic(UltiTools.class);
         ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-        lenient().when(mockUltiTools.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(mockCommand.getName()).thenReturn("test");
     }
 

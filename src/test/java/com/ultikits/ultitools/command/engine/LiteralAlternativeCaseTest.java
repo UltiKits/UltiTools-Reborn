@@ -54,7 +54,6 @@ class LiteralAlternativeCaseTest {
         bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
         ulti = mockStatic(UltiTools.class);
         var plugin = mock(UltiTools.class);
-        when(plugin.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
         ulti.when(UltiTools::getInstance).thenReturn(plugin);
         executor = new Fixture();
         dispatcher = CommandTestSupport.dispatcher(executor, "test");

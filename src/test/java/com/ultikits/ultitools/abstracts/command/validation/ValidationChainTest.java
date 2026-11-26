@@ -59,7 +59,6 @@ class ValidationChainTest {
     void setUp() {
         mockedUltiTools = mockStatic(UltiTools.class);
         mockedUltiTools.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-        lenient().when(mockUltiTools.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(mockCommand.getName()).thenReturn("test");
         
         playerContext = CommandContext.builder()

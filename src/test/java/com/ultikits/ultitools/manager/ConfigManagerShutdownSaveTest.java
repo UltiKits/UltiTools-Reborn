@@ -2,8 +2,6 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assumptions.assumeThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -73,7 +71,6 @@ class ConfigManagerShutdownSaveTest {
         plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn("ShutdownSaveTestModule");
         when(plugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
-        when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         ConfigFileStubs.stubConfigFolder(plugin, tempDir);
 
         configManager = new ConfigManager();

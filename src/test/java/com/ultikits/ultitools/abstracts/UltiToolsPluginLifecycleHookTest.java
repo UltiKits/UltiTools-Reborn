@@ -15,16 +15,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -37,11 +31,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
-import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.FrameworkMessagesExtension;
+import com.ultikits.ultitools.manager.ManagerKeys;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.internal.Catalogue;
+import com.ultikits.ultitools.text.internal.CatalogueLoader;
+import java.util.Locale;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.ultikits.ultitools.manager.ListenerManager;
 import com.ultikits.ultitools.utils.TestHelper;
 
@@ -54,8 +52,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  * overrides never reached the framework's own reload steps -- measured in {@code 16-INTAKE.md} --
  * because both methods were plain non-final override points, not template methods.
  * <p>
- * Follows the mock-and-reflect idiom proven by {@code UltiToolsPluginLanguageFallbackTest} and
- * {@code ConditionalRegistrationEvaluatorDriftTest}: {@code mock(FixturePlugin.class)} bypasses
+ * {@code mock(FixturePlugin.class)} bypasses
  * the constructor (Objenesis, via Mockito's inline mock maker), {@code doCallRealMethod()} runs
  * the REAL {@code unregisterSelf()}/{@code reloadSelf()} body under test, and {@link
  * TestHelper#mockUltiToolsInstance} substitutes mock managers for the static {@code
@@ -64,6 +61,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  * @since 6.3.0
  */
 @DisplayName("UltiToolsPlugin lifecycle hook contract (D-01/D-02/D-03, #419/#455)")
+@ExtendWith(FrameworkMessagesExtension.class)
 class UltiToolsPluginLifecycleHookTest {
 
     private CommandManager mockCommandManager;
@@ -147,51 +145,14 @@ class UltiToolsPluginLifecycleHookTest {
         Logger.getLogger(UltiToolsPlugin.class.getName()).removeHandler(captureHandler);
     }
 
-    /**
-     * A bare {@code mock(fixtureClass)} wired for a safe {@code reloadSelf()} call: the private
-     * {@code resourceFolderPath} field is set (via reflection, mirroring
-     * {@code UltiToolsPluginLanguageFallbackTest}/{@code ConditionalRegistrationEvaluatorDriftTest})
-     * to a directory with no {@code lang/} files, and {@code getLogger()} is stubbed to a mock
-     * {@code PluginLogger} so the "no loadable language file" warning path cannot NPE against an
-     * unstubbed {@code UltiTools.getInstance().getLogger()}.
-     */
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // mirrors the proven idiom from
-    // UltiToolsPluginLanguageFallbackTest / ConditionalRegistrationEvaluatorDriftTest
-    private <T extends UltiToolsPlugin> T reloadSafePlugin(Class<T> fixtureClass, String pluginName) throws Exception {
+    private <T extends UltiToolsPlugin> T reloadSafePlugin(Class<T> fixtureClass, String pluginName) {
         T plugin = mock(fixtureClass);
         when(plugin.getPluginName()).thenReturn(pluginName);
-        when(plugin.getLogger()).thenReturn(mock(PluginLogger.class));
-        Field resourceFolderPathField = UltiToolsPlugin.class.getDeclaredField("resourceFolderPath");
-        resourceFolderPathField.setAccessible(true);
-        resourceFolderPathField.set(plugin, System.getProperty("java.io.tmpdir"));
         // #529: the framework calls onReload(ReloadReport), whose default body calls onReload();
         // on a mock that default must run for this suite's onReload() assertions to hold.
         doCallRealMethod().when(plugin).onReload(any(ReloadReport.class));
         return plugin;
     }
-
-    /** Reads a classpath resource (the packaged {@code lang/*.json} catalogues) as UTF-8 text. */
-    private static String readClasspathResource(String resourcePath) throws IOException {
-        try (InputStream in = UltiToolsPlugin.class.getResourceAsStream(resourcePath)) {
-            assertThat(in).as("classpath resource must exist: " + resourcePath).isNotNull();
-            try (Reader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
-                StringBuilder sb = new StringBuilder();
-                char[] buffer = new char[4096];
-                int read;
-                while ((read = reader.read(buffer)) != -1) {
-                    sb.append(buffer, 0, read);
-                }
-                return sb.toString();
-            }
-        }
-    }
-
-    private static Map<String, String> parseJsonMap(String json) {
-        return new Gson().fromJson(json, new TypeToken<Map<String, String>>() {
-        }.getType());
-    }
-
-    // ==================== Task 1: unregisterSelf() / onUnregister() (D-01/D-02) ====================
 
     @Test
     @DisplayName("unregisterSelf() is declared final -- deleting the keyword must turn this test red")
@@ -338,21 +299,13 @@ class UltiToolsPluginLifecycleHookTest {
 
     @Test
     @DisplayName("the reload log message key resolves through both shipped language catalogues, not a raw key leak")
-    void reloadLogMessageKeyResolvesThroughBothShippedCatalogues() throws IOException {
-        Map<String, String> enCatalogue = parseJsonMap(readClasspathResource("/lang/en.json"));
-        Map<String, String> zhCatalogue = parseJsonMap(readClasspathResource("/lang/zh.json"));
-
-        assertThat(enCatalogue)
-                .as("lang/en.json must carry an entry for the framework's reload-log message key")
-                .containsKey(UltiToolsPlugin.RELOAD_LOG_MESSAGE_KEY);
-        assertThat(zhCatalogue)
-                .as("lang/zh.json must carry an entry for the framework's reload-log message key")
-                .containsKey(UltiToolsPlugin.RELOAD_LOG_MESSAGE_KEY);
-        assertThat(zhCatalogue.get(UltiToolsPlugin.RELOAD_LOG_MESSAGE_KEY))
-                .as("zh.json's value must be a real Chinese-language translation, not merely "
-                        + "identical to the (English) key -- equal values here would mean a "
-                        + "Chinese-locale server sees the raw English key text leak through")
-                .isNotEqualTo(UltiToolsPlugin.RELOAD_LOG_MESSAGE_KEY);
+    void reloadLogMessageKeyResolvesThroughBothShippedCatalogues() {
+        String path = ManagerKeys.RELOAD_MODULE_DONE.path();
+        Catalogue catalogue = new CatalogueLoader().load(MessageKey.FRAMEWORK_NAMESPACE, Locale.ENGLISH,
+                ManagerKeys.class.getProtectionDomain().getCodeSource().getLocation()).catalogue();
+        assertThat(catalogue.lookup(path, List.of(Locale.ENGLISH))).isPresent();
+        assertThat(catalogue.lookup(path, List.of(Locale.CHINESE))).isPresent()
+                .isNotEqualTo(catalogue.lookup(path, List.of(Locale.ENGLISH)));
     }
 
     // ==================== Task 3: exception isolation (WR-01, 16-REVIEW-lifecycle.md) ====================

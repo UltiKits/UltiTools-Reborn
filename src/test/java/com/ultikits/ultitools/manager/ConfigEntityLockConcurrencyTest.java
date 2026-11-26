@@ -1,7 +1,6 @@
 package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -90,7 +89,6 @@ class ConfigEntityLockConcurrencyTest {
         plugin = mock(UltiToolsPlugin.class);
         when(plugin.getPluginName()).thenReturn("LockTestModule");
         when(plugin.getResourceFolderPath()).thenReturn(tempDir.getAbsolutePath());
-        when(plugin.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         ConfigFileStubs.stubConfigFolder(plugin, tempDir);
         configManager = new ConfigManager();
         NEXT_CONSTRUCTION.set(null);

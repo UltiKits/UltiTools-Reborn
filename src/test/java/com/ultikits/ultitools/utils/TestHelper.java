@@ -47,9 +47,6 @@ public class TestHelper {
 
             // ---- 以下全部发生在 mock 被发布之前，此时没有任何别的线程能拿到它 ----
 
-            // Mock i18n(String)
-            Mockito.lenient().when(mock.i18n(Mockito.anyString())).thenAnswer(invocation -> invocation.getArgument(0));
-
             // Mock getServer()
             Mockito.lenient().when(mock.getServer()).thenAnswer(invocation -> org.bukkit.Bukkit.getServer());
 

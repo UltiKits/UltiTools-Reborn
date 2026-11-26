@@ -3,7 +3,7 @@ package com.ultikits.ultitools.text.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.ultikits.ultitools.utils.LegacyTextBaseline;
 import com.ultikits.ultitools.UltiToolsKeys;
 import com.ultikits.ultitools.manager.ManagerKeys;
 import com.ultikits.ultitools.handler.HandlerKeys;
@@ -16,8 +16,6 @@ import com.ultikits.ultitools.text.FixedLocaleResolver;
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Text;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -296,7 +294,7 @@ class FrameworkCatalogueParityTest {
     @ParameterizedTest(name = "{0}: {1}")
     @MethodSource("translations")
     void everyNewKey_preservesLegacyTextAndColours(Locale locale, Row row) throws IOException {
-        JsonObject legacy = readLegacy(locale);
+        JsonObject legacy = LegacyTextBaseline.read(locale);
         String template = row.legacyKey() == null ? row.hardCodedEnglish()
                 : legacy.has(row.legacyKey()) ? legacy.get(row.legacyKey()).getAsString() : row.legacyKey();
         Object[] samples = row.args().stream().map(FrameworkCatalogueParityTest::sample).toArray();
@@ -351,11 +349,6 @@ class FrameworkCatalogueParityTest {
                 .flatMap(locale -> ROWS.stream().map(row -> Arguments.of(locale, row)));
     }
 
-    private static JsonObject readLegacy(Locale locale) throws IOException {
-        try (var reader = Files.newBufferedReader(Path.of("src/main/resources/lang", locale.getLanguage() + ".json"))) {
-            return JsonParser.parseReader(reader).getAsJsonObject();
-        }
-    }
 
     private static Object sample(Arg arg) {
         return switch (arg) {

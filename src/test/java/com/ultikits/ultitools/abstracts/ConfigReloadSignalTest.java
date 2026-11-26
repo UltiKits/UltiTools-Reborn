@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -32,12 +33,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
@@ -270,9 +273,12 @@ class ConfigReloadSignalTest {
             manager.register(module, config);
             put("limit: [broken\n");
 
-            assertThatThrownBy(module::reloadWithReport)
-                    .isInstanceOf(ConfigurationException.class)
-                    .hasMessageContaining(PATH);
+            try (var catalogue = new CommandMessageTestSupport("en");
+                 var scope = FrameworkMessages.overrideForTests(catalogue.messages(), Locale.ENGLISH)) {
+                assertThatThrownBy(module::reloadWithReport)
+                        .isInstanceOf(ConfigurationException.class)
+                        .hasMessageContaining(PATH);
+            }
 
             assertThat(logs).filteredOn(record -> record.getLevel() == Level.INFO).isEmpty();
             assertThat(logs).filteredOn(record -> record.getLevel() == Level.SEVERE).hasSize(1)

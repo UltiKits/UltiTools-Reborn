@@ -125,6 +125,7 @@ class UltiCloudUatRowsTest {
             "ultitools.config.panel-roundtrip-server",
             "ultitools.config.panel-map-entry-server",
             "ultitools.language.framework-text",
+            "ultitools.language.scaffold-no-legacy-files",
             "ultitools.capability.commands",
             "ultitools.capability.commands.neg-disabled",
             "ultitools.capability.file-delete",
@@ -180,17 +181,13 @@ class UltiCloudUatRowsTest {
             "ultitools.cloud.error-report.same-shape-two-modules",
             "ultitools.cloud.error-report.jar-path-with-space",
             "ultitools.cloud.error-report.truncated-message",
-            "ultitools.i18n.declared-missing.warns-once",
-            "ultitools.i18n.declared-missing.alias-merged",
-            "ultitools.i18n.declared-missing.disk-copy-does-not-mask",
-            "ultitools.i18n.complete-declaration.silent",
             "ultitools.cloud.command.blocklist-alias-namespaced",
             "ultitools.cloud.command.console-only-execute-run",
             "ultitools.cloud.player-action.teleport-once",
             "ultitools.cloud.hello.prerelease-module-version",
             "ultitools.cloud.capability.renegotiate-on-reload"));
 
-    /** Rows of 6.3.0 that protocol 2.0.0 retired (magic-link login and protocol v1 messages), in either document. */
+    /** Rows retired with the old cloud protocol or the legacy language declarations, in either document. */
     static final List<String> RETIRED_IDS = Collections.unmodifiableList(Arrays.asList(
             "ultitools.ulticloud.request-helper",
             "ultitools.ulticloud.request-helper.neg-not-connected",
@@ -212,7 +209,11 @@ class UltiCloudUatRowsTest {
             "ultitools.remote.upload-config",
             "ultitools.remote.upload-config.neg-permissions",
             "ultitools.remote.disk-usage",
-            "ultitools.remote.server-properties-safe-keys.neg-unsafe-key"));
+            "ultitools.remote.server-properties-safe-keys.neg-unsafe-key",
+            "ultitools.i18n.declared-missing.warns-once",
+            "ultitools.i18n.declared-missing.alias-merged",
+            "ultitools.i18n.declared-missing.disk-copy-does-not-mask",
+            "ultitools.i18n.complete-declaration.silent"));
 
     private static final Set<String> LAYERS = new HashSet<>(Arrays.asList(
             "protocol", "java-client", "os-input", "pixel", "server"));

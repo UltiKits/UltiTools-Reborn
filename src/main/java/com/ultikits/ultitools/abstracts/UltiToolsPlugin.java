@@ -1,27 +1,20 @@
 package com.ultikits.ultitools.abstracts;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.Reader;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
-import java.lang.reflect.Type;
 import java.net.JarURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.security.CodeSource;
+import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Messages;
-import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
-import com.ultikits.ultitools.text.internal.LocaleNames;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.text.internal.ModuleTexts;
 import com.ultikits.ultitools.text.internal.TextEngine;
 import java.util.ArrayList;
@@ -30,57 +23,42 @@ import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeMap;
-import java.util.TreeSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.BiConsumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonParseException;
-import com.google.gson.reflect.TypeToken;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.EnableAutoRegister;
-import com.ultikits.ultitools.annotations.I18n;
-import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.config.convert.ConverterRegistry;
 import com.ultikits.ultitools.context.ConditionalRegistrationEvaluator;
 import com.ultikits.ultitools.context.MergedAnnotationResolver;
 import com.ultikits.ultitools.context.SimpleContainer;
-import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.interfaces.Configurable;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.IPlugin;
-import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.impl.logger.PluginLogger;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.ConfigManager;
+import com.ultikits.ultitools.manager.DataScope;
 import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.ManagerKeys;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.utils.CodeSourceLocations;
 import com.ultikits.ultitools.utils.DependencyUtils;
 import com.ultikits.ultitools.utils.FileUtils;
-import com.ultikits.ultitools.utils.OfficialLanguageFiles;
-import com.ultikits.ultitools.utils.PosixAttributePreserver;
 import com.ultikits.ultitools.utils.ResourceHashSidecar;
 import com.ultikits.ultitools.utils.VersionComparatorUtil;
 
@@ -93,57 +71,10 @@ import lombok.Setter;
  * @author wisdomme
  * @version 1.0.0
  */
-public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurable {
-    /**
-     * Language file extensions, in the order they are tried.
-     * <p>
-     * {@code .json} stays first so a module shipping both keeps exactly the behaviour it had
-     * before 6.3.0. {@code .yml} and {@code .yaml} were added for #389: eight modules ship YAML,
-     * and the loader silently produced an empty dictionary for every one of them.
-     */
-    private static final String[] LANGUAGE_EXTENSIONS = {".json", ".yml", ".yaml"};
-
-    /** Named logger for the D-03 per-module reload line -- see {@link #RELOAD_LOG_MESSAGE_KEY}. */
+public abstract class UltiToolsPlugin implements IPlugin, Configurable {
+    /** Named logger for module reload outcomes. */
     private static final Logger LOGGER = Logger.getLogger(UltiToolsPlugin.class.getName());
 
-    /**
-     * Receives nothing: {@link #languageLog()} hands it out while a language is resolved without
-     * writing (#460), so a construction-time pass logs nothing and the committing pass after the
-     * load gates logs everything exactly once.
-     */
-    private static final Logger SILENT_LANGUAGE_LOGGER = newSilentLogger();
-
-    /**
-     * Framework i18n key (this class's own {@code lang/en.json}/{@code lang/zh.json} catalogue,
-     * not a module's) for the per-module reload line {@link #reloadSelf()} logs after its three
-     * steps (D-03). Package-private so {@code UltiToolsPluginLifecycleHookTest} can assert both
-     * shipped catalogues actually carry a translation for it, rather than duplicating the
-     * literal string between production and test code.
-     */
-    static final String RELOAD_LOG_MESSAGE_KEY = "Module '%s' reloaded.";
-
-    /**
-     * Framework i18n key for the one line logged per official language file restored to the
-     * bundled version (#459; #608 and the maintainer decision of 2026-10-04, "official language
-     * file edited in place": restored at every start, the edited copy backed up, the operator told
-     * to copy, rename and select instead). Arguments: the restored file, the module, the backup.
-     * Package-private so a test can assert both shipped catalogues translate it.
-     */
-    static final String LANGUAGE_REPLACED_LOG_KEY = OfficialLanguageFiles.RESTORED_LOG_KEY;
-
-    /**
-     * Framework i18n key for the SEVERE line {@link #reloadSelf()} logs, naming the module and the
-     * cause, when any of its steps or the module's own {@link #onReload()} throws (#509). The success
-     * line {@link #RELOAD_LOG_MESSAGE_KEY} is never logged for that reload. Package-private for the
-     * same catalogue-coverage test as that key.
-     */
-    static final String RELOAD_FAILED_LOG_MESSAGE_KEY = "Module '%s' failed to reload: %s";
-    /**
-     * Framework i18n key for the WARNING line logged instead of {@link #RELOAD_LOG_MESSAGE_KEY}
-     * when the module's reload hook recorded parts that did not reload in its {@link ReloadReport}
-     * (#529). Package-private for the same catalogue-coverage test as that key.
-     */
-    static final String RELOAD_PARTIAL_LOG_MESSAGE_KEY = "Module %s reloaded partially; not reloaded: %s";
     /**
      * The partial reason in the report {@link #reloadWithReport()} returns when the call was
      * refused because it was made off the server thread (#538). Not an i18n key: nothing
@@ -151,93 +82,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * server thread; it is for a module that calls {@link #reloadWithReport()} itself.
      */
     static final String RELOAD_REFUSED_OFF_THREAD_REASON = "the reload was refused: it was called off the server thread";
-    /**
-     * Framework i18n key for the partial-reload reason a per-module reload records when the
-     * {@code language} setting in the framework's {@code config.yml} on disk differs from the one
-     * the framework runs with (#502). Package-private for the catalogue-coverage test.
-     */
-    static final String LANGUAGE_CHANGE_PENDING_KEY =
-            "the language setting in config.yml changed from %s to %s; a full /ul reload applies it to every module";
-    /**
-     * Matches a {@code java.util.Formatter} conversion specifier, e.g. {@code %s} in {@code
-     * "Hello, %s!"}, or {@code %1$s} for an explicit argument index. Used only by {@link
-     * #placeholderArity(String)}, one of the two placeholder-loss detectors {@link
-     * #applyPlaceholderArityOverride} combines (see that method's own javadoc) for the D-05
-     * per-key comparison; not a change to how placeholders are substituted anywhere -- every
-     * parameterised {@code i18n(...)} value in THIS FRAMEWORK's own two catalogues ({@code
-     * src/main/resources/lang/en.json}/{@code zh.json}) is formatted with {@code String.format},
-     * never {@code MessageFormat} (measured: 0 {@code {n}}-style placeholders in either file, and
-     * 0 across any {@code i18n(...)} call site in this repository).
-     * <p>
-     * That measurement is scoped to THIS repository's own two catalogues -- it says nothing
-     * about the module catalogues this same mechanism actually protects. Corrected 2026-09-22:
-     * an earlier revision of this javadoc reported the same 0-count without that scoping
-     * qualifier, which read as "no {@code {n}}-style placeholder exists anywhere this mechanism
-     * looks" and was wrong for the broader population the mechanism serves. An install-wide sweep
-     * of all 15 module jars' {@code lang/*.json}/{@code lang/*.yml} catalogues against their
-     * on-disk copies (34 file pairs) found the opposite: 0 {@code %s}/{@code %d}-arity mismatches
-     * anywhere, and every brace-delimited span in that corpus is a {@code {0}}/{@code {1}}-style
-     * positional or {@code {PLAYER}}/{@code {WORLD}}-style named token -- the modules use {@code
-     * String#replace}-driven substitution exclusively, never {@code String.format}. {@link
-     * #BRACE_TOKEN_PATTERN} and {@link #missingBracePlaceholder} exist to cover that population;
-     * this pattern and {@link #placeholderArity} continue to cover only the framework's own.
-     * <p>
-     * Codex round 6, P2: deliberately narrower than the full {@code Formatter} grammar --
-     * {@code %s}/{@code %d} (optionally explicit-indexed) or a literal {@code %%}, with NO flags,
-     * width or precision component. The earlier, more permissive pattern accepted a space as a
-     * flag character, so ordinary text like {@code "Progress: 90% done"} matched {@code "% d"} as
-     * a (bogus) {@code %d} conversion with a space flag -- an operator's customised value
-     * containing an innocent {@code '%'} could be reported as an arity mismatch against
-     * differently-worded bundled text and silently overwritten at runtime, even though the key
-     * carries no real {@code String.format} placeholder at all. Since this framework never emits
-     * anything outside {@code %s}/{@code %d}/{@code %%} (per the measurement above), restricting
-     * the pattern to exactly those forms eliminates the false-positive class rather than patching
-     * the specific "% d" instance -- no genuine placeholder this framework uses stops matching.
-     */
-    private static final Pattern PLACEHOLDER_PATTERN =
-            Pattern.compile("%(?:(\\d+)\\$)?([sd%])");
 
-    /**
-     * Matches a brace-style placeholder token as used by the MODULE {@code lang} catalogues this
-     * mechanism protects -- {@code {0}}/{@code {1}} positional or {@code {PLAYER}}/{@code
-     * {WORLD}} named, substituted with plain {@code String#replace}, never {@code
-     * java.util.Formatter}. See {@link #PLACEHOLDER_PATTERN}'s javadoc for the install-wide
-     * measurement establishing this is the modules' actual dialect, and #524 for the real-machine
-     * report this pattern and {@link #missingBracePlaceholder} exist to fix.
-     * <p>
-     * The captured group requires the braces to contain ONLY a bare decimal integer or a bare
-     * identifier (a letter/underscore followed by letters, digits or underscores) -- no
-     * whitespace or other punctuation. This is deliberately strict, for the same reason {@link
-     * #PLACEHOLDER_PATTERN} was narrowed in Codex round 6: an operator's own decorative or
-     * explanatory text that happens to contain a brace must never be mistaken for a placeholder
-     * token, and this pattern alone cannot make that guarantee -- {@link #missingBracePlaceholder}'s
-     * one-directional comparison is what actually protects a decorative brace the disk value adds
-     * on its own (see that method's javadoc). Measured against the install-wide sweep above: every
-     * brace-delimited span across all 34 module file pairs matches this pattern with nothing left
-     * over, so this shape is not hand-picked -- it is what the corpus actually contains.
-     */
-    private static final Pattern BRACE_TOKEN_PATTERN =
-            Pattern.compile("\\{([A-Za-z_][A-Za-z0-9_]*|\\d+)\\}");
-
-    /**
-     * A private, independent JSON reader for the D-05 placeholder-arity comparison only -- not a
-     * change to {@link Language}'s own Gson usage, which stays entirely inside {@code
-     * Language.java} (untouched by this plan).
-     */
-    private static final Gson ARITY_GSON = new Gson();
-    private static final Type ARITY_MAP_TYPE = new TypeToken<Map<String, String>>() { }.getType();
-
-    private Language language;
     private TextEngine textEngine;
     private TextEngine.Prepared preparedMessages;
-    /** The language catalogues the module's jar ships, read once on first use (see {@link #shippedCatalogueTexts}). */
-    private volatile List<Language> shippedCatalogues;
-    /**
-     * The operator's custom language files last read for comment recognition (see {@link #customCatalogueTexts}),
-     * by path, each with the modification time and size it was read at, so a file is parsed again only after it
-     * changed.
-     */
-    private final Map<String, CustomCatalogue> customCatalogues = new ConcurrentHashMap<>();
     @Getter
     private final String version;
     @Getter
@@ -257,28 +104,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     private String resourceFolderPath;
     @Getter
     private SimpleContainer context;
-    private com.ultikits.ultitools.manager.DataScope dataScope;
-
-    /**
-     * True only while the constructor resolves this module's language (#460): the provenance
-     * decision is computed but nothing is written, renamed or recorded, and nothing is logged.
-     * {@link #commitLanguageProvenance()} re-resolves with writes once the load gates accepted
-     * this candidate. Construction is single-threaded, so a plain field is enough.
-     */
-    private boolean languageDryRun;
-
-    /**
-     * True only while {@link #commitLanguageProvenance()} migrates the language files of languages
-     * other than the one being resolved (Codex review of #566): the provenance writes happen, but no
-     * dictionary is built for them, so no per-key placeholder warning is logged about a file that is
-     * not in use.
-     */
-    private boolean languageMigrationOnly;
-
-    /** Per-instance, so a replacement module is checked without retaining its class loader. */
-    private final java.util.concurrent.atomic.AtomicBoolean languageDeclarationChecked =
-            new java.util.concurrent.atomic.AtomicBoolean();
-
+    private DataScope dataScope;
 
     /**
      * Constructor for UltiToolsPlugin. For module development only.
@@ -317,17 +143,8 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             }
         }
         prepareConfigConverters();
-        // #540: extract the bundled resources first, then resolve the language. Resolving first
-        // picked whatever catalogue was on disk before extraction -- a stale lang/<code>.yml when
-        // lang/<code>.json had been deleted -- and the next reload switched to the fresh one.
-        // #567 item 1: only config/ and res/ here (initConfig() reads them next); lang/ is extracted
-        // at the commit step, and the construction-time resolution reads a lang/ file the disk lacks
-        // from the jar as if it were extracted, so a candidate the load gates reject writes no
-        // language file.
-        saveResources(false);
-        // #460: resolve without writing; the provenance writes are committed only after the load
-        // gates accept this candidate (PluginManager calls commitLanguageProvenance()).
-        language = initializeLanguage();
+        // Extract bundled config and other resources before binding configuration entities.
+        saveResources();
         try{
             initConfig();
         } catch (IOException e) {
@@ -335,50 +152,9 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         }
     }
 
-    /**
-     * Resolves this module's language during construction without writing anything (#460): no
-     * language file is refreshed, replaced or backed up, no provenance is recorded, and nothing is
-     * logged. The returned language is the one the commit will produce when its writes succeed;
-     * {@link #commitLanguageProvenance()} performs the writes and replaces it once the load gates
-     * have accepted this candidate, so a rejected candidate leaves the shared files untouched.
-     *
-     * @return the language this module will use once its provenance decision is committed
-     */
-    private Language initializeLanguage() {
-        languageDryRun = true;
-        try {
-            return createLanguageFromPath(resourceFolderPath);
-        } finally {
-            languageDryRun = false;
-        }
-    }
-
-    /**
-     * Commits this module's language provenance decision (#460): re-resolves the language with its
-     * writes enabled -- the refresh of an untouched language file and its provenance record -- and
-     * makes the result this module's language. Called by {@code PluginManager} once the load gates
-     * have accepted this candidate, before its container is assembled; construction only computed
-     * the decision, so a candidate the gates reject never writes to the language files it shares
-     * with the accepted version.
-     * <p>
-     * <p>
-     * It is also the only point that extracts the module's {@code lang/} resources the disk lacks, with their
-     * hashes recorded as at any extraction (#567 item 1): construction extracts only {@code config/} and {@code
-     * res/}, and resolves a missing {@code lang/} file from the jar's copy without writing it. A copy the load gates
-     * reject never reaches this method, so it cannot write a language file.
-     * <p>
-     * Not part of the module-facing API. Public only because {@code PluginManager} lives in another
-     * package, like {@link #setContext}. Calling it again re-runs the same resolution a reload's
-     * language step runs, so it is harmless but pointless.
-     *
-     * @since 6.3.0
-     */
+    /** Publishes an accepted candidate's prepared message catalogue before container assembly. */
     @ApiStatus.Internal
-    public final void commitLanguageProvenance() {
-        warnMissingDeclaredLanguages();
-        saveResources(true);
-        migrateBundledLanguageFiles();
-        language = createLanguageFromPath(resourceFolderPath);
+    public final void publishMessageCatalogue() {
         if (textEngine != null && preparedMessages != null) {
             textEngine.publish(preparedMessages, this);
         }
@@ -390,1569 +166,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         if (textEngine != null && preparedMessages != null) {
             textEngine.rollback(preparedMessages.loaded().catalogue().namespace(), this);
         }
-    }
-
-    /**
-     * Diagnoses obsolete language declarations once after the load gates accept this instance.
-     * Uses the module's own code source, not disk files or an overridable {@code supported()}.
-     * Complete declarations stay silent; missing codes share one actionable warning.
-     */
-    @SuppressWarnings({"deprecation", "removal"}) // Read retained declarations only for diagnostics.
-    private void warnMissingDeclaredLanguages() {
-        if (!languageDeclarationChecked.compareAndSet(false, true)) {
-            return;
-        }
-        Set<String> declared = new TreeSet<>();
-        I18n annotation = MergedAnnotationResolver.find(getClass(), I18n.class);
-        if (annotation != null) {
-            declared.addAll(Arrays.asList(annotation.value()));
-        }
-        // A direct @I18n hides the meta-annotation in the resolver. Diagnose both declarations.
-        UltiToolsModule module = MergedAnnotationResolver.find(getClass(), UltiToolsModule.class);
-        if (module != null) {
-            declared.addAll(Arrays.asList(module.i18n()));
-        }
-        if (declared.isEmpty()) {
-            return;
-        }
-        CodeSource source = getClass().getProtectionDomain().getCodeSource();
-        if (source != null && source.getLocation() != null) {
-            declared.removeAll(Localized.scanLangResources(source.getLocation()));
-        }
-        if (!declared.isEmpty()) {
-            getLogger().warn("Module '" + getPluginName() + "' uses deprecated @I18n / "
-                    + "@UltiToolsModule(i18n): missing language resources: " + String.join(", ", declared)
-                    + ". Ship lang/<code>.json, .yml or .yaml in this module's JAR. "
-                    + "Declarations have been ignored since 6.3.0 and may be removed as early as 6.6.0.");
-        }
-    }
-
-    /**
-     * Applies the provenance decision to every language file this module's jar bundles and the disk
-     * holds, not only the configured language's (Codex review of #566): on the first start after an
-     * upgrade, an unrecorded {@code lang/zh.json} of a server running {@code en} is replaced and
-     * recorded too (#459), so an edit made to it afterwards is kept as a customisation when the
-     * operator later switches language. The configured language is resolved afterwards, as before;
-     * its file is then already migrated. Codes come from the jar's own {@code lang/} entries.
-     * <p>
-     * Every dictionary builder reachable from here -- {@link #readLanguageFile} and {@link
-     * #applyPlaceholderArityOverride} -- returns an empty dictionary while {@code
-     * languageMigrationOnly} is set, so no unused catalogue is parsed (Codex review of #566, run 2).
-     */
-    private void migrateBundledLanguageFiles() {
-        CodeSource codeSource = this.getClass().getProtectionDomain().getCodeSource();
-        if (codeSource == null || codeSource.getLocation() == null) {
-            return;
-        }
-        languageMigrationOnly = true;
-        try {
-            for (String code : Localized.scanLangResources(codeSource.getLocation())) {
-                for (String extension : LANGUAGE_EXTENSIONS) {
-                    migrateBundledLanguageFile(code, extension);
-                }
-            }
-        } finally {
-            languageMigrationOnly = false;
-        }
-    }
-
-    private void migrateBundledLanguageFile(String code, String extension) {
-        // Isolated per file (Codex review of #566, run 2): a failure while migrating one language's
-        // file is logged and never stops the module from loading or the other files from migrating.
-        try {
-            if (readEmbeddedResourceBytes("lang/" + code + extension) != null) {
-                loadLanguageFromDisk(resourceFolderPath, code, extension);
-            }
-        } catch (RuntimeException e) {
-            getLogger().error(e, "Could not migrate language file 'lang/" + code + extension + "' of module '"
-                    + getPluginName() + "'; it is left as it is.");
-        }
-    }
-
-    /**
-     * The logger the language-resolution methods write through: this module's logger, except
-     * during the construction-time pass (#460), when it discards everything so each message is
-     * logged once, by the committing pass.
-     */
-    private PluginLogger languageLog() {
-        return languageDryRun ? new PluginLogger(this.pluginName, SILENT_LANGUAGE_LOGGER) : getLogger();
-    }
-
-    private static Logger newSilentLogger() {
-        Logger silent = Logger.getAnonymousLogger();
-        silent.setUseParentHandlers(false);
-        silent.setLevel(Level.OFF);
-        return silent;
-    }
-
-    /**
-     * Resolves the official language code to load, consulting {@link Localized#supported()}
-     * before {@link #createLanguageFromPath(String)} picks a file (D-20/D-21/WIRE-10), and logs a
-     * warning when the configured name has no official base. See {@link
-     * #officialLanguageFor(String, boolean)} for the rule.
-     *
-     * @return the official language code to load
-     */
-    private String resolveLanguageCode() {
-        return officialLanguageFor(getConfiguredLanguage(), true);
-    }
-
-    /**
-     * The official language {@code configured} is based on (#608). An official code this module
-     * ships ({@link Localized#supported()}) is its own base; a custom name is based on the shipped
-     * code it starts with followed by a hyphen ({@code zh-myserver} on {@code zh}, see {@link
-     * Localized#officialLanguageOf}); any other name falls back to {@code "en"} when the module ships
-     * it, otherwise to the first shipped code, with one warning when {@code warn} is set. An empty
-     * {@code supported()} is "no information": {@code configured} is returned unchanged and nothing
-     * is logged, as before 6.3.0.
-     */
-    private String officialLanguageFor(String configured, boolean warn) {
-        List<String> supportedCodes = this.supported();
-        if (supportedCodes == null || supportedCodes.isEmpty()) {
-            return configured;
-        }
-        String official = Localized.officialLanguageOf(configured, supportedCodes);
-        if (official != null) {
-            return official;
-        }
-        String fallback = supportedCodes.contains("en") ? "en" : supportedCodes.get(0);
-        if (warn && configured != null && Localized.isSafeLanguageCode(configured)) {
-            // Gate-1 R1-3: the custom file is still used; only what it lacks comes from the fallback.
-            languageLog().warn("Module '" + getPluginName() + "' is configured for language '" + configured
-                    + "', which is neither a language it ships " + supportedCodes + " nor starts with one of them "
-                    + "and a hyphen: its custom file lang/" + configured + ".* is still used where it exists, and "
-                    + "every message that file does not provide uses '" + fallback + "'. A custom language name "
-                    + "must start with one of these codes and a hyphen, for example '" + supportedCodes.get(0)
-                    + "-myserver'.");
-        } else if (warn) {
-            languageLog().warn("Module '" + getPluginName() + "' is configured for language '" + configured
-                    + "', which is not a valid language name (an ASCII letter or digit first, then only ASCII "
-                    + "letters, digits, '_' and '-'), so no custom file is read; it ships " + supportedCodes
-                    + " and uses '" + fallback + "'.");
-        }
-        return fallback;
-    }
-
-    /**
-     * The custom language name in use (#608): the configured name when it is not the official
-     * language it resolves to and is a safe language-code token ({@link
-     * Localized#isSafeLanguageCode}), so it can never name a path outside {@code lang/}; otherwise
-     * {@code null}. A module that ships no languages has no official base and no custom name.
-     */
-    private static String customLanguageName(String configured, String official) {
-        if (configured == null || configured.equals(official) || !Localized.isSafeLanguageCode(configured)) {
-            return null;
-        }
-        return configured;
-    }
-
-    /**
-     * Reads the operator's custom language file {@code <folderPath>/lang/<name><extension>}, trying
-     * each of {@link #LANGUAGE_EXTENSIONS} in order (#608).
-     * <p>
-     * Read-only by construction: a custom file belongs to the operator (maintainer decision
-     * 2026-10-04), so this method never calls {@link #loadLanguageFromDisk} -- whose provenance step
-     * can refresh, restore or back up a file -- and never writes, renames, backs up or records
-     * anything. The module jar never ships a file under a custom name either, so {@link
-     * #saveResources(boolean)} and {@link #migrateBundledLanguageFiles()} never reach one. The canonical
-     * {@code lang/} containment guard applies as for every other language read.
-     * <p>
-     * A key whose custom value lost a placeholder relative to the official base's bundled value uses the
-     * bundled value, with one warning naming the file and the key ({@link #overrideLostPlaceholders}; gate-1
-     * review R1-2 of plan 17-69): a custom file written for an older release must not make a message fail to
-     * format after an upgrade.
-     *
-     * @return the custom language, or {@code null} when no such file exists or none is readable
-     */
-    private Language readCustomLanguageFile(String folderPath, String name, String officialCode) {
-        File langDir = new File(folderPath, "lang");
-        for (String extension : LANGUAGE_EXTENSIONS) {
-            File file = new File(langDir, name + extension);
-            if (isWithinDirectory(langDir, file) && file.isFile()) {
-                try {
-                    // Parsed through the regular reader first, so a malformed file is reported below.
-                    readLanguageFile(file, extension);
-                    // Gate-1 R1-2: the placeholder guard (#441, #524) that protected an operator's
-                    // customisation in an edited official file applies to the custom file too, against
-                    // the official base's bundled values -- in memory; the file is never written.
-                    return new Language(overrideLostPlaceholders(readFlatDictionary(file, extension),
-                            bundledDictionary(officialCode),
-                            (key, reason) -> warnLostPlaceholder(key, file.getPath(), reason)));
-                } catch (JsonParseException unreadable) {
-                    languageLog().error(unreadable, "Could not read custom language file '" + file.getPath()
-                            + "' of module '" + getPluginName() + "'; using the official language instead.");
-                    return null;
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Creates the language from the given resource folder: the operator's custom language file
-     * when one is selected and present, falling back key by key to the official language it is
-     * based on -- the official file on disk, falling back to the jar's copy (#608).
-     *
-     * @param folderPath the resource folder path
-     * @return Language object
-     */
-    private Language createLanguageFromPath(String folderPath) {
-        String resolvedCode = resolveLanguageCode();
-        String customName = customLanguageName(getConfiguredLanguage(), resolvedCode);
-        Language custom = customName != null ? readCustomLanguageFile(folderPath, customName, resolvedCode) : null;
-        Language official = createOfficialLanguage(folderPath, resolvedCode, custom == null);
-        if (custom != null) {
-            return custom.withFallback(official);
-        }
-        return official != null ? official : new Language("{}");
-    }
-
-    /**
-     * Resolves the official language {@code resolvedCode} from disk and jar, as before #608.
-     *
-     * @param warnIfMissing whether to log that no language is loadable (not when a custom file is in use)
-     * @return the official language, or {@code null} when none is loadable
-     */
-    private Language createOfficialLanguage(String folderPath, String resolvedCode, boolean warnIfMissing) {
-        // Round 5 (own deep review of 0ddc95f, finding 1): the disk and jar catalogues are now
-        // resolved independently of each other's extension. Resolving them together, one shared
-        // extension per loop iteration, meant a module that shipped an old jar's lang/en.json
-        // (extracted to disk) alongside a new jar's lang/en.yml never reached the .yml iteration
-        // at all -- the .json iteration's non-null onDisk short-circuited the loop before the
-        // jar's .yml catalogue, under a different extension, was ever looked at.
-        Language onDisk = resolveDiskLanguage(folderPath, resolvedCode);
-        Language inJar = resolveJarLanguage(resolvedCode);
-        if (onDisk != null && inJar != null) {
-            // Real-machine finding (phase 13, PR #418): on an upgraded server the module jar
-            // adds a key that the copy of this language file already extracted to disk by an
-            // older jar does not have. The disk file stays authoritative for every key it does
-            // contain -- server owners customise it -- but a key it lacks now falls back to
-            // the jar-bundled catalogue instead of rendering as its own raw key.
-            return onDisk.withFallback(inJar);
-        }
-        if (onDisk != null) {
-            return onDisk;
-        }
-        if (inJar != null) {
-            return inJar;
-        }
-        // #389: this used to return an empty dictionary without a word. Language.get then falls
-        // back to the key, so every message in the module rendered as its own raw key -- which is
-        // what a player sees, and what nobody sees in the log. Eight of sixteen modules were in
-        // this state for a whole release because they ship lang/*.yml and only .json was looked
-        // for. Whatever the cause next time, it will say so.
-        if (warnIfMissing) {
-            languageLog().warn("Module '" + getPluginName() + "' has no loadable language file for '"
-                    + resolvedCode + "'. Looked for lang/" + resolvedCode + " with extensions "
-                    + Arrays.toString(LANGUAGE_EXTENSIONS) + ", on disk under " + folderPath
-                    + " and inside the module jar. Every i18n(...) call in this module will render its "
-                    + "own key until one is added.");
-        }
-        return null;
-    }
-
-    /**
-     * Resolves the on-disk language catalogue for {@code code}, trying each of {@link
-     * #LANGUAGE_EXTENSIONS} in order and returning the first that exists -- independently of
-     * whichever extension {@link #resolveJarLanguage(String)} resolves for the same code
-     * (13-REVIEW round 5, own deep review of {@code 0ddc95f}, finding 1).
-     *
-     * @return the resolved on-disk language, or {@code null} if none of the extensions exist on disk
-     */
-    private Language resolveDiskLanguage(String folderPath, String code) {
-        for (String extension : LANGUAGE_EXTENSIONS) {
-            Language onDisk = loadLanguageFromDisk(folderPath, code, extension);
-            if (onDisk != null) {
-                return onDisk;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * The jar-bundled dictionary of {@code code}, from the first of {@link #LANGUAGE_EXTENSIONS} the jar ships,
-     * for the placeholder comparison of a custom file; empty when the jar ships none.
-     */
-    private Map<String, String> bundledDictionary(String code) {
-        if (code == null) {
-            return Collections.emptyMap();
-        }
-        for (String extension : LANGUAGE_EXTENSIONS) {
-            byte[] bytes = readEmbeddedResourceBytes("lang/" + code + extension);
-            if (bytes != null) {
-                return readFlatDictionary(bytes, extension);
-            }
-        }
-        return Collections.emptyMap();
-    }
-
-    /**
-     * Resolves the jar-bundled language catalogue for {@code code}, trying each of {@link
-     * #LANGUAGE_EXTENSIONS} in order and returning the first that exists -- independently of
-     * whichever extension {@link #resolveDiskLanguage(String, String)} resolves for the same code
-     * (13-REVIEW round 5, own deep review of {@code 0ddc95f}, finding 1).
-     *
-     * @return the resolved jar-bundled language, or {@code null} if none of the extensions exist
-     *         in the jar
-     */
-    private Language resolveJarLanguage(String code) {
-        for (String extension : LANGUAGE_EXTENSIONS) {
-            Language inJar = loadLanguageFromJar(code, extension);
-            if (inJar != null) {
-                return inJar;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * The texts the language catalogues this module's jar ships hold for {@code key}: one entry per shipped
-     * catalogue - every language code under the jar's {@code lang/}, every extension the loader reads - that holds
-     * the key, in code order. The config layer uses them to recognise a comment line the framework wrote in any
-     * language (maintainer decision 2026-10-04, "only the framework's own comments are rewritten", #604).
-     * <p>
-     * Read-only by construction: it reads the module's own code source through {@link #loadLanguageFromJar} and
-     * nothing else - never the extracted language files under the module's folder, the resource hash record or a
-     * language backup - so it performs none of the language-provenance writes a language load makes, and logging a
-     * catalogue it cannot read is its only effect. The catalogues are read once per module instance: the jar does
-     * not change while the module is loaded.
-     *
-     * @param key the catalogue key
-     * @return the shipped texts for {@code key}, possibly empty, never {@code null}
-     */
-    @ApiStatus.Internal
-    List<String> shippedCatalogueTexts(String key) {
-        List<String> texts = new ArrayList<>();
-        for (Language catalogue : shippedCatalogues()) {
-            String text = catalogue.getLocalizedText(key);
-            if (text != null && !text.equals(key)) {
-                texts.add(text);
-            }
-        }
-        return texts;
-    }
-
-    private List<Language> shippedCatalogues() {
-        List<Language> catalogues = shippedCatalogues;
-        if (catalogues != null) {
-            return catalogues;
-        }
-        List<Language> read = new ArrayList<>();
-        CodeSource codeSource = this.getClass().getProtectionDomain().getCodeSource();
-        if (codeSource != null && codeSource.getLocation() != null) {
-            for (String code : Localized.scanLangResources(codeSource.getLocation())) {
-                for (String extension : LANGUAGE_EXTENSIONS) {
-                    try {
-                        Language inJar = loadLanguageFromJar(code, extension);
-                        if (inJar != null) {
-                            read.add(inJar);
-                        }
-                    } catch (RuntimeException unreadable) {
-                        // One malformed catalogue must not hide the others; its texts are simply not recognised.
-                        getLogger().warn("Could not read the shipped language catalogue 'lang/" + code + extension
-                                + "' of module '" + getPluginName() + "': " + unreadable.getClass().getSimpleName());
-                    }
-                }
-            }
-        }
-        catalogues = Collections.unmodifiableList(read);
-        shippedCatalogues = catalogues;
-        return catalogues;
-    }
-
-    /**
-     * The texts the operator's custom language files in this module's {@code lang/} folder hold for {@code key}
-     * (#615 item 1; contract-batching decision of 2026-10-06): one entry per custom file that holds the key, in file
-     * name order. A custom file is a language file -- {@code .json}, {@code .yml} or {@code .yaml} -- whose name is a
-     * safe language-code token ({@link Localized#isSafeLanguageCode}) that the module does not ship ({@link
-     * Localized#supported()}, which a module that overrides it must keep equal to its jar's {@code lang/} codes), such as
-     * {@code zh-myserver.yml}: the files an operator selects as a custom language (#608). The config layer adds them
-     * to the texts it recognises as framework-written comments, so a comment the framework wrote while the operator's
-     * custom language was selected keeps following later language switches.
-     * <p>
-     * Read-only by construction, like {@link #readCustomLanguageFile}: it lists the folder and parses the files, and
-     * never writes, renames, backs up, refreshes or records anything -- no provenance step and no placeholder guard,
-     * and it logs nothing of its own. A file that cannot be parsed contributes no text; for a {@code .yml}/{@code
-     * .yaml} file Bukkit's YAML reader itself logs the parse failure, even when the file is not the selected language
-     * (a documented limitation, gate 2 of PR #636: an unusable file left in {@code lang/} is the operator's to fix or
-     * remove). A file is parsed again only after its modification time or size changed, so the texts follow the
-     * operator's edits; a file replaced by one of the same size with its old modification time kept is noticed at
-     * the next start (documented limitation, same review).
-     * <p>
-     * Only the operator's CURRENT custom texts are known: no record of earlier renderings is kept (maintainer
-     * decision of 2026-10-06, option A). A comment written from a text the operator has since edited in the custom
-     * file is therefore the operator's own and stays as it is.
-     *
-     * @param key the catalogue key
-     * @return the custom files' texts for {@code key}, possibly empty, never {@code null}
-     * @since 6.3.0
-     */
-    @ApiStatus.Internal
-    List<String> customCatalogueTexts(String key) {
-        List<String> texts = new ArrayList<>();
-        File langDir = new File(resourceFolderPath, "lang");
-        File[] files = langDir.listFiles();
-        if (files == null) {
-            return texts;
-        }
-        Arrays.sort(files);
-        Set<String> shippedCodes = new LinkedHashSet<>(supported());
-        for (File file : files) {
-            Language custom = customCatalogue(langDir, file, shippedCodes);
-            String text = custom == null ? null : custom.getLocalizedText(key);
-            if (text != null && !text.equals(key)) {
-                texts.add(text);
-            }
-        }
-        return texts;
-    }
-
-    /** The parsed custom file {@code file}, or {@code null} when it is not a custom language file or not readable. */
-    private Language customCatalogue(File langDir, File file, Set<String> shippedCodes) {
-        String name = file.getName();
-        for (String extension : LANGUAGE_EXTENSIONS) {
-            if (!name.endsWith(extension)) {
-                continue;
-            }
-            String code = name.substring(0, name.length() - extension.length());
-            if (!Localized.isSafeLanguageCode(code) || shippedCodes.contains(code) || !file.isFile()
-                    || !isWithinDirectory(langDir, file)) {
-                return null;
-            }
-            long modified = file.lastModified();
-            long length = file.length();
-            CustomCatalogue cached = customCatalogues.get(file.getPath());
-            if (cached != null && cached.modified == modified && cached.length == length) {
-                return cached.language;
-            }
-            Language parsed;
-            try {
-                parsed = parseCustomCatalogue(file, extension);
-            } catch (IOException | RuntimeException unreadable) {
-                parsed = null;
-            }
-            customCatalogues.put(file.getPath(), new CustomCatalogue(modified, length, parsed));
-            return parsed;
-        }
-        return null;
-    }
-
-    private static Language parseCustomCatalogue(File file, String extension) throws IOException {
-        if (".json".equals(extension)) {
-            return new Language(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
-        }
-        try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
-            return Language.fromYaml(reader);
-        }
-    }
-
-    /** A custom language file as last parsed for comment recognition; {@code language} is null when unreadable. */
-    private static final class CustomCatalogue {
-        private final long modified;
-        private final long length;
-        private final Language language;
-
-        private CustomCatalogue(long modified, long length, Language language) {
-            this.modified = modified;
-            this.length = length;
-            this.language = language;
-        }
-    }
-
-    /**
-     * Reads {@code <folderPath>/lang/<code><extension>} if it exists, else {@code null}.
-     * <p>
-     * D-05/D-06/D-07 (#441): before returning, applies the recorded-provenance decision -- an
-     * upgraded server whose language file was never touched since extraction gets it silently
-     * replaced by the current jar's copy; one an operator customised is left alone, with a
-     * per-key warning for any key whose placeholder count moved out from under it. Layered in
-     * front of the resolution split, not inside {@link Language}: {@link
-     * #resolveLanguageWithProvenance} decides which bytes/dictionary this method returns, and
-     * {@link Language#withFallback} (unchanged) still owns filling a key this dictionary lacks
-     * entirely.
-     * <p>
-     * 16-05 / CodeQL {@code java/zipslip} alert #11 (CWE-22): {@code code} is only lightly
-     * restricted by {@link com.ultikits.ultitools.interfaces.Localized#languageCodeOf(String)}'s
-     * character allowlist when it comes from a scanned jar/directory entry -- and not restricted
-     * at all when it comes from a hostile {@code config.yml language:} value, since {@link
-     * #resolveLanguageCode()} returns an unmatched configured code UNCHANGED whenever {@link
-     * com.ultikits.ultitools.interfaces.Localized#supported()} is empty. This is therefore the
-     * last line of defence: before this file is read (or, deeper in {@link
-     * #resolveLanguageWithProvenance}, overwritten), its canonical path must stay inside {@code
-     * <folderPath>/lang}'s own canonical path -- mirroring the guard {@link #saveResources(boolean)}
-     * already applies to extracted jar entries. A violation degrades to the same {@code null}
-     * (“not loadable”) outcome as a missing file, never a thrown exception.
-     */
-    private Language loadLanguageFromDisk(String folderPath, String code, String extension) {
-        File langDir = new File(folderPath, "lang");
-        File file = new File(langDir, code + extension);
-        if (!isWithinDirectory(langDir, file)) {
-            languageLog().warn("Module '" + getPluginName() + "' resolved a language code that would "
-                    + "escape its lang/ directory ('" + langDir + "'); refusing to load or write '"
-                    + file + "'.");
-            return null;
-        }
-        String resourcePath = "lang/" + code + extension;
-        if (!file.exists()) {
-            // #567 item 1: during construction a lang/ file the disk lacks has not been extracted yet
-            // (the commit step extracts it); resolve as if it were, from the jar's copy, so the
-            // construction-time language is the one the commit produces and #540's order holds.
-            return languageDryRun ? jarCopyAsIfExtracted(resourcePath, extension) : null;
-        }
-        return resolveLanguageWithProvenance(folderPath, file, resourcePath, extension);
-    }
-
-    /**
-     * The language a {@code lang/} file would hold once extracted: the jar's copy of {@code resourcePath}, parsed as
-     * {@link #readLanguageFile} parses the extracted file; {@code null} when the jar does not ship it (#567 item 1).
-     * Reads the jar only; writes nothing.
-     */
-    private Language jarCopyAsIfExtracted(String resourcePath, String extension) {
-        byte[] jarBytes = readEmbeddedResourceBytes(resourcePath);
-        if (jarBytes == null) {
-            return null;
-        }
-        String text = new String(jarBytes, StandardCharsets.UTF_8);
-        if (".json".equals(extension)) {
-            return new Language(text);
-        }
-        try (Reader reader = new java.io.StringReader(text)) {
-            return Language.fromYaml(reader);
-        } catch (IOException e) {
-            languageLog().error("Failed to read language resource " + resourcePath, e);
-            return new Language("{}");
-        }
-    }
-
-    /**
-     * Verifies that {@code candidate}'s canonical path is contained within {@code baseDir}'s own
-     * canonical path -- the same Zip Slip guard {@link #saveResources(boolean)} already applies to
-     * extracted jar entries, generalized here for every other place an untrusted language code is
-     * turned into a {@link File} (16-05 / CodeQL {@code java/zipslip} alert #11, CWE-22). Neither
-     * {@code baseDir} nor {@code candidate} needs to exist: {@link File#getCanonicalPath()} is
-     * defined for a non-existent path too, normalizing {@code ..} segments lexically wherever the
-     * real filesystem does not need to be consulted (the same property {@code saveResources(boolean)}
-     * already relies on for a file it is about to create).
-     * <p>
-     * Returns {@code false} (never throws) on any I/O failure resolving either canonical path,
-     * since an uncanonicalizable path is not a basis for trusting containment either.
-     *
-     * @param baseDir   the directory {@code candidate} must resolve inside
-     * @param candidate the file built from an untrusted language code
-     * @return whether {@code candidate}'s canonical path is {@code baseDir}'s canonical path or a
-     *         descendant of it
-     */
-    private static boolean isWithinDirectory(File baseDir, File candidate) {
-        try {
-            String canonicalBase = baseDir.getCanonicalPath() + File.separator;
-            String canonicalCandidate = candidate.getCanonicalPath() + File.separator;
-            return canonicalCandidate.startsWith(canonicalBase);
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
-    /**
-     * Applies the D-05/D-06 recorded-provenance decision to a single on-disk language file. Four
-     * branches, mutually exclusive:
-     * <ol>
-     *   <li>Recorded hash present and equal to the disk file's current hash -- never touched by
-     *       the operator since extraction: overwrite the disk file with the current jar's bytes,
-     *       re-record the new (jar) hash as the baseline, and log one informative line.</li>
-     *   <li>Recorded hash present and different from the disk file's current hash: this by
-     *       ITSELF is NOT evidence of an edit -- see the branch-2 code comment below (Codex
-     *       finding, thread {@code PRRT_kwDOIcF9Es6i2kao}, P2) for why. When the disk bytes equal
-     *       the jar's the record is repaired; when they differ, the official file was edited in
-     *       place and is restored like branch 4 (#608, maintainer decision 2026-10-04: restored at
-     *       every start, edited copy backed up, one log line).</li>
-     *   <li>No recorded hash, but the disk bytes already equal the jar's -- provably unmodified,
-     *       unknown provenance only because an older jar (pre-#441) extracted it: record the hash
-     *       as the new baseline and enter the normal mechanism, with no overwrite this pass
-     *       (D-06). Never adopt an unequal disk hash as a baseline -- that would silently
-     *       overwrite a real customisation on the next jar change.</li>
-     *   <li>No recorded hash and the disk bytes differ from the jar's -- unknown provenance: the
-     *       file is replaced by the jar's copy and recorded, the old file kept as a backup and named
-     *       in the log (#459, maintainer 2026-09-29, question 3 option 2; see {@link
-     *       #restoreOfficialLanguageFile}). If the replacement fails the file is kept and the
-     *       per-key placeholder-arity override applies, as before.</li>
-     * </ol>
-     * A jar entry absent for this exact {@code resourcePath} (D-05's stated exception) short-
-     * circuits before any of the four branches: the disk file is left alone and nothing is
-     * recorded, since there is nothing to compare against. This is also why an operator's custom
-     * language file (#608) can never reach any branch: a custom name is by definition not a
-     * language the jar ships, and custom files are read only by {@link #readCustomLanguageFile}.
-     * <p>
-     * Every branch above derives its conclusion from an ACTUAL disk-bytes-vs-jar-bytes comparison,
-     * never from the record alone -- branches 3 and 4 already did (their own classification IS a
-     * content comparison); branch 2 was corrected to do the same (see its own code comment). Since
-     * #459, branch 4 no longer concludes "customisation" at all, and since #608 neither does branch
-     * 2: an official file whose bytes differ from the jar's is restored, with a backup. The record is provenance BOOKKEEPING, not the source of
-     * truth for whether a file has been customised; it can go stale (most deterministically, since
-     * the previous round, when the sidecar itself is symlinked or read-only and its own write is
-     * refused) without that staleness ever being able to cause a PERMANENT misclassification.
-     *
-     * @param folderPath   the module's on-disk resource folder root
-     * @param file         the on-disk language file, already confirmed to exist
-     * @param resourcePath the extracted resource's path relative to the resource folder (e.g.
-     *                     {@code "lang/en.json"}), matching {@code saveResources(boolean)}'s own keys
-     * @param extension    the language file extension ({@code ".json"}, {@code ".yml"} or {@code
-     *                     ".yaml"})
-     * @return the language that {@link #loadLanguageFromDisk} should treat as "the disk language"
-     */
-    private Language resolveLanguageWithProvenance(String folderPath, File file, String resourcePath,
-                                                     String extension) {
-        // Branch-audit (Codex finding thread PRRT_kwDOIcF9Es6i2kao, P2): neither short-circuit
-        // below reaches a "customised" conclusion at all, so neither needed the branch-2-style
-        // content-comparison fix. jarBytes == null has literally nothing to compare the disk
-        // bytes against (there IS no bundled version of this resource for this module); the
-        // UncheckedIOException fallback below never classifies provenance either -- it degrades
-        // to a best-effort raw read (or an empty dictionary) precisely because it could not even
-        // compute diskHash, so no comparison of any kind is possible here.
-        byte[] jarBytes = readEmbeddedResourceBytes(resourcePath);
-        if (jarBytes == null) {
-            // Jar entry absent for this exact resource path: nothing to compare against, so the
-            // disk file is left alone and no record is written (D-05).
-            return readLanguageFile(file, extension);
-        }
-        File resourceFolder = new File(folderPath);
-        String diskHash;
-        try {
-            diskHash = ResourceHashSidecar.sha256(file);
-        } catch (UncheckedIOException e) {
-            // Codex round 1, P1: an unreadable disk file (or one accidentally replaced by a
-            // directory) must degrade to a best-effort read, exactly like the pre-#441 code
-            // path -- it must never abort this module's whole language resolution, let alone
-            // its startup. readLanguageFile()/Language(File) already catch a read failure on
-            // their own and return an empty dictionary, which Language.withFallback (in the
-            // caller) then backstops from the jar side.
-            languageLog().error("Could not hash on-disk language file " + file.getPath()
-                    + " for module '" + getPluginName() + "'; leaving it untouched.", e);
-            try {
-                return readLanguageFile(file, extension);
-            } catch (RuntimeException readFailure) {
-                // The same unreadable path (e.g. a directory where a file is expected) can also
-                // defeat the best-effort fallback read in a way Language's own IOException-only
-                // catch does not cover -- this method must still never propagate, so fall back
-                // one more step to an empty dictionary. Language.withFallback (in the caller)
-                // then resolves every key from the jar side instead.
-                languageLog().error("Also failed to read on-disk language file " + file.getPath()
-                        + " as a best-effort fallback for module '" + getPluginName() + "'.", readFailure);
-                return new Language("{}");
-            }
-        }
-        String jarHash = ResourceHashSidecar.sha256(jarBytes);
-        Optional<String> recorded = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath);
-
-        if (recorded.isPresent()) {
-            if (recorded.get().equals(diskHash)) {
-                // Branch 1: never touched since extraction -> overwrite from the jar. Extracted
-                // into its own method (PMD NPathComplexity: this branch's own nested
-                // try/writeBytes/catch shape was the dominant contributor to this method's
-                // complexity once branch 2 below gained its own content-comparison check) --
-                // see resolveNeverTouchedSinceExtraction's own javadoc for the full behaviour.
-                return resolveNeverTouchedSinceExtraction(file, jarBytes, jarHash, diskHash,
-                        resourceFolder, resourcePath, extension);
-            }
-            // Branch 2: recorded hash present and mismatched against the disk file's CURRENT
-            // hash. Codex finding (thread PRRT_kwDOIcF9Es6i2kao, P2, on
-            // UltiToolsPlugin.java:515): a mismatch against the RECORD ALONE is not evidence of
-            // operator customisation -- it is also exactly what a STALE record looks like, which
-            // branch 1's own re-record step (above) can leave behind whenever the language file's
-            // own write succeeds but the follow-up ResourceHashSidecar.record(...) call does not
-            // persist. Before this fix that state was permanent: every later boot re-entered this
-            // branch and reclassified an up-to-date file as "customised" forever, silently
-            // stopping the module from ever receiving another bundled update, with nothing in the
-            // log to say why -- the defect class this milestone exists to remove (declared
-            // provenance-driven refresh, not delivered). The previous round's own symlink/
-            // read-only refusal on the SIDECAR's write path (PosixAttributePreserver#replaceInPlace)
-            // makes the stale-record precondition deterministic rather than rare: a symlinked or
-            // read-only sidecar now reliably refuses every re-record attempt, so this branch is
-            // reached on every subsequent boot.
-            //
-            // Root-cause fix, not a special case for "the sidecar write failed": derive the
-            // conclusion from what is ACTUALLY on disk, not from the record. If diskHash already
-            // equals jarHash, the file IS up to date regardless of what the stale record says --
-            // opportunistically re-record the correct hash (best-effort; record() already
-            // degrades silently on its own write failure per its own contract, and that failure
-            // must not change this classification or fail the boot) and proceed on the up-to-date
-            // path, exactly like branch 1's own jarHash.equals(diskHash) short-circuit above.
-            if (diskHash.equals(jarHash)) {
-                recordUnlessDryRun(resourceFolder, resourcePath, diskHash);
-                return readLanguageFile(file, extension);
-            }
-            // The disk bytes differ from both the record and the bundle: the official file was edited
-            // in place. Until #608 this was kept as a customisation. The maintainer decided on
-            // 2026-10-04 that official language files are framework-owned and an in-place edit is
-            // restored at every start, the edited copy backed up and the operator told to copy,
-            // rename and select a custom file instead -- the same replacement branch 4 performs.
-            return restoreOfficialLanguageFile(file, jarBytes, resourceFolder, resourcePath, extension);
-        }
-
-        // Branch-audit (Codex finding thread PRRT_kwDOIcF9Es6i2kao, P2): branches 3 and 4 below
-        // already derived their conclusion from an actual diskHash-vs-jarHash comparison before
-        // this finding was reported -- this `if` IS that comparison -- so neither needed the
-        // branch-2-style fix. Branch 3 concludes "not customised" (record now, proceed) only
-        // because diskHash.equals(jarHash) was just confirmed true; branch 4 replaces the file
-        // (#459) only because that same comparison was false. A record() failure inside
-        // branch 3 (e.g. a symlinked sidecar) cannot cause a permanent misclassification either:
-        // recorded stays Optional.empty() (nothing was ever persisted), so EVERY later boot
-        // re-enters this same "no recorded hash" path and re-derives fresh from content again --
-        // self-healing by construction, not merely by coincidence.
-        if (diskHash.equals(jarHash)) {
-            // Branch 3: unknown provenance, but provably unmodified -> record the baseline now;
-            // no overwrite this pass (D-06). Recorded only by the committing pass (#460).
-            recordUnlessDryRun(resourceFolder, resourcePath, diskHash);
-            return readLanguageFile(file, extension);
-        }
-        // Branch 4: unknown provenance and the bytes differ. Until #459 this assumed customisation
-        // and never touched the file, so every file extracted before provenance tracking existed
-        // kept its old wording forever. The maintainer decided on 2026-09-29 (question 3, option 2)
-        // to replace it by the jar's copy, keeping the old file as a backup and saying so in the
-        // log -- an operator-edited file included, accepted in writing.
-        return restoreOfficialLanguageFile(file, jarBytes, resourceFolder, resourcePath, extension);
-    }
-
-    /**
-     * Records {@code hash} for {@code resourcePath}, except during the construction-time pass,
-     * which writes nothing (#460).
-     */
-    private void recordUnlessDryRun(File resourceFolder, String resourcePath, String hash) {
-        if (!languageDryRun) {
-            ResourceHashSidecar.record(resourceFolder, resourcePath, hash);
-        }
-    }
-
-    /**
-     * Branches 2 and 4 of {@link #resolveLanguageWithProvenance}: an official language file whose
-     * bytes differ from the jar's copy -- an unrecorded one (#459, maintainer 2026-09-29, question 3
-     * option 2) or one edited in place after it was recorded (#608, maintainer decision 2026-10-04:
-     * official language files are framework-owned and restored at every start) -- is replaced by the
-     * jar's copy and recorded; the previous file is kept as a backup beside it and one catalogue line
-     * names both and tells the operator to copy, rename and select a custom file instead. It is only
-     * ever called for a resource the jar ships, so it can never touch an operator's custom-named
-     * file. During the construction-time pass (#460) it writes nothing and returns the jar's
-     * dictionary, the language a replacement yields.
-     * <p>
-     * Steps, each undone if a later one fails, so a failure at any step leaves the original file in
-     * place, byte-identical, with nothing recorded and no backup left behind:
-     * <ol>
-     *   <li>copy the file to a backup name that does not exist yet ({@link #copyToFreshBackup}).
-     *       A copy rather than a rename, so the language file is never absent: a crash here leaves
-     *       the original in place and, at worst, one extra backup;</li>
-     *   <li>write the jar's bytes to a temporary file in the same folder and move it over the
-     *       original atomically ({@link #writeBytes}, the refresh path branch 1 uses; it refuses a
-     *       read-only or symbolic-link file, which an operator pinned). On failure the backup this
-     *       call created is deleted -- it is a copy, so nothing is lost;</li>
-     *   <li>record the new hash and read the record back. On failure the backup is moved back over
-     *       the file, restoring the original bytes;</li>
-     *   <li>log one line naming the file and its backup.</li>
-     * </ol>
-     * The language returned is the jar's dictionary after a replacement, and the kept file's
-     * dictionary with the placeholder-arity guard (the pre-#459 behaviour) after a failure.
-     */
-    private Language restoreOfficialLanguageFile(File file, byte[] jarBytes, File resourceFolder,
-                                                   String resourcePath, String extension) {
-        if (languageDryRun) {
-            // #460: construction only computes the decision; the committing pass replaces the file.
-            return new Language(readFlatDictionary(jarBytes, extension));
-        }
-        File backup = copyToFreshBackup(file);
-        if (backup != null) {
-            if (!writeBytes(file, jarBytes)) {
-                deleteOwnBackup(backup);
-            } else if (!recordReplacedFile(file, resourceFolder, resourcePath)) {
-                restoreFromBackup(backup, file);
-            } else {
-                languageLog().warn(String.format(UltiTools.getInstance().i18n(LANGUAGE_REPLACED_LOG_KEY),
-                        file.getPath(), getPluginName(), backup.getPath()));
-            }
-        }
-        return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
-    }
-
-    /**
-     * Copies {@code file} to the first backup name that does not exist yet -- {@code <name>.bak},
-     * then {@code <name>.1.bak}, {@code <name>.2.bak} -- never overwriting anything: a name is
-     * skipped when any file or link exists there, and the copy itself refuses an existing target,
-     * so a name taken in between is skipped too.
-     *
-     * The naming is shared with the framework's own language files ({@link
-     * OfficialLanguageFiles#copyToFreshBackup}).
-     *
-     * @return the backup created, or {@code null} if none could be (the reason is logged)
-     */
-    private File copyToFreshBackup(File file) {
-        try {
-            File backup = OfficialLanguageFiles.copyToFreshBackup(file);
-            if (backup == null) {
-                languageLog().error("No free backup name for language file '" + file.getPath() + "' of module '"
-                        + getPluginName() + "' after " + OfficialLanguageFiles.MAX_BACKUP_NAMES
-                        + " tries; leaving it unchanged.");
-            }
-            return backup;
-        } catch (IOException e) {
-            languageLog().error(e, "Could not back up language file '" + file.getPath() + "' of module '"
-                    + getPluginName() + "'; leaving it unchanged instead of replacing it without a backup.");
-            return null;
-        }
-    }
-
-    /**
-     * Records {@code file}'s current hash and reads the record back.
-     *
-     * @return whether the record now holds exactly that hash
-     */
-    private boolean recordReplacedFile(File file, File resourceFolder, String resourcePath) {
-        try {
-            String hash = ResourceHashSidecar.sha256(file);
-            ResourceHashSidecar.record(resourceFolder, resourcePath, hash);
-            return ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath).filter(hash::equals).isPresent();
-        } catch (UncheckedIOException e) {
-            languageLog().error(e, "Could not hash replaced language file '" + file.getPath() + "' of module '"
-                    + getPluginName() + "'.");
-            return false;
-        }
-    }
-
-    /**
-     * Deletes the backup {@link #copyToFreshBackup} created in this same replacement attempt, after
-     * the replacement itself failed. It is a copy of a file that is still in place, so nothing is
-     * lost, and leaving it would add one more backup on every start that fails the same way.
-     */
-    private void deleteOwnBackup(File backup) {
-        try {
-            Files.deleteIfExists(backup.toPath());
-        } catch (IOException e) {
-            languageLog().error(e, "Could not remove the unused backup '" + backup.getPath() + "' of module '"
-                    + getPluginName() + "'; it is a copy of the unchanged language file and can be deleted.");
-        }
-    }
-
-    /**
-     * Moves the backup this attempt created back over {@code file}, restoring the original bytes,
-     * after the provenance record could not be written. Atomic where the filesystem supports it.
-     */
-    private void restoreFromBackup(File backup, File file) {
-        languageLog().error("Could not record provenance for replaced language file '" + file.getPath()
-                + "' of module '" + getPluginName() + "'; restoring the previous file.");
-        try {
-            try {
-                Files.move(backup.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
-                        StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(backup.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            }
-        } catch (IOException e) {
-            languageLog().error(e, "Could not restore language file '" + file.getPath() + "' of module '"
-                    + getPluginName() + "': it now holds the bundled version, and the previous file is kept only as '"
-                    + backup.getPath() + "'. To restore it, stop the server and rename it back.");
-        }
-    }
-
-    /**
-     * Branch 1 of {@link #resolveLanguageWithProvenance}: the recorded hash equals the disk
-     * file's current hash -- the operator has never touched this file since it was extracted,
-     * so it is safe to overwrite from the current jar. Extracted into its own method (PMD
-     * {@code NPathComplexity}: once branch 2 in the caller gained its own content-comparison
-     * check for the Codex finding on {@code UltiToolsPlugin.java:515}, thread {@code
-     * PRRT_kwDOIcF9Es6i2kao}, this branch's own nested {@code writeBytes}/try/catch shape pushed
-     * the combined method over Codacy's threshold; splitting it out is a structural change only,
-     * the behaviour below is unchanged from before that finding).
-     * <p>
-     * Codex round 1, P2: skip the write entirely when the bundled content has not actually
-     * changed since it was last synced -- the common case on every restart after the first
-     * successful sync, not an edge case. Rewriting identical bytes and logging "has been
-     * updated" every single time is misleading, touches the file's mtime for no reason, and
-     * fails needlessly on an installation that hardens module resources read-only after
-     * provisioning.
-     * <p>
-     * Only records the new baseline and logs success once the write is CONFIRMED to have
-     * landed -- re-hashes the bytes actually on disk afterward (mirroring {@code
-     * saveResources(boolean)}'s own pattern) rather than trusting the precomputed {@code jarHash}, so a
-     * partial/failed write can never be misreported as success (WR-01). Codex round 2, P2:
-     * {@code record(...)} swallows its own {@link IOException} and returns {@code void}, so a
-     * caller cannot otherwise tell a sidecar write failure from success -- the record is read
-     * back to confirm it actually persisted before claiming success in the log; logging "has
-     * been updated" when the file WAS refreshed but the sidecar was NOT would misrepresent
-     * provenance tracking as healthy. Deliberately not reverted on failure: a second write
-     * introduces its own atomicity risk for a genuinely rare failure, and the next boot's hash
-     * mismatch safely falls into branch 2's own content-comparison fix instead, rather than a
-     * second write attempt here.
-     * <p>
-     * Codex round on {@code UltiToolsPlugin.java:498}, P2: this used to be an unconditional
-     * {@code readLanguageFile(...)}, skipping the per-key placeholder-arity guard on EXACTLY the
-     * paths where a stale value is most likely -- {@code writeBytes(file, jarBytes)} returning
-     * {@code false} (read-only file, symlink, unpreservable ownership, or an I/O failure
-     * mid-write) leaves the OLD disk bytes in place while {@code jarBytes} has already moved on,
-     * so a key whose bundled arity shrank (two placeholders to one) can still carry the old,
-     * wider disk value. A stale disk value with MORE placeholders than the call site now
-     * supplies throws {@link java.util.MissingFormatArgumentException} at format time -- extra
-     * bundled arguments over a narrower stale value are silently ignored by {@link
-     * String#format}, not an error. Applying the override UNCONDITIONALLY -- not only on the
-     * {@code writeBytes}-failed path -- means the write's own outcome stops mattering for this
-     * guarantee: when the write succeeded, disk and jar bytes are now identical, so every key's
-     * arity trivially matches and this is a no-op past the extra parse; when it failed, this is
-     * precisely the protection this method exists to provide.
-     *
-     * @param file           the on-disk language file, already confirmed to exist
-     * @param jarBytes       the current bundled bytes for this resource, already confirmed
-     *                       non-null by the caller
-     * @param jarHash        {@code jarBytes}'s own SHA-256 digest, already computed by the caller
-     * @param diskHash       {@code file}'s current SHA-256 digest, already computed by the
-     *                       caller -- equal to the recorded provenance hash, which is what
-     *                       routed the caller into this method in the first place
-     * @param resourceFolder the module's resource folder root (the sidecar's own location)
-     * @param resourcePath   the extracted resource's path relative to the resource folder
-     * @param extension      the language file extension ({@code ".json"}, {@code ".yml"} or
-     *                       {@code ".yaml"})
-     * @return the resolved language for this file
-     */
-    private Language resolveNeverTouchedSinceExtraction(File file, byte[] jarBytes, String jarHash,
-            String diskHash, File resourceFolder, String resourcePath, String extension) {
-        if (jarHash.equals(diskHash)) {
-            return readLanguageFile(file, extension);
-        }
-        if (languageDryRun) {
-            // #460: construction only computes the decision. The language is the one a successful
-            // refresh yields -- the jar's dictionary -- and the committing pass writes it.
-            return new Language(readFlatDictionary(jarBytes, extension));
-        }
-        if (writeBytes(file, jarBytes)) {
-            try {
-                String newDiskHash = ResourceHashSidecar.sha256(file);
-                ResourceHashSidecar.record(resourceFolder, resourcePath, newDiskHash);
-                boolean recordPersisted = ResourceHashSidecar.readRecordedHash(resourceFolder, resourcePath)
-                        .filter(newDiskHash::equals).isPresent();
-                if (recordPersisted) {
-                    languageLog().info("Language file '" + resourcePath + "' for module '" + getPluginName()
-                            + "' was not modified since it was extracted and has been updated to the "
-                            + "current bundled version.");
-                } else {
-                    languageLog().error("Refreshed language file '" + resourcePath + "' for module '"
-                            + getPluginName() + "' but could not persist its provenance record; it may "
-                            + "be treated as customised on the next start until this is resolved.");
-                }
-            } catch (UncheckedIOException e) {
-                // Codex round 6, P1: the same gap fixed in saveResources(boolean) -- the file this
-                // branch just wrote could not be reopened for hashing immediately afterward
-                // (e.g. a write-only default ACL, or a transient filesystem error), and
-                // sha256(File)'s UncheckedIOException is not an IOException a plain IOException
-                // catch would see. Degrade rather than let it abort module construction: the
-                // file itself WAS refreshed and is still used below via readLanguageFile -- only
-                // its provenance record is skipped, so the next boot's hash comparison falls
-                // back to "unknown provenance" (branches 3/4) instead of crashing this one.
-                languageLog().error("Could not hash refreshed language file '" + resourcePath
-                        + "' for module '" + getPluginName() + "' immediately after writing it; "
-                        + "its provenance record was not updated.", e);
-            }
-        }
-        return applyPlaceholderArityOverride(file, jarBytes, extension, resourcePath);
-    }
-
-    /**
-     * Reads an on-disk language file exactly as the pre-#441 {@code loadLanguageFromDisk} did --
-     * extracted unchanged so both provenance branches that keep the disk file's own parse
-     * (branches 1 and 3 in {@link #resolveLanguageWithProvenance}) share the same reading logic
-     * the jar-absent short-circuit also uses.
-     */
-    private Language readLanguageFile(File file, String extension) {
-        if (languageMigrationOnly) {
-            // Migration of a language not in use (Codex review of #566, run 2): the file decision is
-            // made, no dictionary is built, so a malformed catalogue of an unused language is never
-            // parsed -- as before the migration pass existed.
-            return new Language("{}");
-        }
-        if (".json".equals(extension)) {
-            return new Language(file);
-        }
-        try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
-            return Language.fromYaml(reader);
-        } catch (IOException e) {
-            languageLog().error("Failed to read language file " + file.getPath(), e);
-            return new Language("{}");
-        }
-    }
-
-    /**
-     * Builds the disk language for the "operator customisation" branches (2 and 4 in {@link
-     * #resolveLanguageWithProvenance}): the disk dictionary stays authoritative for every key,
-     * except a key the jar's value proves has LOST a placeholder relative to the disk value --
-     * that key is overridden to the jar's value and warned about once, naming the module, the
-     * file and the key but never either value (T-16-04-02). A key present only in the jar is
-     * deliberately left out of the returned dictionary: {@link Language#withFallback} (unchanged)
-     * already resolves a key the disk dictionary lacks entirely, and duplicating that here would
-     * just be a second, redundant path to the same answer.
-     * <p>
-     * Two independent detectors decide "lost a placeholder", evaluated SEPARATELY rather than
-     * through one shared code path (#524):
-     * <ul>
-     * <li>{@link #placeholderArity} for {@code %s}/{@code %d} -- SYMMETRIC equality of the
-     * highest required {@code String.format} argument position. Either side moving, in either
-     * direction, is a mismatch: both sides use the same dialect, so any count change at all means
-     * the parameter shape changed.</li>
-     * <li>{@link #missingBracePlaceholder} for {@code {0}}/{@code {PLAYER}}-style tokens --
-     * ONE-DIRECTIONAL presence, not a count. It fires only when a token the JAR value contains is
-     * ABSENT from the disk value; a disk value that keeps every bundled token but adds a token of
-     * its own, or rewords everything around them, never fires.</li>
-     * </ul>
-     * The two cannot share one code path: collapsing them into a single "count differs" rule would
-     * make the brace detector symmetric too, and a symmetric brace rule fires on an operator's own
-     * customisation the moment its OWN brace count doesn't happen to match the jar's -- exactly the
-     * false-positive class {@link #PLACEHOLDER_PATTERN}'s own javadoc already documents Codex
-     * round 6 eliminating for the {@code %} dialect (a permissive pattern reading ordinary text as
-     * a placeholder). One-directional token presence is the brace dialect's equivalent fix: it
-     * flags a slot that disappeared under the operator and nothing else -- never an operator who
-     * added something of their own.
-     * <p>
-     * What an operator loses in the one case this DOES fire: nothing structural -- their file is
-     * never touched, never rewritten. That one message renders with the bundled wording (not
-     * their customised wording) until they notice the warning and re-add the missing token
-     * themselves.
-     */
-    private Language applyPlaceholderArityOverride(File file, byte[] jarBytes, String extension,
-                                                     String resourcePath) {
-        if (languageMigrationOnly) {
-            // Migration of a language not in use: the file decision is made, no dictionary is needed.
-            return new Language("{}");
-        }
-        Map<String, String> resolved = overrideLostPlaceholders(readFlatDictionary(file, extension),
-                readFlatDictionary(jarBytes, extension), (key, reason) -> warnLostPlaceholder(key, resourcePath, reason));
-        return new Language(resolved);
-    }
-
-    /**
-     * The two-detector placeholder comparison of {@link #applyPlaceholderArityOverride} (#441, #524), as a pure
-     * function shared with an operator's custom language file (#608) and the framework's own custom file: every
-     * key of {@code own} whose value lost a placeholder relative to {@code official}'s value for the same key --
-     * a different {@code %s}/{@code %d} arity ({@link #placeholderArity}), a malformed format-argument index, a
-     * different conversion at a position both values use ({@link #conversionMismatch}, #615 item 3), or a {@code
-     * {TOKEN}} the official value has and {@code own}'s lacks ({@link #missingBracePlaceholder}) -- is
-     * replaced by the official value, and {@code mismatch} is told the key and the reason phrase (never either
-     * value). Keys {@code own} lacks are left out: {@link Language#withFallback} resolves them. In memory only:
-     * nothing is read or written here.
-     * <p>
-     * Not part of the module-facing API. Public only because the framework class reads its own custom file in
-     * another package.
-     *
-     * @param own      the operator's dictionary (an edited official file, or a custom language file)
-     * @param official the bundled dictionary of the same, or the base, language
-     * @param mismatch receives {@code (key, reason)} for each replaced key; the reason completes the sentence
-     *                 "Language key 'k' in 'file' ... " ({@code "has a different placeholder count than the
-     *                 current bundled version"} and the like)
-     * @return {@code own} with each such key replaced by the official value
-     * @since 6.3.0
-     */
-    @ApiStatus.Internal
-    public static Map<String, String> overrideLostPlaceholders(Map<String, String> own, Map<String, String> official,
-                                                               BiConsumer<String, String> mismatch) {
-        Map<String, String> resolved = new LinkedHashMap<>(own);
-        for (Map.Entry<String, String> officialEntry : official.entrySet()) {
-            String key = officialEntry.getKey();
-            String ownValue = own.get(key);
-            if (ownValue == null) {
-                // Missing from own entirely: Language.withFallback already covers this key.
-                continue;
-            }
-            String officialValue = officialEntry.getValue();
-            String reason = lostPlaceholderReason(ownValue, officialValue);
-            if (reason != null) {
-                resolved.put(key, officialValue);
-                mismatch.accept(key, reason);
-            }
-        }
-        return resolved;
-    }
-
-    /**
-     * Why {@code ownValue} lost a placeholder relative to {@code officialValue}, or {@code null} if it did not.
-     */
-    private static String lostPlaceholderReason(String ownValue, String officialValue) {
-        boolean arityMismatch;
-        try {
-            arityMismatch = placeholderArity(ownValue) != placeholderArity(officialValue);
-        } catch (NumberFormatException e) {
-            // Codex round 3, P2: an explicit format-argument index too large for int (e.g.
-            // "%999999999999999999$s") overflows Integer.parseInt inside placeholderArity. Before
-            // that fix the exception aborted the whole module's construction over a single
-            // malformed, possibly never-formatted value. A malformed index is handled the same
-            // conservative way as a genuine mismatch: the bundled value is used for this key.
-            return "has a malformed format-argument index and could not be compared";
-        }
-        if (arityMismatch) {
-            return "has a different placeholder count than the current bundled version";
-        }
-        // #615 item 3: the same count with a different conversion at a position both values use
-        // (%d where the bundled text has %s, or the reverse) would make String.format throw
-        // IllegalFormatConversionException when the message is formatted.
-        if (conversionMismatch(ownValue, officialValue)) {
-            return "uses a different placeholder type than the current bundled version";
-        }
-        // #524: the %s/%d check above never sees this module population's actual dialect -- see
-        // PLACEHOLDER_PATTERN's javadoc for the install-wide measurement. Only evaluated when the
-        // symmetric %-check found no mismatch: either detector firing is reason enough.
-        return missingBracePlaceholder(ownValue, officialValue)
-                ? "is missing a placeholder that the current bundled version has" : null;
-    }
-
-    private void warnLostPlaceholder(String key, String fileLabel, String reason) {
-        languageLog().warn("Language key '" + key + "' in '" + fileLabel + "' for module '" + getPluginName() + "' "
-                + reason + "; using the current bundled version's value for this key.");
-    }
-
-    /**
-     * Returns the highest {@code String.format} argument POSITION {@code value} requires --
-     * not the count of distinct positions used (Codex round 2, P2). {@code "%2$s" alone}
-     * requires an args array of length (at least) 2, since {@code String.format} demands every
-     * position up to the highest one referenced be present, even if a lower position (here,
-     * 1) is never itself rendered -- so its arity is 2, not 1. Counting DISTINCT positions
-     * (a one-element set for both {@code "%2$s"} alone and {@code "%s"} alone) would wrongly
-     * call those two equal.
-     * <p>
-     * A value repeating one EXPLICIT index twice (e.g. {@code "%1$s and %1$s again"}) still
-     * has arity one, since both conversions consume the SAME argument and neither raises the
-     * highest-position watermark past 1; a naive occurrence count would call it two and warn
-     * on a rewording that changed nothing about the message's parameter shape. An unindexed
-     * conversion (this framework's own catalogues use only this form) consumes the NEXT
-     * sequential position, so two unindexed {@code %s} conversions in one value require arity
-     * two. {@code %%} (a literal percent) consumes no argument and is excluded -- {@link
-     * #PLACEHOLDER_PATTERN} itself (Codex round 6, P2) no longer matches anything outside
-     * {@code %s}/{@code %d}/{@code %%} at all, so {@code %n} and every other {@code Formatter}
-     * conversion this framework never emits cannot reach this method to begin with.
-     *
-     * @param value a language value, or {@code null}
-     * @return the highest argument position {@code value}'s {@code String.format} conversions
-     *         require, or {@code 0} for {@code null} or a value with none
-     */
-    private static int placeholderArity(String value) {
-        if (value == null) {
-            return 0;
-        }
-        Matcher matcher = PLACEHOLDER_PATTERN.matcher(value);
-        int highestPosition = 0;
-        int nextImplicitPosition = 1;
-        while (matcher.find()) {
-            char conversion = matcher.group(2).charAt(0);
-            if (conversion == '%') {
-                continue;
-            }
-            String explicitIndex = matcher.group(1);
-            if (explicitIndex != null) {
-                int position = Integer.parseInt(explicitIndex);
-                if (position == 0) {
-                    // Codex round 11, P2: java.util.Formatter argument indexes are 1-based --
-                    // String.format throws IllegalFormatArgumentIndexException for index 0, so
-                    // "%0$s" is exactly as malformed as an oversized index (round 3), not "no
-                    // placeholder at all". Math.max(highestPosition, 0) would otherwise never
-                    // raise highestPosition above 0, making this value compare EQUAL in arity to
-                    // one with no placeholder whatsoever -- the malformed value would then
-                    // survive completely unflagged. Reuse the same NumberFormatException signal
-                    // applyPlaceholderArityOverride's catch clause already treats as malformed.
-                    throw new NumberFormatException("Formatter argument index must be >= 1, was 0");
-                }
-                highestPosition = Math.max(highestPosition, position);
-            } else {
-                highestPosition = Math.max(highestPosition, nextImplicitPosition);
-                nextImplicitPosition++;
-            }
-        }
-        return highestPosition;
-    }
-
-    /**
-     * Reports whether {@code ownValue} and {@code officialValue} use a different {@code String.format}
-     * conversion for an argument position both of them use (#615 item 3; maintainer decision 2026-10-06):
-     * {@code %d} where the other has {@code %s} at the same position, explicit ({@code %2$d}) or implied by the
-     * order of unindexed conversions. Runs only after {@link #placeholderArity} found the same count, and sees
-     * exactly what that count sees ({@link #PLACEHOLDER_PATTERN}: {@code %s} and {@code %d}, optionally indexed;
-     * {@code %%} is not a conversion).
-     * <p>
-     * The rule (decided by plan 17-77, revision 0): for every position BOTH values use, the set of conversion
-     * characters at that position must be equal. A position only one value uses is left to the count comparison,
-     * so a value that keeps the bundled count but drops or reorders arguments with explicit indices keeps the
-     * outcome it had before this check existed; conversions in a different order with the same explicit indices
-     * are the same conversions. Equality, not "would it throw": {@code %s} for a bundled {@code %d} would format,
-     * but the maintainer's decision compares the types, so the text that reaches a player is the one whose
-     * argument types the module was written for.
-     *
-     * @param ownValue      the operator's value
-     * @param officialValue the bundled value of the same key
-     * @return {@code true} if a shared position carries different conversions
-     */
-    private static boolean conversionMismatch(String ownValue, String officialValue) {
-        Map<Integer, Set<Character>> own = placeholderConversions(ownValue);
-        Map<Integer, Set<Character>> official = placeholderConversions(officialValue);
-        for (Map.Entry<Integer, Set<Character>> entry : own.entrySet()) {
-            Set<Character> officialConversions = official.get(entry.getKey());
-            if (officialConversions != null && !officialConversions.equals(entry.getValue())) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * The {@code String.format} conversions of {@code value} by argument position: an explicit index ({@code
-     * %2$s}) names its position, an unindexed conversion takes the next ordinary position, as {@code
-     * java.util.Formatter} counts them. Called only after {@link #placeholderArity} parsed the same value, so a
-     * malformed index has already been reported.
-     */
-    private static Map<Integer, Set<Character>> placeholderConversions(String value) {
-        Map<Integer, Set<Character>> conversions = new TreeMap<>();
-        if (value == null) {
-            return conversions;
-        }
-        Matcher matcher = PLACEHOLDER_PATTERN.matcher(value);
-        int nextImplicitPosition = 1;
-        while (matcher.find()) {
-            char conversion = matcher.group(2).charAt(0);
-            if (conversion == '%') {
-                continue;
-            }
-            String explicitIndex = matcher.group(1);
-            int position = explicitIndex != null ? Integer.parseInt(explicitIndex) : nextImplicitPosition++;
-            conversions.computeIfAbsent(position, ignored -> new TreeSet<>()).add(conversion);
-        }
-        return conversions;
-    }
-
-    /**
-     * Reports whether {@code jarValue} contains a brace-style placeholder token (see {@link
-     * #BRACE_TOKEN_PATTERN}) that {@code diskValue} does not -- ONE-DIRECTIONALLY, and by TOKEN
-     * PRESENCE, not by count (#524). See {@link #applyPlaceholderArityOverride}'s own javadoc for
-     * why this is deliberately asymmetric, unlike {@link #placeholderArity}'s symmetric check: an
-     * operator's value that keeps every bundled token -- however reworded, recoloured, or however
-     * many of its OWN extra tokens it adds -- must never be flagged. Only a token that existed in
-     * the bundled value and is genuinely gone from the operator's value counts as a loss.
-     * <p>
-     * A jar value with no brace tokens at all can never report a loss (there is nothing to lose),
-     * independent of whatever the disk value happens to contain -- this is what keeps a module's
-     * {@code %s}/{@code %d}-only keys, and any decorative brace an operator adds on their own,
-     * outside this check entirely.
-     *
-     * @param diskValue the operator's on-disk value for this key
-     * @param jarValue  the current bundled value for the same key
-     * @return {@code true} if {@code jarValue} has at least one brace token absent from {@code
-     *         diskValue}
-     */
-    private static boolean missingBracePlaceholder(String diskValue, String jarValue) {
-        Set<String> jarTokens = bracePlaceholderTokens(jarValue);
-        if (jarTokens.isEmpty()) {
-            return false;
-        }
-        return !bracePlaceholderTokens(diskValue).containsAll(jarTokens);
-    }
-
-    /**
-     * Returns the distinct brace-style placeholder tokens (see {@link #BRACE_TOKEN_PATTERN}) found
-     * in {@code value} -- e.g. {@code {"0", "PLAYER"}} for {@code "Hi {PLAYER}, you are #{0}"}.
-     * Iteration order is insertion order and otherwise unused: the only caller ({@link
-     * #missingBracePlaceholder}) only ever calls {@code containsAll} on the result.
-     *
-     * @param value a language value, or {@code null}
-     * @return the distinct token names found, or an empty set for {@code null} or a value with none
-     */
-    private static Set<String> bracePlaceholderTokens(String value) {
-        if (value == null) {
-            return Collections.emptySet();
-        }
-        Set<String> tokens = new LinkedHashSet<>();
-        Matcher matcher = BRACE_TOKEN_PATTERN.matcher(value);
-        while (matcher.find()) {
-            tokens.add(matcher.group(1));
-        }
-        return tokens;
-    }
-
-    /**
-     * Reads a flat {@code key -> value} dictionary from a language file on disk, for the
-     * placeholder-arity comparison only -- {@link Language} itself exposes no way to enumerate its
-     * keys, so this is a small, independent read of the same file formats, not a change to {@link
-     * Language}'s own parsing. Degrades to an empty map on any read/parse failure (an empty file
-     * is "no keys", never an error, per D-05).
-     */
-    private static Map<String, String> readFlatDictionary(File file, String extension) {
-        if (file == null || !file.isFile()) {
-            return Collections.emptyMap();
-        }
-        try (Reader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
-            return readFlatDictionary(reader, extension);
-        } catch (IOException e) {
-            return Collections.emptyMap();
-        }
-    }
-
-    /**
-     * Reads a flat {@code key -> value} dictionary from jar-bundled bytes, mirroring the file
-     * overload above for the jar side of the comparison.
-     */
-    private static Map<String, String> readFlatDictionary(byte[] bytes, String extension) {
-        try (Reader reader = new InputStreamReader(new ByteArrayInputStream(bytes), StandardCharsets.UTF_8)) {
-            return readFlatDictionary(reader, extension);
-        } catch (IOException e) {
-            return Collections.emptyMap();
-        }
-    }
-
-    private static Map<String, String> readFlatDictionary(Reader reader, String extension) {
-        try {
-            if (".json".equals(extension)) {
-                Map<String, String> parsed = ARITY_GSON.fromJson(reader, ARITY_MAP_TYPE);
-                return parsed != null ? parsed : Collections.emptyMap();
-            }
-            // Mirrors Language.fromYaml's own flattening -- duplicated here (not called) because
-            // Language exposes no way to get its dictionary back out, and this plan does not touch
-            // Language.java at all.
-            YamlConfiguration yaml = YamlConfiguration.loadConfiguration(reader);
-            Map<String, String> flattened = new LinkedHashMap<>();
-            for (String key : yaml.getKeys(true)) {
-                if (yaml.isString(key)) {
-                    flattened.put(key, yaml.getString(key));
-                }
-            }
-            return flattened;
-        } catch (JsonParseException e) {
-            // Codex round 7, P2: JsonParseException is the common superclass of
-            // JsonSyntaxException (malformed JSON) AND JsonIOException -- Gson wraps an
-            // IOException it hits reading from `reader` mid-parse (e.g. a transient filesystem
-            // error on the second read of a customised catalogue) in the latter, which a catch
-            // (JsonSyntaxException) alone does not see, letting it escape
-            // applyPlaceholderArityOverride and abort this whole module's construction, contrary
-            // to this method's own documented empty-map degradation (see its own javadoc).
-            return Collections.emptyMap();
-        }
-    }
-
-    /**
-     * Writes {@code bytes} to {@code file}, returning whether the write actually succeeded
-     * (WR-01) -- the caller must not record a new provenance baseline or log a success line for
-     * a write that threw partway through.
-     * <p>
-     * Round following {@code PosixAttributePreserver.java:104} (symlink finding on {@code
-     * ResourceHashSidecar.java:320}, thread {@code PRRT_kwDOIcF9Es6i2I49}, P2): this method's
-     * entire operation -- the operator-pinned-read-only refusal, the symlink refusal, the
-     * temp-file-then-atomic-move mechanism, and the POSIX attribute preservation -- now lives in
-     * {@link PosixAttributePreserver#replaceInPlace}, shared with {@code
-     * ResourceHashSidecar#writeAll}'s identical contract, so the two write paths cannot disagree
-     * on any of these properties again the way they disagreed on attribute preservation (round 3),
-     * an unreadable-attributes edge case (round 6), and symlink handling (this round) one at a
-     * time. This method is now a thin {@link PosixAttributePreserver.ReplaceInPlaceListener}
-     * supplying this class's own {@link #getLogger()}/{@code getPluginName()} warning text; the
-     * full behavioural contract (what each refusal means, why each is conservative rather than
-     * best-effort) is documented on {@link PosixAttributePreserver#replaceInPlace} and {@link
-     * PosixAttributePreserver.ReplaceInPlaceListener} themselves, not duplicated here.
-     * <p>
-     * The symlink refusal's exact semantics, unchanged from Codex round 11, P2: a symlinked
-     * language file (an operator-managed shared-translations layout, e.g. {@code lang/en.json}
-     * pointing at a shared store) is left completely untouched -- REFUSE, not write-through to
-     * the link's target. See {@link PosixAttributePreserver.ReplaceInPlaceListener#onSymbolicLink()}.
-     */
-    private boolean writeBytes(File file, byte[] bytes) {
-        return PosixAttributePreserver.replaceInPlace(file, bytes, new PosixAttributePreserver.ReplaceInPlaceListener() {
-            @Override
-            public void onOperatorPinnedReadOnly() {
-                languageLog().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
-                        + "' is not writable; treating it as operator-pinned and leaving it untouched "
-                        + "instead of refreshing it from the bundled version.");
-            }
-
-            @Override
-            public void onSymbolicLink() {
-                languageLog().warn("Language file '" + file.getPath() + "' for module '" + getPluginName()
-                        + "' is a symbolic link; treating it as operator-pinned and leaving it "
-                        + "untouched instead of replacing the link with a regular file.");
-            }
-
-            @Override
-            public void onSourceAttributesUnreadable() {
-                languageLog().warn("Could not read the current permissions and owner/group of "
-                        + "language file '" + file.getPath() + "' for module '" + getPluginName()
-                        + "'; treating its identity as unreplicable and skipping the refresh instead "
-                        + "of silently replacing it with a process-owned copy.");
-            }
-
-            @Override
-            public void onPermissionCopyFailure() {
-                languageLog().warn("Could not preserve file permissions while refreshing '" + file.getPath()
-                        + "' for module '" + getPluginName() + "'; the refreshed file may not match the "
-                        + "original's permissions.");
-            }
-
-            @Override
-            public void onOwnershipCopyFailure(String ownerName, String groupName) {
-                languageLog().warn("Language file '" + file.getPath() + "' for module '"
-                        + getPluginName() + "' is owned by '" + ownerName + ":" + groupName
-                        + "', which this process cannot replicate onto the refreshed file; "
-                        + "skipping the refresh instead of silently changing the file's ownership.");
-            }
-
-            @Override
-            public void onWriteFailure(IOException cause) {
-                languageLog().error("Failed to write language file " + file.getPath(), cause);
-            }
-        });
-    }
-
-    /**
-     * Reads the raw bytes of {@code resourcePath} (e.g. {@code "lang/en.json"}) from this module's
-     * own {@link CodeSource} location, or {@code null} if it is not present there. Mirrors {@link
-     * #loadLanguageFromJar(String, String)}'s directory/jar dual branch exactly (13-REVIEW CR-01,
-     * issue #412 follow-up) but returns raw bytes instead of a parsed {@link Language}, so the
-     * D-05/D-06 provenance decision can hash and, in the overwrite branch, write those exact bytes
-     * to disk.
-     */
-    private byte[] readEmbeddedResourceBytes(String resourcePath) {
-        CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
-        if (src == null || src.getLocation() == null) {
-            return null;
-        }
-        File location = resolveCodeSourceFile(src.getLocation());
-        if (location.isDirectory()) {
-            return readEmbeddedResourceBytesFromDirectory(location, resourcePath);
-        }
-        try (JarFile jarFile = new JarFile(location)) {
-            JarEntry entry = jarFile.getJarEntry(resourcePath);
-            if (entry == null) {
-                return null;
-            }
-            try (InputStream in = jarFile.getInputStream(entry)) {
-                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-                byte[] chunk = new byte[4096];
-                int len;
-                while ((len = in.read(chunk)) != -1) {
-                    buffer.write(chunk, 0, len);
-                }
-                return buffer.toByteArray();
-            }
-        } catch (IOException e) {
-            languageLog().error(e, "Failed to read embedded resource " + resourcePath + " from " + location);
-            return null;
-        }
-    }
-
-    /**
-     * The exploded-classpath (directory {@code CodeSource}) branch of {@link
-     * #readEmbeddedResourceBytes(String)}, split out to keep that method's NPath complexity under
-     * the Codacy/PMD threshold once the 16-05 / CodeQL {@code java/zipslip} alert #11 containment
-     * guard was added -- purely a structural split, the guard's own behaviour is unchanged.
-     *
-     * @param location     the directory {@code CodeSource} location
-     * @param resourcePath the resource path to read, e.g. {@code "lang/en.json"}
-     * @return the resource's raw bytes, or {@code null} if absent, escaping, or unreadable
-     */
-    private byte[] readEmbeddedResourceBytesFromDirectory(File location, String resourcePath) {
-        File resource = new File(location, resourcePath.replace('/', File.separatorChar));
-        // 16-05 / CodeQL java/zipslip alert #11: resourcePath is built by the caller as
-        // "lang/" + code + extension from the same untrusted code loadLanguageFromDisk guards --
-        // mirror that guard here so this directory-CodeSource branch cannot be used to read
-        // outside the module's own resource folder either.
-        if (!isWithinDirectory(location, resource)) {
-            languageLog().warn("Module '" + getPluginName() + "' resolved an embedded resource "
-                    + "path that would escape its resource folder ('" + location + "'); "
-                    + "refusing to read '" + resource + "'.");
-            return null;
-        }
-        if (!resource.isFile()) {
-            return null;
-        }
-        try {
-            return Files.readAllBytes(resource.toPath());
-        } catch (IOException e) {
-            languageLog().error(e, "Failed to read embedded resource " + resource + " from " + location);
-            return null;
-        }
-    }
-
-    /**
-     * Reads {@code lang/<code><extension>} from the module's own {@link CodeSource} location if
-     * present, else {@code null}. Mirrors {@link Localized#scanLangResources(URL)}'s directory/jar
-     * branch (13-REVIEW CR-01, issue #412 follow-up): an exploded classpath (dev workspace, IDE
-     * launch, or a module test that instantiates a real {@code UltiToolsPlugin} subclass) has a
-     * directory as its {@code CodeSource}, and {@link Localized#supported()} already scans that
-     * directory directly -- this method must not disagree by unconditionally trying (and failing)
-     * to open the directory as a {@code JarFile} first.
-     * <p>
-     * The resource path is built with {@code '/'} for the jar-entry lookup and {@link
-     * File#separator} for the on-disk lookup: jar entry names always use a forward slash, so the
-     * separator form would silently find nothing on a Windows host, and the reverse holds for a
-     * real file path.
-     */
-    private Language loadLanguageFromJar(String code, String extension) {
-        CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
-        if (src == null || src.getLocation() == null) {
-            return null;
-        }
-        File location = resolveCodeSourceFile(src.getLocation());
-        if (location.isDirectory()) {
-            // Exploded classpath (dev workspace, IDE launch, test) -- Localized.scanLangResources()
-            // already treats this shape as first-class; loadLanguageFromJar must not disagree.
-            File langDir = new File(location, "lang");
-            File resource = new File(langDir, code + extension);
-            // 16-05 / CodeQL java/zipslip alert #11: same guard as loadLanguageFromDisk -- code
-            // reaches this branch either lightly restricted (via Localized.languageCodeOf's
-            // allowlist) or not restricted at all (a hostile config.yml language: value), so the
-            // file boundary is still enforced here rather than trusted from upstream.
-            if (!isWithinDirectory(langDir, resource)) {
-                languageLog().warn("Module '" + getPluginName() + "' resolved a language code that "
-                        + "would escape its lang/ directory ('" + langDir + "'); refusing to load '"
-                        + resource + "'.");
-                return null;
-            }
-            if (!resource.isFile()) {
-                return null;
-            }
-            try (BufferedReader reader = Files.newBufferedReader(resource.toPath(), StandardCharsets.UTF_8)) {
-                return parseLanguageResource(reader, extension);
-            } catch (IOException e) {
-                languageLog().error(e, "Failed to read language resource " + resource + " from " + location);
-                return new Language("{}");
-            }
-        }
-        String entryName = "lang/" + code + extension;
-        try (JarFile jarFile = new JarFile(location)) {
-            JarEntry entry = jarFile.getJarEntry(entryName);
-            if (entry == null) {
-                return null;
-            }
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(jarFile.getInputStream(entry), StandardCharsets.UTF_8))) {
-                return parseLanguageResource(reader, extension);
-            }
-        } catch (IOException e) {
-            languageLog().error(e, "Failed to read language resource " + entryName + " from " + location);
-            return new Language("{}");
-        }
-    }
-
-    /**
-     * Resolves a {@link CodeSource} location as a {@link File}, decoding any percent-escaped
-     * characters (spaces, non-ASCII, etc.) that {@link URL#getPath()} does not decode on its
-     * own (13-REVIEW WR-03) -- passing an undecoded {@code %20...} path straight to {@link
-     * File#File(String)} or {@link JarFile#JarFile(File)} finds nothing when the module is
-     * installed under a path containing a space or other URI-escaped character. Delegates to
-     * {@link CodeSourceLocations#toFile(URL)}, the resolver {@link Localized#scanLangResources(URL)}
-     * also uses, so language discovery and the dictionary reader cannot disagree about where the
-     * module's JAR is (#676 case 26); that resolver falls back to the previous raw-path rule when
-     * the location cannot be read as a {@code file:} URI.
-     *
-     * @param location the {@code CodeSource.getLocation()} URL, never {@code null}
-     * @return the resolved location as a {@link File}
-     */
-    private static File resolveCodeSourceFile(URL location) {
-        return CodeSourceLocations.toFile(location);
-    }
-
-    /**
-     * Parses a {@code lang/*} resource already opened as a {@link BufferedReader} -- shared by
-     * both the on-disk (exploded directory) and in-jar branches of {@link
-     * #loadLanguageFromJar(String, String)} so the two stay in sync.
-     */
-    private static Language parseLanguageResource(BufferedReader reader, String extension) throws IOException {
-        if (".json".equals(extension)) {
-            return new Language(reader.lines().collect(Collectors.joining("")));
-        }
-        // Joining with "" is fine for JSON and destroys YAML, whose structure is the line
-        // breaks -- so YAML is handed the reader rather than a flattened string.
-        return Language.fromYaml(reader);
     }
 
     /**
@@ -1995,10 +208,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         this.identifyString = null; // Connector plugins don't have identify-string
         this.resourceFolderPath = resourceFolderPath;
         prepareConfigConverters();
-        // #540: extract first, then resolve -- see the module constructor (lang/ waits for the commit, #567).
-        saveResources(false);
-        // #460: resolve without writing -- see the module constructor.
-        language = initializeLanguage();
+        saveResources();
         try {
             initConfig();
         } catch (IOException e) {
@@ -2044,7 +254,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Injects the {@link com.ultikits.ultitools.manager.DataScope} credential {@code
+     * Injects the {@link DataScope} credential {@code
      * PluginManager} minted for this module (D-17). Called by {@code PluginManager} right after
      * minting, before {@code wireAop} runs -- the same lifecycle point {@link #setContext}
      * documents.
@@ -2058,7 +268,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * @since 6.3.0
      */
     @ApiStatus.Internal
-    public void setDataScope(com.ultikits.ultitools.manager.DataScope scope) {
+    public void setDataScope(DataScope scope) {
         this.dataScope = scope;
     }
 
@@ -2276,29 +486,11 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
     }
 
     /**
-     * Extracts this module's embedded {@code res}/{@code lang}/{@code config} jar resources into
-     * {@link #resourceFolderPath}. Guarantees canonical-path validation before every write: each
-     * extracted entry's resolved destination is checked against the resource folder's own
-     * canonical path, and any entry whose path would resolve outside it (a Zip Slip attempt) is
-     * skipped with a warning rather than written.
-     * <p>
-     * Every file this method actually extracts gets its provenance recorded, in one batch via
-     * {@link ResourceHashSidecar#recordAll(File, Map)} after the whole extraction pass completes
-     * (Codex round 4, P2) -- across all three prefixes, D-07 -- so a later boot can tell "the
-     * operator edited this" from "an old jar extracted this and nobody has touched it since"
-     * (#441, D-05/D-06). A file this method skips (already present on disk) gets no record here:
-     * the skip already means the file predates this mechanism, or was already decided on by
-     * {@link #loadLanguageFromDisk} on a previous boot.
-     * <p>
-     * Two halves (#567 item 1). The constructors pass {@code false}: {@code config/} and {@code res/} only, because
-     * {@code initConfig()} reads them right after. {@link #commitLanguageProvenance()} passes {@code true}: {@code
-     * lang/} only, once the load gates accepted this copy. A copy the gates reject is never committed, so it writes no
-     * language file; its construction-time language reads the jar's copy instead (see {@link #loadLanguageFromDisk}).
-     *
-     * @param languageFiles {@code true} for the {@code lang/} resources, {@code false} for {@code config/} and
-     *                      {@code res/}
+     * Extracts missing bundled resources and configuration into {@link #resourceFolderPath}.
+     * Validates each destination before writing, leaves existing files intact, and records the
+     * hashes of extracted files in a single batch for later configuration ownership checks.
      */
-    private void saveResources(boolean languageFiles) {
+    private void saveResources() {
         CodeSource src = this.getClass().getProtectionDomain().getCodeSource();
         URL jar = src.getLocation();
         // Codex round 4, P2: accumulated across the whole pass and persisted ONCE via
@@ -2323,9 +515,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             while (entries.hasMoreElements()) {
                 JarEntry jarEntry = entries.nextElement();
                 String fileName = jarEntry.getName();
-                if ((!fileName.startsWith("res") && !fileName.startsWith("lang")
-                        && !fileName.startsWith("config")) || !fileName.contains(".")
-                        || fileName.startsWith("lang") != languageFiles) {
+                if ((!fileName.startsWith("res") && !fileName.startsWith("config")) || !fileName.contains(".")) {
                     continue;
                 }
                 try (InputStream inputStream = jarFile.getInputStream(jarEntry)) {
@@ -2359,7 +549,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                         // IOException-only catch here does NOT catch -- so a resource that was
                         // successfully extracted but could not be reopened for hashing (e.g. a
                         // write-only default ACL, or a filesystem error on the second open) let
-                        // that exception escape saveResources(boolean) entirely and abort this whole
+                        // that exception escape saveResources() entirely and abort this whole
                         // module's construction, even though the file itself extracted fine.
                         UltiTools.getInstance().getLogger().log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile);
                     }
@@ -2374,7 +564,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
 
     /**
      * Gets data operator. Refuses outright if {@code dataClazz} is not registered to this module
-     * (D-14) -- checked against the same {@link com.ultikits.ultitools.manager.DataScope} minted
+     * (D-14) -- checked against the same {@link DataScope} minted
      * for this module at load, via the same refusal {@code DataStore.getOperator(DataScope,
      * Class)} builds, so the exception type, error code, and message shape are identical
      * regardless of which entry point a caller reaches.
@@ -2405,76 +595,6 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
                             + dataClazz.getName() + ".");
         }
         return UltiTools.getInstance().getDataStore().getOperator(dataScope, dataClazz);
-    }
-
-    /**
-     * The official language this module's messages are based on: a language code this module
-     * ships, such as {@code en} or {@code zh}.
-     * <p>
-     * Use it for behaviour that depends on the language, such as choosing which shipped text to
-     * write into a configuration file or which example content to create. An operator may select a
-     * custom language file in {@code plugins/UltiTools/config.yml}: a copy of an official file under
-     * a new name that starts with the official code and a hyphen, such as {@code zh-myserver}. For
-     * that setting this method returns {@code zh}. A name that starts with no shipped code resolves
-     * to {@code en} when the module ships it, otherwise to its first shipped code. A module that
-     * ships no language files gets the configured name unchanged. The configured name itself is
-     * {@link #getConfiguredLanguage()}.
-     *
-     * @return the official language code, or {@code null} if no language is configured and the
-     *         module ships no language files
-     * @since 6.3.0 returns the official base of a custom language name (#608); before 6.3.0 it
-     *        returned the configured name
-     */
-    public final String getLanguageCode() {
-        return officialLanguageFor(getConfiguredLanguage(), false);
-    }
-
-    /**
-     * The {@code language} setting of {@code plugins/UltiTools/config.yml} as the framework runs
-     * with it: an official code such as {@code zh}, or the name of an operator's custom language
-     * file such as {@code zh-myserver}. Messages come from {@code lang/<name>.*} in this module's
-     * folder when that file exists, and from the official language {@link #getLanguageCode()}
-     * returns for every key the file lacks. When the setting is {@code auto}, blank or missing,
-     * this legacy-language seam returns the resolved fallback's base language code instead.
-     * A concrete configured name, including an operator's custom name, is returned unchanged.
-     *
-     * @return the configured language name, or the resolved fallback's base language code in automatic mode
-     * @since 6.3.0
-     */
-    public final String getConfiguredLanguage() {
-        UltiTools framework = UltiTools.getInstance();
-        String configured = framework.getConfig().getString("language");
-        if (LocaleNames.isAutomatic(configured)) {
-            TextEngine engine = textEngine;
-            if (engine == null && framework.getDependenceManagers() != null
-                    && framework.getDependenceManagers().getContext() != null) {
-                engine = framework.getDependenceManagers().getContext().getBean(TextEngine.class);
-            }
-            return engine != null ? engine.fallback().getLanguage()
-                    : ConfiguredLocaleResolver.forConfig(framework::getConfig, framework.getLogger())
-                            .fallback().getLanguage();
-        }
-        return configured;
-    }
-
-    /**
-     * @return the language
-     */
-    public final Language getLanguage() {
-        return language;
-    }
-
-    /**
-     * @param str the string to be localized
-     * @return the localized string
-     */
-    public String i18n(String str) {
-        return this.getLanguage().getLocalizedText(str);
-    }
-
-    @Override
-    public final String i18n(String code, String str) {
-        return this.getLanguage().getLocalizedText(str);
     }
 
     /**
@@ -2723,15 +843,21 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
         } catch (Exception | Error e) {
             // Exception, not RuntimeException: a hook can throw a checked exception it does not
             // declare (Lombok @SneakyThrows); it gets the failure line too. Rethrown unchanged.
-            LOGGER.log(Level.SEVERE, String.format(UltiTools.getInstance().i18n(RELOAD_FAILED_LOG_MESSAGE_KEY),
-                    getPluginName(), describeFailure(e)), e);
+            if (LOGGER.isLoggable(Level.SEVERE)) {
+                LOGGER.log(Level.SEVERE, FrameworkMessages.plain(ManagerKeys.RELOAD_MODULE_FAILED,
+                        Arg.string("module", getPluginName()), Arg.string("error", describeFailure(e))), e);
+            }
             throw e;
         }
         if (report.isPartial()) {
-            LOGGER.log(Level.WARNING, String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_LOG_MESSAGE_KEY),
-                    getPluginName(), String.join("; ", report.getPartialReasons())));
-        } else {
-            LOGGER.log(Level.INFO, String.format(UltiTools.getInstance().i18n(RELOAD_LOG_MESSAGE_KEY), getPluginName()));
+            if (LOGGER.isLoggable(Level.WARNING)) {
+                LOGGER.log(Level.WARNING, FrameworkMessages.plain(ManagerKeys.RELOAD_PARTIAL,
+                        Arg.string("module", getPluginName()),
+                        Arg.string("reasons", String.join("; ", report.getPartialReasons()))));
+            }
+        } else if (LOGGER.isLoggable(Level.INFO)) {
+            LOGGER.log(Level.INFO, FrameworkMessages.plain(ManagerKeys.RELOAD_MODULE_DONE,
+                    Arg.string("module", getPluginName())));
         }
         return report;
     }
@@ -2750,23 +876,15 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             // #595: a value the step keeps, or a part of it that fails, is recorded in the report.
             pluginManager.applyReloadedConfigBindings(this, report);
         }
-        // Rebuild the catalogue from this module's language files, re-read from disk and jar, in
-        // the language the framework runs with. The `language` setting is one value for the
-        // whole server: a per-module reload does not apply a changed value to this module alone,
-        // which would leave it speaking a different language from the framework and every other
-        // module. It records the change instead, so the operator is told a full /ul reload
-        // applies it (#502).
-        language = createLanguageFromPath(resourceFolderPath);
+        // Only reload this module's message overrides; the server-wide locale stays in force.
         if (textEngine != null) {
             textEngine.reloadOverrides(MessageKey.namespaceFor(pluginName));
         }
-        // #594: the configs were read above with the old catalogue; now that the language is rebuilt, the framework's
-        // own comment lines follow it - comment lines only, through the config write gate, before the module's hook.
+        // #594: refresh framework-owned comments with the new catalogue before invoking the module's hook.
         getConfigManager().refreshFrameworkComments(this);
         String pendingLanguage = pendingLanguageSetting();
         if (pendingLanguage != null) {
-            report.partial(String.format(UltiTools.getInstance().i18n(LANGUAGE_CHANGE_PENDING_KEY),
-                    getConfiguredLanguage(), pendingLanguage));
+            report.partial(pendingLanguage);
         }
         // @ConditionalOnConfig is evaluated once at component-scan time; a reload can only
         // report drift on a watched key, never re-register or rebuild anything (#392, D-01).
@@ -2782,7 +900,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
      * reload}. A missing, unreadable or unparseable file, or one without the key, is not a pending
      * change: that is reported, if at all, by the full reload that reads it.
      *
-     * @return the value on disk, or {@code null} if it is the running value or cannot be read
+     * @return the reason reported for a pending change, or {@code null} if none was detected
      */
     private String pendingLanguageSetting() {
         UltiTools framework = UltiTools.getInstance();
@@ -2801,7 +919,12 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             return null;
         }
         String diskLanguage = onDisk.getString("language");
-        return diskLanguage != null && !diskLanguage.equals(getConfiguredLanguage()) ? diskLanguage : null;
+        if (diskLanguage == null) {
+            return null;
+        }
+        String runningLanguage = framework.getConfig().getString("language");
+        return diskLanguage.equals(runningLanguage) ? null : FrameworkMessages.plain(ManagerKeys.RELOAD_LANGUAGE_PENDING,
+                Arg.string("from", String.valueOf(runningLanguage)), Arg.string("to", diskLanguage));
     }
 
     /**

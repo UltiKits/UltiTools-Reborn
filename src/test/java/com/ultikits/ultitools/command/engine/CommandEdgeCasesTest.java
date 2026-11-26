@@ -3,14 +3,12 @@ package com.ultikits.ultitools.command.engine;
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
 import net.kyori.adventure.text.Component;
 import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -56,7 +54,6 @@ class CommandEdgeCasesTest {
         registry.register(parser);
         try (var ulti = mockStatic(UltiTools.class)) {
             var plugin = mock(UltiTools.class);
-            when(plugin.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
             CommandSender sender = mock(CommandSender.class);
             List<String> replies = new ArrayList<>();
@@ -76,7 +73,6 @@ class CommandEdgeCasesTest {
                 .add(guard("second", false, events)).build());
         try (var ulti = mockStatic(UltiTools.class)) {
             var plugin = mock(UltiTools.class);
-            when(plugin.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
             var dispatcher = CommandTestSupport.dispatcher(executor, "test");
             assertThat(dispatcher.execute("test COUNT 5", CommandDispatchTest.source(mock(CommandSender.class)))).isEqualTo(1);
@@ -105,7 +101,6 @@ class CommandEdgeCasesTest {
     @Test void consoleGetsUsageForExtraHelpArguments() throws Exception {
         try (var ulti = mockStatic(UltiTools.class)) {
             var plugin = mock(UltiTools.class);
-            when(plugin.i18n("指令正确用法")).thenReturn("usage /%s %s");
             ulti.when(UltiTools::getInstance).thenReturn(plugin);
             var sender = mock(ConsoleCommandSender.class);
             List<String> replies = new ArrayList<>();

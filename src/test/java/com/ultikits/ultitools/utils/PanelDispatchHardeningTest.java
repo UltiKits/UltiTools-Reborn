@@ -71,7 +71,6 @@ class PanelDispatchHardeningTest {
         TestHelper.mockUltiToolsInstance(plugin -> {
             when(plugin.getConfig()).thenReturn(config);
             when(plugin.getLogger()).thenReturn(mock(Logger.class));
-            when(plugin.i18n(any(String.class))).thenAnswer(invocation -> invocation.getArgument(0));
         });
         doAnswer(invocation -> {
             Consumer<? super Component> feedback = invocation.getArgument(0);

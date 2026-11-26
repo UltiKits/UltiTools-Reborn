@@ -70,8 +70,6 @@ class HiddenCommandRepliesTest {
         bukkit.when(Bukkit::getOnlinePlayers).thenReturn(List.of());
         ulti = mockStatic(UltiTools.class);
         plugin = mock(UltiTools.class);
-        when(plugin.i18n(anyString())).thenAnswer(call -> "指令正确用法".equals(call.getArgument(0))
-                ? "usage /%s %s" : call.getArgument(0));
         ulti.when(UltiTools::getInstance).thenReturn(plugin);
         executor = new Fixture();
         player = mock(Player.class);

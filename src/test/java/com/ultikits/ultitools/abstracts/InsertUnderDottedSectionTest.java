@@ -2,7 +2,6 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
 import java.io.IOException;
@@ -140,7 +139,6 @@ class InsertUnderDottedSectionTest {
         lenient().when(plugin.getPluginName()).thenReturn("DottedModule");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
-        lenient().when(plugin.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
         frameworkLogger.addHandler(capture);
     }
 

@@ -1,9 +1,8 @@
 package com.ultikits.ultitools.text.internal;
 
-import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.text.LocaleResolver;
-import java.util.List;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
@@ -108,9 +107,9 @@ public final class ConfiguredLocaleResolver implements LocaleResolver {
         if (explicit.isPresent() || LocaleNames.isAutomatic(raw)) {
             return explicit;
         }
-        if (Localized.isSafeLanguageCode(raw)) {
+        if (LocaleNames.isSafeLanguageCode(raw)) {
             // Retain 6.x custom names without interpreting their files as new catalogues.
-            String base = Localized.officialLanguageOf(raw, List.of("en", "zh"));
+            String base = LocaleNames.officialLanguageOf(raw, List.of("en", "zh"));
             return Optional.of(base == null ? Locale.ENGLISH : Locale.forLanguageTag(base));
         }
         warn("language", raw);

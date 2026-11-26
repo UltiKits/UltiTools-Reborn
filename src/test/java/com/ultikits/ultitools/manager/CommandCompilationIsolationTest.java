@@ -4,7 +4,6 @@ import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.spy;
@@ -108,7 +107,6 @@ class CommandCompilationIsolationTest {
         when(module.getContext()).thenReturn(context);
         when(module.registerSelf()).thenReturn(true);
         doCallRealMethod().when(module).unregisterSelf();
-        when(module.i18n(anyString())).thenAnswer(call -> call.getArgument(0));
         return module;
     }
 

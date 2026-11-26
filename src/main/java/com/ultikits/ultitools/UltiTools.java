@@ -11,17 +11,13 @@ import org.jetbrains.annotations.Nullable;
 import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
 import java.time.Duration;
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.Reader;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -32,7 +28,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.InvalidConfigurationException;
@@ -54,13 +49,11 @@ import com.ultikits.ultitools.config.document.ConfigLoadResult;
 import com.ultikits.ultitools.config.document.OperatorFileWriter;
 import com.ultikits.ultitools.config.document.OwnedPaths;
 import com.ultikits.ultitools.entities.Capability;
-import com.ultikits.ultitools.entities.Language;
 import com.ultikits.ultitools.exceptions.ConfigurationException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.handler.ConsoleMirror;
 import com.ultikits.ultitools.interfaces.DataStore;
-import com.ultikits.ultitools.interfaces.Localized;
 import com.ultikits.ultitools.interfaces.impl.data.mysql.MysqlDataStore;
 import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.listeners.PendingChangesJoinListener;
@@ -85,8 +78,6 @@ import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.listeners.UpdateJoinListener;
 import com.ultikits.ultitools.events.EventBus;
 import com.ultikits.ultitools.text.Messages;
-import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
-import com.ultikits.ultitools.text.internal.LocaleNames;
 import com.ultikits.ultitools.text.internal.TextEngine;
 import com.ultikits.ultitools.utils.CloudOutboxListener;
 import com.ultikits.ultitools.utils.Metrics;
@@ -94,7 +85,6 @@ import com.ultikits.ultitools.utils.CloudAuthManager;
 import com.ultikits.ultitools.utils.CloudFeatures;
 import com.ultikits.ultitools.utils.LegacyLangFolderNotice;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
-import com.ultikits.ultitools.utils.OfficialLanguageFiles;
 import com.ultikits.ultitools.utils.PluginInitiationUtils;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.websocket.CloudPlayerLinks;
@@ -110,7 +100,7 @@ import lombok.Setter;
  * @author wisdommen, qianmo
  * @version 6.0.7
  */
-public final class UltiTools extends JavaPlugin implements Localized {
+public final class UltiTools extends JavaPlugin {
     private static final Pattern VERSION_PATTERN = Pattern.compile("^([0-9]+\\.[0-9]+\\.[0-9]+)(?:-[0-9A-Za-z]+)*$");
 
     /** D-03: the operator-editable blocklist's shipped default commands. */
@@ -165,13 +155,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
     }
     /** Metadata and minimum-API decisions shared by this start's class path and discovery. */
     private ModuleJarAdmission moduleJarAdmission;
-    /**
-     * The official languages the framework ships ({@code lang/<code>.json} in its jar), the codes a custom
-     * language name may be based on (#608). {@link #supported()} returns them.
-     */
-    private static final String[] SHIPPED_LANGUAGES = {"en", "zh"};
-    @Getter
-    private Language language;
     @Getter
     private PluginManager pluginManager;
     @Getter
@@ -411,7 +394,7 @@ public final class UltiTools extends JavaPlugin implements Localized {
             moduleFileTransactions.flushReports(getLogger(), null);
             return;
         }
-        initLanguage();
+        initializeTextFallback();
         LegacyLangFolderNotice.report(getDataFolder(), getLogger());
         bootstrap.reportContent(getLogger());
         moduleFileTransactions.flushReports(getLogger(), CommandRuntime.messages());
@@ -488,89 +471,14 @@ public final class UltiTools extends JavaPlugin implements Localized {
         }
     }
 
-    /**
-     * Builds the framework's language from the {@code language} setting of {@code config.yml} (#608).
-     * <p>
-     * First writes the official files {@code lang/en.json} and {@code lang/zh.json} to the data folder so an
-     * operator can copy them, restoring any that differ from the bundled version (official language files are
-     * framework-owned, maintainer decision 2026-10-04; see {@link OfficialLanguageFiles#syncFrameworkFiles}). Then
-     * resolves the setting: an official code is used as it is; a custom name such as {@code zh-myserver} reads the
-     * operator's {@code lang/zh-myserver.json} from the data folder when it exists, and takes every message it
-     * lacks from the official language its name starts with ({@code zh}); a name that starts with no official
-     * code uses English for those messages and logs one warning. The official texts always come from the jar,
-     * read as UTF-8. The custom file is only ever read.
-     */
-    private void initLanguage() {
-        List<String> shipped = Arrays.asList(SHIPPED_LANGUAGES);
-        List<File[]> restored = OfficialLanguageFiles.syncFrameworkFiles(getDataFolder(), shipped,
-                getClass().getClassLoader(), getLogger());
-        String fallback = initializeTextFallback();
-        String configured = getConfig().getString("language");
-        if (LocaleNames.isAutomatic(configured)) {
-            configured = fallback;
-        }
-        String official = Localized.officialLanguageOf(configured, shipped);
-        String baseCode = official != null ? official : "en";
-        Language bundled = readBundledLanguage(baseCode);
-        boolean custom = configured != null && !configured.equals(official);
-        Language customLanguage = custom ? OfficialLanguageFiles.readFrameworkCustomFile(getDataFolder(), configured,
-                baseCode, getClass().getClassLoader(), getLogger()) : null;
-        this.language = customLanguage != null ? customLanguage.withFallback(bundled) : bundled;
-        if (official == null && (configured == null || !Localized.isSafeLanguageCode(configured))) {
-            getLogger().warning("The language setting '" + configured + "' in config.yml is not a valid language "
-                    + "name (an ASCII letter or digit first, then only ASCII letters, digits, '_' and '-'), so no "
-                    + "custom file is read; framework messages use 'en'.");
-        } else if (official == null) {
-            getLogger().warning("The language setting '" + configured + "' in config.yml is neither a shipped "
-                    + "language " + shipped + " nor a custom name that starts with one of them and a hyphen, "
-                    + "such as zh-myserver; messages it does not provide use 'en'.");
-        } else if (custom) {
-            getLogger().info("Custom language '" + configured + "' is based on the official language '" + official
-                    + "': framework messages come from lang/" + configured + ".json in " + getDataFolder()
-                    + (customLanguage != null ? "" : " (not found)") + ", and every message it lacks from the "
-                    + "official '" + official + "' file.");
-        }
-        for (File[] pair : restored) {
-            getLogger().warning(String.format(i18n(OfficialLanguageFiles.RESTORED_LOG_KEY),
-                    pair[0].getPath(), "UltiTools", pair[1].getPath()));
-        }
-    }
-
-    /** Refreshes only the text configuration, at the existing startup and full-reload seam. */
-    private String initializeTextFallback() {
+    /** Refreshes the server's message locale at startup and after a full configuration reload. */
+    private void initializeTextFallback() {
         DependenceManagers managers = getDependenceManagers();
         if (managers != null && managers.getContext() != null) {
-            var engine = managers.getContext().getBean(TextEngine.class);
+            TextEngine engine = managers.getContext().getBean(TextEngine.class);
             if (engine != null) {
                 engine.reloadLocaleConfiguration();
-                return engine.fallback().getLanguage();
             }
-        }
-        String configured = getConfig().getString("language");
-        if (!LocaleNames.isAutomatic(configured)) {
-            return configured;
-        }
-        return ConfiguredLocaleResolver
-                .forConfig(this::getConfig, getLogger()).fallback().getLanguage();
-    }
-
-    /**
-     * Reads the official catalogue {@code lang/<code>.json} from the framework jar as UTF-8.
-     *
-     * @return the catalogue, or an empty language when it is missing or unreadable (the reason is logged)
-     */
-    private Language readBundledLanguage(String code) {
-        String lanPath = "lang/" + code + ".json";
-        InputStream in = getFileResource(lanPath);
-        if (in == null) {
-            getLogger().log(Level.WARNING, "Language file not found: " + lanPath + ", using default language");
-            return new Language("{}");
-        }
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-            return new Language(reader.lines().collect(Collectors.joining("")));
-        } catch (IOException e) {
-            getLogger().log(Level.WARNING, "Failed to read language file: " + lanPath, e);
-            return new Language("{}");
         }
     }
 
@@ -1103,8 +1011,8 @@ public final class UltiTools extends JavaPlugin implements Localized {
     public List<String> reloadPluginsAndReport() throws IOException {
         // Refresh Bukkit config from disk so language changes are picked up
         reloadConfig();
-        // Reinitialize framework language based on (possibly changed) config
-        initLanguage();
+        // Refresh the message locale from the new configuration
+        initializeTextFallback();
         DependenceManagers managers = getDependenceManagers();
         reloadFrameworkCatalogue(managers != null && managers.getContext() != null
                 ? managers.getContext().getBean(TextEngine.class) : null, getLogger());
@@ -1126,45 +1034,6 @@ public final class UltiTools extends JavaPlugin implements Localized {
         } catch (RuntimeException cause) {
             logger.log(Level.WARNING, FrameworkMessages.plain(RELOAD_FRAMEWORK_OVERRIDES_FAILED,
                     Arg.string("reason", cause.getMessage() != null ? cause.getMessage() : cause.toString())), cause);
-        }
-    }
-
-    /**
-     * Returns the supported language codes.
-     *
-     * @return a list of supported language codes
-     */
-    @Override
-    public List<String> supported() {
-        return Arrays.asList(SHIPPED_LANGUAGES.clone());
-    }
-
-    /**
-     * Internationalization method that translates the given string based on the current language.
-     * If the string is not found in the dictionary, the original string is returned.
-     *
-     * @param str the string to be translated
-     * @return the translated string or the original string if not found in the dictionary
-     */
-    public String i18n(String str) {
-        return this.language.getLocalizedText(str);
-    }
-
-    /**
-     * Retrieves the input stream for the specified file resource.
-     *
-     * @param filename the name of the file resource
-     * @return the input stream for the file resource, or null if an I/O error occurs
-     */
-    private InputStream getFileResource(String filename) {
-        try {
-            URL resource = this.getClass().getClassLoader().getResource(filename);
-            if (resource == null) {
-                return null;
-            }
-            return resource.openStream();
-        } catch (IOException ex) {
-            return null;
         }
     }
 

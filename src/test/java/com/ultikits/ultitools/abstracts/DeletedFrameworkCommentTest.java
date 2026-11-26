@@ -33,7 +33,7 @@ import com.ultikits.ultitools.manager.ConfigManager;
  * whole setting brings it back with its default value and its comment, at the end of the file. A comment line the
  * framework cannot identify as its own - even a bare {@code #} - is kept and nothing is written above it.
  * <p>
- * Each start is a real one: the module's own constructor from a real jar, {@code commitLanguageProvenance()}, then a
+ * Each start is a real one: the module's own constructor from a real jar, {@code publishMessageCatalogue()}, then a
  * config registration through {@link ConfigManager}. A reload calls {@link UltiToolsPlugin#reloadWithReport()},
  * with the server language already applied as by a full reload and the operator's deletion made while the server runs.
  */
@@ -87,7 +87,7 @@ class DeletedFrameworkCommentTest {
     private void start(String code) throws Exception {
         fixture.fallback(code);
         plugin = fixture.construct();
-        plugin.commitLanguageProvenance();
+        plugin.publishMessageCatalogue();
         configManager.register(plugin, new DeletedConfig(CONFIG_PATH));
     }
 

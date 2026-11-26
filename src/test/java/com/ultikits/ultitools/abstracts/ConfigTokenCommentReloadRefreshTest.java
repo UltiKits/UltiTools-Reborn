@@ -2,7 +2,6 @@ package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -128,7 +127,7 @@ class ConfigTokenCommentReloadRefreshTest {
     /** A module running in Chinese with its config written by init in Chinese. */
     private UltiToolsPlugin moduleWithConfig() throws Exception {
         UltiToolsPlugin plugin = spy(fixture.construct());
-        plugin.commitLanguageProvenance();
+        plugin.publishMessageCatalogue();
         configManager.register(plugin, new DemoConfig(PATH));
         assertThat(comments("demo.interval")).as("precondition: init wrote the token in Chinese")
                 .containsExactly(ZH_INTERVAL);

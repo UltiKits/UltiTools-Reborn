@@ -7,10 +7,9 @@ import java.net.URL;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * Turns a module's {@code CodeSource.getLocation()} URL into the {@link File} it names -- the one
- * resolver the language subsystem uses, so language discovery ({@code Localized.supported()}), the
- * dictionary reader and resource extraction in {@code UltiToolsPlugin} can never disagree about
- * where a module's JAR (or exploded class directory) is (#676 case 26).
+ * Turns a module's {@code CodeSource.getLocation()} URL into the {@link File} it names. Message
+ * catalogue loading and module resource extraction use this same resolver for JAR paths and
+ * exploded class directories, including paths with spaces or non-ASCII characters.
  * <p>
  * Internal to the framework; not an API for module authors.
  *

@@ -160,19 +160,14 @@ class UltiToolsStartupOrderTest {
                 .toList();
 
         assertThat(reload).as("compiled full reload exists").isNotEmpty();
-        assertThat(reload).anyMatch(event -> event.isOwnCall() && isLocaleInitialization(event));
+        assertThat(reload).anyMatch(event -> event.isOwnCall() && "initializeTextFallback".equals(event.name));
         assertThat(notices).as("the notice has exactly one call site in UltiTools").hasSize(1);
         assertThat(notices.getFirst().method).isEqualTo("onEnable");
         Event localeInit = enable.stream().filter(Event::isOwnCall)
-                .filter(UltiToolsStartupOrderTest::isLocaleInitialization).findFirst().orElseThrow();
+                .filter(event -> "initializeTextFallback".equals(event.name)).findFirst().orElseThrow();
         assertThat(enable.indexOf(notices.getFirst())).isGreaterThan(enable.indexOf(localeInit))
                 .isLessThan(enable.stream().filter(event -> "reportContent".equals(event.name))
                         .mapToInt(enable::indexOf).findFirst().orElseThrow());
-    }
-
-    private static boolean isLocaleInitialization(Event event) {
-        // The old language loader calls the locale initializer until the loader is removed.
-        return "initLanguage".equals(event.name) || "initializeTextFallback".equals(event.name);
     }
 
     // ---- compiled-class walk ----
