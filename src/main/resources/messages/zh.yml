@@ -310,6 +310,7 @@ upm:
       failed: "<red><module> 的变更在上次重启时没能应用，不能撤销：<failure>。"
       in_progress: "<red><module> 的变更在上一次启动中没处理完，现在不能撤销；下次启动会补完。"
       needs_operator: "<red><module> 的变更需要手动处理，不能在这里撤销：<failure>。记录：<file>。"
+    panel_log: "面板用户 #<user_id> 撤销了 <module> 的待生效操作（<action>）。"
   start:
     install:
       not_recorded: "模块 <module> <version> 的事务记录无法写入，已在加载前还原该安装。请再用 /upm install 安装。"

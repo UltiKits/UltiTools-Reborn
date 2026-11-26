@@ -46,6 +46,7 @@ final class AgentCapabilities {
     private static final String ERRORS = "errors";
     private static final String POWER = "power";
     private static final String LINK = "link";
+    static final String UPM_PENDING = "upm:pending";
     private static final String MODULE_PREFIX = "modules:";
     private static final String UNAVAILABLE = "This capability is not available on this server.";
 
@@ -111,6 +112,7 @@ final class AgentCapabilities {
         }
         names.add(POWER);
         names.add(LINK);
+        names.add(UPM_PENDING);
         List<String> modules = moduleNames.get();
         if (modules != null) {
             for (String module : new TreeSet<>(modules)) {
@@ -142,7 +144,7 @@ final class AgentCapabilities {
         if (contractCapability == null) {
             return false;
         }
-        if (POWER.equals(contractCapability) || LINK.equals(contractCapability)
+        if (POWER.equals(contractCapability) || LINK.equals(contractCapability) || UPM_PENDING.equals(contractCapability)
                 || AgentProtocol.MODULE_CAPABILITY_SENTINEL.equals(contractCapability)
                 || contractCapability.startsWith(MODULE_PREFIX)) {
             return true;

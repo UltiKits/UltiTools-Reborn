@@ -187,6 +187,8 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.not_revocable.in_progress");
     public static final MessageKey REVOKE_NOT_REVOCABLE_NEEDS_OPERATOR =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.not_revocable.needs_operator");
+    public static final MessageKey REVOKE_PANEL_LOG =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.revoke.panel_log");
     public static final MessageKey START_INSTALL_CLEANUP_DEFERRED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.install.cleanup_deferred");
     public static final MessageKey START_INSTALL_COMMITTED =

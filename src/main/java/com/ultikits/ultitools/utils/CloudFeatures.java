@@ -243,6 +243,8 @@ public final class CloudFeatures {
         registerPlayerActions(router);
         registerAll(router, RemoteRequestHandlers.FILE_TYPES, bindings.files, worker);
         registerAll(router, RemoteRequestHandlers.PROPERTY_TYPES, bindings.properties, worker);
+        registerAll(router, PendingChangesHandler.TYPES,
+                () -> bindings.pendingChanges == null ? null : bindings.pendingChanges.apply(shutdown), worker);
         registerConfig(router);
         registerModules(router, protocol);
         router.register("credential.rotate", new CredentialRotationHandler(rotation));
@@ -660,12 +662,14 @@ public final class CloudFeatures {
         Supplier<PowerActionHandler.PowerExecutor> power;
         /** Receives every action-log entry the remote surface records (commands excepted: their manager records them). */
         Consumer<RemoteActionLog.Entry> actionLog;
-        /** How many file and property requests may wait behind the running one (then {@code rate_limited}). */
+        /** How many requests the serial worker may queue behind the running one (then {@code rate_limited}). */
         int fileQueueCapacity = SerialRequestWorker.DEFAULT_CAPACITY;
         /** The handler of {@code files.*}. */
         Supplier<CloudRequestHandler> files;
         /** The handler of {@code properties.*}. */
         Supplier<CloudRequestHandler> properties;
+        /** The pending-change handler, sharing the connection's shutdown permit. */
+        Function<ShutdownGate, CloudRequestHandler> pendingChanges;
         /** The loaded modules whose configuration {@code config.*} serves. */
         Supplier<List<UltiToolsPlugin>> modules;
         /** The configuration manager of {@code config.*}. */
@@ -736,6 +740,8 @@ public final class CloudFeatures {
                     new File(System.getProperty("user.dir")), bindings.actionLog);
             bindings.properties = () -> plugin.getServerPropertiesManager() == null ? null
                     : RemoteRequestHandlers.properties(plugin.getServerPropertiesManager(), bindings.actionLog);
+            bindings.pendingChanges = shutdown -> new PendingChangesHandler(PluginInstallUtils::pendingChanges,
+                    () -> plugin.getModuleFileTransactions().startOutcomes(), shutdown, plugin::getLogger);
             bindings.modules = () -> {
                 PluginManager modules = plugin.getPluginManager();
                 return modules == null ? Collections.<UltiToolsPlugin>emptyList() : modules.getPluginList();
