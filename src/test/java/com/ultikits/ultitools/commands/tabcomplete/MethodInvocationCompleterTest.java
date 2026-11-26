@@ -700,9 +700,11 @@ class MethodInvocationCompleterTest {
 
     public static class ExecutorWithMissingSuggest {
         public void messageHint(@CmdParam(value = "param", suggest = "command.hint") String param) {
+            // Fixture only: the completer reads the parameter annotation and never invokes this method.
         }
 
         public void literalHint(@CmdParam(value = "param", suggest = "Use a valid value") String param) {
+            // Fixture only: the completer reads the parameter annotation and never invokes this method.
         }
     }
 
