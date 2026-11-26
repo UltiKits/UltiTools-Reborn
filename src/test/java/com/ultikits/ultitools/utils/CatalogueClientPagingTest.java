@@ -187,7 +187,7 @@ class CatalogueClientPagingTest {
         }).when(sender).sendMessage(anyString());
         doAnswer(invocation -> {
             messageThreads.add(Thread.currentThread());
-            messages.add(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(invocation.getArgument(0)));
+            messages.add(CommandMessageTestSupport.plain(invocation.getArgument(0)));
             return null;
         }).when(sender).sendMessage(any(net.kyori.adventure.text.Component.class));
         entries.get(10).addProperty("isLatest", true);

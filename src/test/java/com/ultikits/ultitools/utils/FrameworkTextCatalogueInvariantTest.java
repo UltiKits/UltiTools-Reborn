@@ -521,12 +521,14 @@ class FrameworkTextCatalogueInvariantTest {
     void formerVariableKeysCanNoLongerBypassTheCatalogue() {
         String oldDeclaration = """
                 class PluginInstallUtils {
+                    private static final String REASON_INTEGRITY_FAILED =
+                            "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。";
                     private static final String REASON_LICENCE_REQUIRED =
                             "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。";
                 }
                 """;
         assertThat(findViolations(Map.of("com/ultikits/ultitools/utils/PluginInstallUtils.java", oldDeclaration),
-                new JsonObject(), new JsonObject())).hasSize(1);
+                new JsonObject(), new JsonObject())).hasSize(2);
         assertThat(plainViolations("player.sendMessage(\"上一页\");")).hasSize(1);
     }
 
