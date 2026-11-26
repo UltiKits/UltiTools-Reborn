@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.text.internal;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import org.jetbrains.annotations.ApiStatus;
@@ -25,6 +26,42 @@ public final class LocaleNames {
     /** Returns whether a configuration value selects automatic language resolution. */
     public static boolean isAutomatic(@Nullable String value) {
         return value == null || value.isBlank() || "auto".equalsIgnoreCase(value.trim());
+    }
+
+    /** Checks the ASCII allowlist for a configured language name, not the locale-tag grammar. */
+    public static boolean isSafeLanguageCode(String code) {
+        if (code.isEmpty()) {
+            return false;
+        }
+        boolean safe = true;
+        for (int i = 0; i < code.length() && safe; i++) {
+            char c = code.charAt(i);
+            boolean asciiAlphanumeric = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+            boolean allowedSeparator = i > 0 && (c == '_' || c == '-');
+            safe = asciiAlphanumeric || allowedSeparator;
+        }
+        return safe;
+    }
+
+    /** Returns the exact official code or the longest official prefix before a hyphen. */
+    public static @Nullable String officialLanguageOf(@Nullable String configured, List<String> officialCodes) {
+        if (configured == null || officialCodes == null) {
+            return null;
+        }
+        if (officialCodes.contains(configured)) {
+            return configured;
+        }
+        if (!isSafeLanguageCode(configured)) {
+            return null;
+        }
+        String best = null;
+        for (String code : officialCodes) {
+            boolean prefixed = code != null && configured.startsWith(code + "-");
+            if (prefixed && (best == null || code.length() > best.length())) {
+                best = code;
+            }
+        }
+        return best;
     }
 
     /** Keeps only a locale's language and country. */
