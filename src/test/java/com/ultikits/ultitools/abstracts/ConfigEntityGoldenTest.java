@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.abstracts;
 
+import static com.ultikits.ultitools.text.ModuleTextStubs.stubModuleTexts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -18,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
+import java.util.Optional;
 
 import org.bukkit.configuration.serialization.ConfigurationSerializable;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
@@ -243,7 +245,7 @@ class ConfigEntityGoldenTest {
     @org.junit.jupiter.params.provider.ValueSource(strings = {"init", "reload", "save", "panel"})
     void mergedTokenOwnsOnlyItsEntryAndSubsequentSavesAreByteNoOps(String operation) throws Exception {
         Path file = directory.resolve("merge.yml");
-        Mockito.when(plugin.i18n("setting.note")).thenReturn("Owned setting note");
+        Mockito.when(stubModuleTexts(plugin).resolve("setting.note")).thenReturn(Optional.of("Owned setting note"));
         MergedToken config = new MergedToken("merge.yml");
         if (!operation.equals("init")) {
             Files.write(file, "group:\n  setting: inherited\n".getBytes(StandardCharsets.UTF_8));

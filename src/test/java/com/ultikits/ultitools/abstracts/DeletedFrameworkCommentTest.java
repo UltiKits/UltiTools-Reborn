@@ -1,11 +1,9 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,11 +17,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.manager.ConfigManager;
-import com.ultikits.ultitools.utils.MockBukkitHelper;
 
 /**
  * Characterisation (plan 17-77 Task 3): what the framework does when an operator deletes a framework-written comment
@@ -32,7 +28,7 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
  * <p>
  * Measured: a deleted framework comment line is written again - at its place above the setting, in the language
  * selected at that moment - at the next start and at the next {@code /ul reload}, with or without a language switch,
- * for a comment written from a shipped catalogue and for one written from a custom language file. Every other byte of
+ * for a comment written from a shipped catalogue and for one written from a message override file. Every other byte of
  * the file is unchanged, except other framework comments following a language switch as they always do. Deleting the
  * whole setting brings it back with its default value and its comment, at the end of the file. A comment line the
  * framework cannot identify as its own - even a bare {@code #} - is kept and nothing is written above it.
@@ -43,7 +39,6 @@ import com.ultikits.ultitools.utils.MockBukkitHelper;
  */
 @DisplayName("17-77 characterisation: an operator deletes a framework-written comment line")
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // clears the framework singleton a test class leaves behind
 class DeletedFrameworkCommentTest {
 
     private static final String CONFIG_PATH = "config/deleted.yml";
@@ -57,17 +52,17 @@ class DeletedFrameworkCommentTest {
     @TempDir
     File tempDir;
 
-    private BootLanguageFixture fixture;
+    private ConfigMessageModuleFixture fixture;
     private UltiToolsPlugin plugin;
     private ConfigManager configManager;
 
     @SuppressWarnings("unused") // read reflectively by the binder
     @ConfigEntity(CONFIG_PATH)
     static class DeletedConfig extends AbstractConfigEntity {
-        @ConfigEntry(path = "a", comment = "{cfg_a}")
+        @ConfigEntry(path = "a", comment = "{config.a}")
         int a = 1;
 
-        @ConfigEntry(path = "b", comment = "{cfg_b}")
+        @ConfigEntry(path = "b", comment = "{config.b}")
         int b = 2;
 
         DeletedConfig(String path) {
@@ -77,49 +72,33 @@ class DeletedFrameworkCommentTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        clearLeakedUltiToolsInstance();
-        MockBukkitHelper.ensureCleanState();
         configManager = new ConfigManager();
-        fixture = BootLanguageFixture.create(tempDir,
-                tools -> when(tools.getConfigManager()).thenReturn(configManager));
-        fixture.jarEntry("lang/en.yml", "cfg_a: \"Setting A\"\ncfg_b: \"Setting B\"\n")
-                .jarEntry("lang/zh.yml", "cfg_a: \"设置 A\"\ncfg_b: \"设置 B\"\n")
-                .onDisk("lang/zh-myserver.yml", "cfg_a: \"本服：设置 A\"\n");
+        fixture = new ConfigMessageModuleFixture(tempDir.toPath(), configManager, null);
+        fixture.shipped("en", "config.a: '<green>Setting A</green>'\nconfig.b: 'Setting B'\n")
+                .shipped("zh", "config.a: '<gold>设置 A</gold>'\nconfig.b: '设置 B'\n");
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() throws IOException {
         fixture.close();
-        MockBukkitHelper.ensureCleanState();
-        clearLeakedUltiToolsInstance();
     }
 
-    /**
-     * Clears a mocked {@code UltiTools} instance a test class leaves behind (17-74 gate-1 F1): a later class would
-     * otherwise log through a mock whose logger is {@code null}.
-     */
-    private static void clearLeakedUltiToolsInstance() throws ReflectiveOperationException {
-        Field instance = UltiTools.class.getDeclaredField("ultiTools");
-        instance.setAccessible(true);
-        instance.set(null, null);
-    }
-
-    /** A server start with {@code language} set to {@code code}. */
+    /** A server start with the selected fallback locale. */
     private void start(String code) throws Exception {
-        fixture.language(code);
-        plugin = fixture.construct("6.3.0");
+        fixture.fallback(code);
+        plugin = fixture.construct();
         plugin.commitLanguageProvenance();
         configManager.register(plugin, new DeletedConfig(CONFIG_PATH));
     }
 
-    /** The full reload has applied the server language; drive the real module reload entry point. */
+    /** The full reload has applied the fallback; drive the real module reload entry point. */
     private void reload(String code) throws Exception {
-        fixture.language(code);
+        fixture.fallback(code);
         assertThat(plugin.reloadWithReport().isPartial()).isFalse();
     }
 
     private Path configFile() {
-        return fixture.disk(CONFIG_PATH).toPath();
+        return fixture.disk(CONFIG_PATH);
     }
 
     private String text() throws IOException {
@@ -140,19 +119,21 @@ class DeletedFrameworkCommentTest {
     }
 
     @Test
-    @DisplayName("reload rebuilds a deleted comment from the jar without extracting a missing official catalogue")
-    void reloadDoesNotCommitMissingLanguageResources() throws Exception {
+    @DisplayName("reload rebuilds a deleted comment from the jar without recreating a missing reference")
+    void reloadDoesNotRecreateAMissingMessageReference() throws Exception {
         start("zh");
         operatorSaves(ZH_COMMENT_DELETED);
-        Path english = fixture.disk("lang/en.yml").toPath();
-        Files.delete(english);
-        byte[] provenance = BootLanguageFixture.bytesOf(fixture.provenanceRecord());
+        Path englishReference = fixture.disk("messages/reference/en.yml");
+        Files.delete(englishReference);
+        Path chineseReference = fixture.disk("messages/reference/zh.yml");
+        byte[] shippedReference = Files.readAllBytes(chineseReference);
 
         reload("en");
 
         assertThat(text()).isEqualTo(EN_FILE);
-        assertThat(english).doesNotExist();
-        assertThat(BootLanguageFixture.bytesOf(fixture.provenanceRecord())).isEqualTo(provenance);
+        assertThat(englishReference).doesNotExist();
+        assertThat(chineseReference).hasBinaryContent(shippedReference);
+        assertThat(fixture.disk("messages/en.yml")).doesNotExist();
     }
 
     @Test
@@ -200,19 +181,20 @@ class DeletedFrameworkCommentTest {
     @Test
     @DisplayName("(e) custom-catalogue comment deleted: start and /ul reload write it again in the custom text; after a switch to en, in en")
     void customCommentDeleted() throws Exception {
-        writtenThenCommentDeleted("zh-myserver", MYSERVER_FILE);
-        start("zh-myserver");
+        fixture.onDisk("messages/zh.yml", "config.a: '<gold>本服：设置 A</gold>'\n");
+        writtenThenCommentDeleted("zh", MYSERVER_FILE);
+        start("zh");
         assertThat(text()).as("(e-a) next start").isEqualTo(MYSERVER_FILE);
 
         operatorSaves(ZH_COMMENT_DELETED);
-        reload("zh-myserver");
+        reload("zh");
         assertThat(text()).as("(e-b) /ul reload").isEqualTo(MYSERVER_FILE);
 
         operatorSaves(ZH_COMMENT_DELETED);
         start("en");
         assertThat(text()).as("(e-c) switch to en, start").isEqualTo(EN_FILE);
 
-        start("zh-myserver");
+        start("zh");
         operatorSaves(ZH_COMMENT_DELETED);
         reload("en");
         assertThat(text()).as("(e-d) switch to en, /ul reload").isEqualTo(EN_FILE);

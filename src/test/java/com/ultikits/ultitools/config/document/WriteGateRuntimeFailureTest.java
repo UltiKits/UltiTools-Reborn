@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.config.document;
 
+import static com.ultikits.ultitools.text.ModuleTextStubs.stubModuleTexts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -21,6 +22,7 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
+import java.util.Optional;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -127,7 +129,7 @@ class WriteGateRuntimeFailureTest {
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("GateModule");
         lenient().when(plugin.getResourceFolderPath()).thenReturn(tempDir.toString());
-        lenient().when(plugin.i18n("fx.interval")).thenReturn("New interval text");
+        lenient().when(stubModuleTexts(plugin).resolve("fx.interval")).thenReturn(Optional.of("New interval text"));
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
         CAPTURED_LOGGER.addHandler(capture);
     }

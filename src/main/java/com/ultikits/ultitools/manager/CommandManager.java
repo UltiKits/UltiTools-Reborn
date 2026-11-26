@@ -51,7 +51,7 @@ public class CommandManager {
         BaseCommandExecutor executor = plugin.getContext().getBean(clazz);
         CmdExecutor annotation = annotation(executor);
         if (annotation != null) registerOwned(plugin, plugin.getPluginName(), executor, () ->
-                engine.register(plugin, plugin.getPluginName(), executor, plugin.i18n(description), permission,
+                engine.register(plugin, plugin.getPluginName(), executor, moduleDescription(plugin, description), permission,
                         annotation.requireOp(), Arrays.asList(aliases.length == 0 ? annotation.alias() : aliases)));
     }
 
@@ -153,9 +153,13 @@ public class CommandManager {
     private void registerExecutor(Object owner, String ownerName, BaseCommandExecutor executor, UltiToolsPlugin module) {
         CmdExecutor annotation = annotation(executor);
         if (annotation == null) return;
-        String description = module == null ? annotation.description() : module.i18n(annotation.description());
+        String description = module == null ? annotation.description() : moduleDescription(module, annotation.description());
         registerOwned(owner, ownerName, executor, () -> engine.register(owner, ownerName, executor, description,
                 annotation.permission(), annotation.requireOp(), Arrays.asList(annotation.alias())));
+    }
+
+    private static String moduleDescription(UltiToolsPlugin module, String description) {
+        return module.moduleTexts().flatMap(texts -> texts.resolve(description)).orElse(description);
     }
 
     private void registerOwned(Object owner, String ownerName, Object executor, Runnable registration) {

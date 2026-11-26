@@ -1,44 +1,39 @@
 package com.ultikits.ultitools.abstracts;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.lang.reflect.Field;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
-import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
-import org.objenesis.ObjenesisStd;
 
 import com.ultikits.ultitools.annotations.ConfigEntity;
 import com.ultikits.ultitools.annotations.ConfigEntry;
 import com.ultikits.ultitools.config.document.OperatorFileWriter;
 import com.ultikits.ultitools.config.document.OwnedPaths;
-import com.ultikits.ultitools.utils.TestHelper;
+import com.ultikits.ultitools.text.ModuleCatalogueFixture;
+import java.util.Base64;
 
 /**
  * #604 (inventory A2/A5, probe P3), maintainer decision of 2026-10-04 "hand-written comments on token-commented
@@ -74,7 +69,7 @@ class ConfigFrameworkCommentOwnershipTest {
     private UltiToolsPlugin plugin;
     /** The catalogues the module's jar ships: code -> key -> text. */
     private final Map<String, Map<String, String>> shipped = new TreeMap<>();
-    private String language = "en";
+    private ModuleCatalogueFixture catalogue;
 
     @SuppressWarnings("unused") // read reflectively by the binder
     @ConfigEntity(PATH)
@@ -181,13 +176,13 @@ class ConfigFrameworkCommentOwnershipTest {
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         Map<String, String> en = new LinkedHashMap<>();
-        en.put("config.item.interval", EN_INTERVAL);
+        en.put("config.item.interval", "<green>" + EN_INTERVAL + "</green>");
         en.put("config.item.multi", EN_MULTI);
         en.put("config.item.lockout", EN_LOCKOUT);
         Map<String, String> zh = new LinkedHashMap<>();
-        zh.put("config.item.interval", ZH_INTERVAL);
+        zh.put("config.item.interval", "<gold>" + ZH_INTERVAL + "</gold>");
         zh.put("config.item.multi", ZH_MULTI);
         zh.put("config.item.lockout", ZH_LOCKOUT);
         shipped.put("en", en);
@@ -196,21 +191,20 @@ class ConfigFrameworkCommentOwnershipTest {
         plugin = Mockito.mock(UltiToolsPlugin.class);
         lenient().when(plugin.getPluginName()).thenReturn("OwnershipModule");
         ConfigFileStubs.stubConfigFolder(plugin, tempDir.toFile());
-        lenient().when(plugin.i18n(anyString())).thenAnswer(invocation -> {
-            String key = invocation.getArgument(0);
-            Map<String, String> current = shipped.get(language);
-            return current != null && current.containsKey(key) ? current.get(key) : key;
-        });
-        lenient().when(plugin.shippedCatalogueTexts(anyString())).thenAnswer(invocation -> {
-            String key = invocation.getArgument(0);
-            List<String> texts = new ArrayList<>();
-            for (Map<String, String> catalogue : shipped.values()) {
-                if (catalogue.containsKey(key)) {
-                    texts.add(catalogue.get(key));
-                }
-            }
-            return texts;
-        });
+        catalogue = new ModuleCatalogueFixture(tempDir);
+        refreshPreparedCatalogue();
+    }
+
+    private void refreshPreparedCatalogue() throws IOException {
+        for (var entry : shipped.entrySet()) {
+            catalogue.shipped(entry.getKey(), entry.getValue());
+        }
+        lenient().when(plugin.moduleTexts()).thenReturn(Optional.of(catalogue.preparedTexts()));
+    }
+
+    @AfterEach
+    void closeCatalogue() {
+        catalogue.close();
     }
 
     private Path file() {
@@ -248,11 +242,11 @@ class ConfigFrameworkCommentOwnershipTest {
         assertThat(text()).as("start-up").isEqualTo(P3);
         assertThat(mtime()).isEqualTo(OLD);
 
-        language = "zh";
+        catalogue.fallback("zh");
         new P3Config(PATH).init(plugin);
         assertThat(text()).as("start-up after a language switch").isEqualTo(P3);
 
-        language = "en";
+        catalogue.fallback("en");
         config.reload();
         assertThat(text()).as("reload after a further switch").isEqualTo(P3);
         assertThat(mtime()).isEqualTo(OLD);
@@ -286,7 +280,7 @@ class ConfigFrameworkCommentOwnershipTest {
         assertThat(text()).isEqualTo("item:\n  # operator note: raised for events\n  # " + EN_INTERVAL + "\n  interval: 300\n");
         assertThat(config.isModifiedSinceSnapshot()).isFalse();
 
-        language = "zh";
+        catalogue.fallback("zh");
         config.reload();
         assertThat(text()).isEqualTo("item:\n  # operator note: raised for events\n  # " + ZH_INTERVAL + "\n  interval: 300\n");
     }
@@ -314,6 +308,7 @@ class ConfigFrameworkCommentOwnershipTest {
         assertThat(mtime()).isEqualTo(OLD);
 
         shipped.get("en").put("config.item.unknown", "Whether the unknown feature runs");
+        refreshPreparedCatalogue();
         new UnknownConfig(PATH).init(plugin);
         assertThat(text()).isEqualTo("item:\n  # my note on this switch\n  # Whether the unknown feature runs\n  unknown: true\n");
     }
@@ -334,8 +329,8 @@ class ConfigFrameworkCommentOwnershipTest {
      * own - the key's own indentation, then {@code "# "} and the text. The same text without the space after
      * {@code #}, or at another column, was written by the operator and is kept byte for byte.
      */
-    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
-    @org.junit.jupiter.params.provider.ValueSource(strings = {
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {
         "item:\n  #Announcement interval in seconds\n  interval: 300\n",
         "item:\n# Announcement interval in seconds\n  interval: 300\n",
         "item:\n    # Announcement interval in seconds\n  interval: 300\n",
@@ -344,7 +339,7 @@ class ConfigFrameworkCommentOwnershipTest {
     void frameworkTextInAnotherByteFormIsKept(String operatorForm) throws Exception {
         put(operatorForm);
 
-        language = "zh";
+        catalogue.fallback("zh");
         new TokenConfig(PATH).init(plugin);
 
         assertThat(text()).isEqualTo(operatorForm);
@@ -366,7 +361,7 @@ class ConfigFrameworkCommentOwnershipTest {
         assertThat(text()).isEqualTo("item:\n  # operator note\n  # " + EN_LOCKOUT + "\n  lockout: UUID\n"
                 + "  # Literal comment\n  kept: 1\n");
 
-        language = "zh";
+        catalogue.fallback("zh");
         config.reload();
         assertThat(text()).isEqualTo("item:\n  # operator note\n  # " + ZH_LOCKOUT + "\n  lockout: UUID\n"
                 + "  # Literal comment\n  kept: 1\n");
@@ -393,12 +388,13 @@ class ConfigFrameworkCommentOwnershipTest {
      * stays at the key's column, so it stays identifiable and keeps following the language across en, fr, zh, en - at
      * depth 1 and depth 2, LF and CRLF.
      */
-    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
-    @org.junit.jupiter.params.provider.ValueSource(strings = {"depth1-lf", "depth1-crlf", "depth2-lf"})
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"depth1-lf", "depth1-crlf", "depth2-lf"})
     @DisplayName("a framework line after a note and a blank line stays at the key's column and follows every switch")
     void frameworkLineAfterABlankLineFollowsEverySwitch(String shape) throws Exception {
-        shipped.put("fr", new LinkedHashMap<String, String>());
+        shipped.put("fr", new LinkedHashMap<>());
         shipped.get("fr").put("config.item.interval", "Intervalle des annonces");
+        refreshPreparedCatalogue();
         String nl = shape.endsWith("crlf") ? "\r\n" : "\n";
         String indent = shape.startsWith("depth2") ? "    " : "  ";
         String head = shape.startsWith("depth2") ? "deep:" + nl + "  item:" + nl : "item:" + nl;
@@ -406,7 +402,7 @@ class ConfigFrameworkCommentOwnershipTest {
         String[] languages = {"en", "fr", "zh", "en"};
         String[] texts = {EN_INTERVAL, "Intervalle des annonces", ZH_INTERVAL, EN_INTERVAL};
         for (int i = 0; i < languages.length; i++) {
-            language = languages[i];
+            catalogue.fallback(languages[i]);
             if (shape.startsWith("depth2")) {
                 new DeepConfig(PATH).init(plugin);
             } else {
@@ -446,8 +442,8 @@ class ConfigFrameworkCommentOwnershipTest {
      * gated language switch the framework line stays at the key's column and follows en and zh; the operator's deeper
      * line keeps its column.
      */
-    @org.junit.jupiter.params.ParameterizedTest(name = "{0} x U+2028")
-    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 4})
+    @ParameterizedTest(name = "{0} x U+2028")
+    @ValueSource(ints = {1, 4})
     @DisplayName("a value holding U+2028: the framework line follows en and zh at the key's column through gated writes")
     void lineSeparatorValueThroughGatedLanguageSwitches(int count) throws Exception {
         StringBuilder separators = new StringBuilder();
@@ -457,11 +453,11 @@ class ConfigFrameworkCommentOwnershipTest {
         String head = "a:\n  s: |-\n    x" + separators + "    y\n";
         put(head + separatorTail(ZH_INTERVAL));
 
-        language = "en";
+        catalogue.fallback("en");
         new SeparatorConfig(PATH).init(plugin);
         assertThat(text()).isEqualTo(head + separatorTail(EN_INTERVAL));
 
-        language = "zh";
+        catalogue.fallback("zh");
         new SeparatorConfig(PATH).init(plugin);
         assertThat(text()).isEqualTo(head + separatorTail(ZH_INTERVAL));
     }
@@ -469,7 +465,7 @@ class ConfigFrameworkCommentOwnershipTest {
     @Test
     @DisplayName("a module save of a value holding four U+2028 keeps every comment line at its column")
     void saveOfALineSeparatorValueKeepsCommentColumns() throws Exception {
-        language = "en";
+        catalogue.fallback("en");
         put("a:\n  s: x\n" + separatorTail(EN_INTERVAL));
         SeparatorConfig config = new SeparatorConfig(PATH);
         config.init(plugin);
@@ -488,14 +484,16 @@ class ConfigFrameworkCommentOwnershipTest {
     void emptyCatalogueTextIdentifiesNoLine() throws Exception {
         shipped.get("en").put("config.item.interval", "");
         shipped.get("zh").put("config.item.interval", "");
+        refreshPreparedCatalogue();
         String operatorBlank = "item:\n  # note\n  #\n  interval: 300\n";
         put(operatorBlank);
 
-        language = "zh";
+        catalogue.fallback("zh");
         TokenConfig config = new TokenConfig(PATH);
         config.init(plugin);
-        language = "en";
+        catalogue.fallback("en");
         shipped.get("en").put("config.item.interval", EN_INTERVAL);
+        refreshPreparedCatalogue();
         config.reload();
 
         assertThat(text()).as("the framework never writes an empty comment, so '#' is not its line").isEqualTo(operatorBlank);
@@ -509,7 +507,7 @@ class ConfigFrameworkCommentOwnershipTest {
 
         LiteralConfig config = new LiteralConfig(PATH);
         config.init(plugin);
-        language = "zh";
+        catalogue.fallback("zh");
         config.reload();
         config.save();
 
@@ -536,63 +534,17 @@ class ConfigFrameworkCommentOwnershipTest {
         assertThat(text()).isEqualTo("item:\n  # operator note\n  # " + EN_INTERVAL + "\n  interval: 300\n");
     }
 
-    // ------------------------------------------------------------------------------------------------
-    // The jar catalogue accessor reads the module's jar only: no language file, hash record or backup is
-    // read for it or written by it (the language-provenance writes belong to the language load).
-
     @Test
-    @SuppressWarnings("PMD.AvoidAccessibilityAlteration") // same reflective fixture idiom as UltiToolsPluginLanguageFallbackTest
-    @DisplayName("shipped catalogues are read from the jar in .json and .yml, and the language folder is untouched")
-    void shippedCataloguesAreReadFromTheJarWithoutSideEffects() throws Exception {
-        File jarRoot = new File(tempDir.toFile(), "jar-root");
-        File classFile = new File(jarRoot, UltiToolsPluginLanguageScopeTest.ModuleFixturePlugin.class.getName()
-                .replace('.', '/') + ".class");
-        Files.createDirectories(classFile.getParentFile().toPath());
-        Files.write(classFile.toPath(), fixtureClassBytes());
-        File jarLang = new File(jarRoot, "lang");
-        Files.createDirectories(jarLang.toPath());
-        Files.write(new File(jarLang, "en.json").toPath(),
-                ("{\"config.item.interval\":\"" + EN_INTERVAL + "\"}").getBytes(StandardCharsets.UTF_8));
-        Files.write(new File(jarLang, "zh.yml").toPath(),
-                ("config:\n  item:\n    interval: " + ZH_INTERVAL + "\n").getBytes(StandardCharsets.UTF_8));
-
-        File resourceFolder = new File(tempDir.toFile(), "module-folder");
-        File diskLang = new File(resourceFolder, "lang");
-        Files.createDirectories(diskLang.toPath());
-        Files.write(new File(diskLang, "en.json").toPath(),
-                "{\"config.item.interval\":\"edited on disk\"}".getBytes(StandardCharsets.UTF_8));
-        Files.write(new File(resourceFolder, ".ultitools-resource-hashes.json").toPath(),
-                "{}".getBytes(StandardCharsets.UTF_8));
-
-        Logger moduleLogger = Mockito.mock(Logger.class);
-        YamlConfiguration frameworkConfig = new YamlConfiguration();
-        frameworkConfig.set("language", "en");
-        TestHelper.mockUltiToolsInstance(ultiTools -> {
-            lenient().when(ultiTools.getConfig()).thenReturn(frameworkConfig);
-            lenient().when(ultiTools.getLogger()).thenReturn(moduleLogger);
-        });
+    @DisplayName("shipped templates come from every module catalogue and leave the operator files alone")
+    void shippedCataloguesAreReadFromTheCodeSourceWithoutSideEffects() throws Exception {
+        Path operator = Files.createDirectories(tempDir.resolve("overrides"));
+        Files.writeString(operator.resolve("en.yml"), "config.item.interval: edited on disk\n");
         Map<String, String> before = snapshot(tempDir);
 
-        try (URLClassLoader loader = new ChildFirstLoader(new URL[]{jarRoot.toURI().toURL()},
-                ConfigFrameworkCommentOwnershipTest.class.getClassLoader())) {
-            // The class name is a compile-time constant, never attacker-controllable.
-            // nosemgrep: java.lang.security.audit.unsafe-reflection.unsafe-reflection
-            Class<?> fixture = Class.forName(UltiToolsPluginLanguageScopeTest.ModuleFixturePlugin.class.getName(),
-                    true, loader);
-            UltiToolsPlugin module = (UltiToolsPlugin) new ObjenesisStd().newInstance(fixture);
-            Field name = UltiToolsPlugin.class.getDeclaredField("pluginName");
-            name.setAccessible(true);
-            name.set(module, "FixtureModule");
-            Field folder = UltiToolsPlugin.class.getDeclaredField("resourceFolderPath");
-            folder.setAccessible(true);
-            folder.set(module, resourceFolder.getAbsolutePath());
-
-            assertThat(module.shippedCatalogueTexts("config.item.interval"))
-                    .containsExactlyInAnyOrder(EN_INTERVAL, ZH_INTERVAL);
-            assertThat(module.shippedCatalogueTexts("config.item.absent")).isEmpty();
-        }
-
-        assertThat(snapshot(tempDir)).as("every file under the module and jar folders, with its SHA-256").isEqualTo(before);
+        var texts = catalogue.preparedTexts();
+        assertThat(texts.shippedTemplates("config.item.interval")).containsExactlyInAnyOrder(EN_INTERVAL, ZH_INTERVAL);
+        assertThat(texts.shippedTemplates("config.item.absent")).isEmpty();
+        assertThat(snapshot(tempDir)).as("each file and its SHA-256 under the fixture root").isEqualTo(before);
     }
 
     private static Map<String, String> snapshot(Path root) throws Exception {
@@ -601,7 +553,7 @@ class ConfigFrameworkCommentOwnershipTest {
             for (Path path : (Iterable<Path>) walk::iterator) {
                 if (Files.isRegularFile(path)) {
                     byte[] digest = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(path));
-                    files.put(root.relativize(path).toString(), java.util.Base64.getEncoder().encodeToString(digest));
+                    files.put(root.relativize(path).toString(), Base64.getEncoder().encodeToString(digest));
                 } else {
                     files.put(root.relativize(path) + "/", "directory");
                 }
@@ -610,43 +562,4 @@ class ConfigFrameworkCommentOwnershipTest {
         return files;
     }
 
-    private static byte[] fixtureClassBytes() throws IOException {
-        String resource = UltiToolsPluginLanguageScopeTest.ModuleFixturePlugin.class.getName().replace('.', '/') + ".class";
-        try (InputStream in = ConfigFrameworkCommentOwnershipTest.class.getClassLoader().getResourceAsStream(resource)) {
-            if (in == null) {
-                throw new IOException("Compiled fixture class not found on the test classpath: " + resource);
-            }
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[4096];
-            for (int n = in.read(buffer); n >= 0; n = in.read(buffer)) {
-                out.write(buffer, 0, n);
-            }
-            return out.toByteArray();
-        }
-    }
-
-    /** Child-first for the fixture's own class, so its CodeSource is the exploded jar directory built above. */
-    private static final class ChildFirstLoader extends URLClassLoader {
-        ChildFirstLoader(URL[] urls, ClassLoader parent) {
-            super(urls, parent);
-        }
-
-        @Override
-        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-            synchronized (getClassLoadingLock(name)) {
-                Class<?> found = findLoadedClass(name);
-                if (found == null) {
-                    try {
-                        found = findClass(name);
-                    } catch (ClassNotFoundException notShippedByThisJar) {
-                        found = super.loadClass(name, false);
-                    }
-                }
-                if (resolve) {
-                    resolveClass(found);
-                }
-                return found;
-            }
-        }
-    }
 }

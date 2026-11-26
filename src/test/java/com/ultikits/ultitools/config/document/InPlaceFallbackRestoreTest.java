@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.config.document;
 
+import static com.ultikits.ultitools.text.ModuleTextStubs.stubModuleTexts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
@@ -23,6 +24,7 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.Optional;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -369,7 +371,8 @@ class InPlaceFallbackRestoreTest {
     @Test
     @DisplayName("not put back: a panel edit is refused and the comment refresh writes nothing until a reload")
     void notPutBackRefusesPanelEditsAndCommentRefresh() throws Exception {
-        lenient().when(plugin.i18n("fx.interval")).thenReturn("New interval text");
+        var texts = stubModuleTexts(plugin);
+        lenient().when(texts.resolve("fx.interval")).thenReturn(Optional.of("New interval text"));
         write("commented.yml", "# Old interval text\ninterval: 300\nname: lobby\n");
         Commented config = new Commented("commented.yml");
         config.init(plugin);
@@ -391,7 +394,7 @@ class InPlaceFallbackRestoreTest {
         assertThat(panel).isInstanceOf(ConfigWriteRefusedException.class);
         assertThat(((ConfigWriteRefusedException) panel).getReason()).contains("changed since it was read");
         assertThat(config.interval).as("the panel value is rolled back").isEqualTo(300);
-        lenient().when(plugin.i18n("fx.interval")).thenReturn("Newer interval text");
+        lenient().when(texts.resolve("fx.interval")).thenReturn(Optional.of("Newer interval text"));
         config.refreshFrameworkComments();
         assertThat(read("commented.yml")).as("neither a panel edit nor the comment refresh writes").isEqualTo(onDisk);
     }
@@ -414,7 +417,8 @@ class InPlaceFallbackRestoreTest {
     @Test
     @DisplayName("not put back during the comment-only write at load: no exception, and every later write is refused")
     void notPutBackAtCommentWriteOnLoad() throws Exception {
-        lenient().when(plugin.i18n("fx.interval")).thenReturn("New interval text");
+        var texts = stubModuleTexts(plugin);
+        lenient().when(texts.resolve("fx.interval")).thenReturn(Optional.of("New interval text"));
         write("commented.yml", "# Old interval text\ninterval: 300\nname: lobby\n");
         Commented config = new Commented("commented.yml");
         injectFaults();

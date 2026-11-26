@@ -22,6 +22,7 @@ import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
 import com.ultikits.ultitools.text.internal.LocaleNames;
+import com.ultikits.ultitools.text.internal.ModuleTexts;
 import com.ultikits.ultitools.text.internal.TextEngine;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -2030,6 +2031,16 @@ public abstract class UltiToolsPlugin implements IPlugin, Localized, Configurabl
             context.registerSingleton(Messages.class.getName(),
                     textEngine.messagesFor(MessageKey.namespaceFor(pluginName)));
         }
+    }
+
+    /**
+     * Exposes the module's text lookup without making its prepared catalogue visible to other modules.
+     * @return an empty result when no module messages service was prepared
+     */
+    @ApiStatus.Internal
+    public final Optional<ModuleTexts> moduleTexts() {
+        return textEngine == null || preparedMessages == null ? Optional.empty()
+                : Optional.of(new ModuleTexts(textEngine, preparedMessages));
     }
 
     /**

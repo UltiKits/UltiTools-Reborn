@@ -49,12 +49,12 @@ public class MethodInvocationCompleter implements TabCompleter {
         // Find and invoke the suggest method
         Method[] suggestMethods = getSuggestMethodsByName(context.getExecutorInstance(), suggestName);
         if (suggestMethods == null || suggestMethods.length == 0) {
-            // If no method found, return the suggestName as a hint
+            // A missing provider leaves a module message path or literal hint.
             UltiToolsPlugin plugin = UltiTools.getInstance().getCommandManager()
                     .getPluginByLabel(context.getCommandName());
             if (plugin != null) {
-                String hint = plugin.i18n(suggestName);
-                if (hint != null && !hint.isEmpty()) {
+                String hint = plugin.moduleTexts().flatMap(texts -> texts.resolve(suggestName)).orElse(suggestName);
+                if (!hint.isEmpty()) {
                     return Collections.singletonList(hint);
                 }
             }
