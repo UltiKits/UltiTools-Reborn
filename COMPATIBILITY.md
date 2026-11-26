@@ -302,6 +302,8 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   During coexistence, the legacy path still loads custom files as before. New `Messages` use the
   official prefix of a custom configured name (`zh-myserver` → `zh`, unmatched safe names → `en`)
   without treating that custom file as a new catalogue or adding an invalid-locale warning.
+  Once the legacy loader is removed, an upgrade with leftover `lang/` directories gets one console
+  notice per startup listing them; the notice does not rename, delete, or read their contents.
 - **Module annotation text:** `@ConfigEntry(comment = "{path}")`, `@CmdExecutor(description = …)`,
   and `@CmdParam(suggest = …)` without a matching provider method look up names only if they match
   `[a-z0-9_-]+(\.[a-z0-9_-]+)*` and are at most 128 characters. A matching key in the server fallback
@@ -351,6 +353,7 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。
 并存期间旧路径照旧读取自定义文件；新 `Messages` 将自定义配置名按旧官方前缀归到基础语言
 （`zh-myserver` → `zh`，无匹配前缀的安全名称 → `en`），不读取该旧文件，也不新增非法 locale 警告。
+旧加载器移除后，升级时若仍留有 `lang/` 目录，控制台每次启动只提示一次并列出这些目录；提示不会给目录改名、删除目录或读取其内容。
 语言标量键和值一律按文字读取（`yes`、`No`、`123`、`null`、`~` 不做 YAML 类型转换），列表与非标量键
 拒绝并告警，嵌套映射仍用于点分键分组。仅读取 `.yml`，`.yaml` 会告警；文件必须为 UTF-8，允许 BOM。
 只带 `zh_CN.yml` 等地区文件却没有 `zh.yml` 时会提示补基础语言文件，不把地区变体回退规则改成模糊匹配。
