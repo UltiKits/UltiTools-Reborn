@@ -1,5 +1,12 @@
 package com.ultikits.ultitools.utils;
 
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.commands.CoreCommandMessageTestSupport;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.ParameterizedTest;
+import java.util.Locale;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
 
@@ -175,37 +182,52 @@ class CloudConnectionLifecycleTest {
                 "stopped — this UltiTools version is no longer accepted; upgrade UltiTools");
     }
 
-    @Test
-    void serverIdMismatchStopsKeepsTheCredentialAndExplainsOnce() throws Exception {
-        openGateway();
-        fastTiming();
-        gateway.welcomeServerId = "01JXXXXSERVER0000000000000";
-        startSaved();
-        byte[] before = Files.readAllBytes(credentialFile);
-        await(() -> CloudSession.current().connectionState() == AgentConnection.State.SERVER_ID_MISMATCH,
-                "server-ID mismatch stop");
-        await(() -> records.stream().anyMatch(r -> r.getLevel() == Level.SEVERE), "mismatch notice");
-        advanceAgentTime(TimeUnit.HOURS.toMillis(1));
-        assertThat(gateway.headers).hasSize(1);
-        assertThat(Files.readAllBytes(credentialFile)).as("credential file unchanged").isEqualTo(before);
-        assertThat(ServerCredentialStore.load()).isNotNull();
-        assertThat(records.stream().filter(r -> r.getLevel() == Level.SEVERE)).singleElement()
-                .satisfies(r -> assertThat(r.getMessage()).isEqualTo(CloudSession.SERVER_ID_MISMATCH_KEY));
-        assertThat(CloudAuthManager.status().isConnected()).isFalse();
-        assertThat(CloudAuthManager.status().getConnectionDescription()).isEqualTo(
-                "stopped — UltiCloud answered with a different server ID than this server is linked to; "
-                + "contact UltiCloud support, or run /ulticloud logout and then /ulticloud login");
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void serverIdMismatchStopsKeepsTheCredentialAndExplainsOnce(String code) throws Exception {
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(
+                        support.messages(), Locale.forLanguageTag(code))) {
+            openGateway();
+            fastTiming();
+            gateway.welcomeServerId = "01JXXXXSERVER0000000000000";
+            startSaved();
+            byte[] before = Files.readAllBytes(credentialFile);
+            await(() -> CloudSession.current().connectionState() == AgentConnection.State.SERVER_ID_MISMATCH,
+                    "server-ID mismatch stop");
+            await(() -> records.stream().anyMatch(r -> r.getLevel() == Level.SEVERE), "mismatch notice");
+            advanceAgentTime(TimeUnit.HOURS.toMillis(1));
+            assertThat(gateway.headers).hasSize(1);
+            assertThat(Files.readAllBytes(credentialFile)).as("credential file unchanged").isEqualTo(before);
+            assertThat(ServerCredentialStore.load()).isNotNull();
+            assertThat(records.stream().filter(r -> r.getLevel() == Level.SEVERE)).singleElement()
+                    .satisfies(r -> {
+                        assertThat(r.getMessage()).isEqualTo("zh".equals(code)
+                                ? "UltiCloud 对本服务器连接的应答使用了与绑定时不同的服务器 ID。已停止重连，凭据保留。请联系 UltiCloud 支持，或先执行 /ulticloud logout 再执行 /ulticloud login 重新绑定此服务器。"
+                                : "UltiCloud answered this server's connection with a different server ID than the one it is linked to. "
+                                    + "Reconnecting has stopped and the credential is kept. Contact UltiCloud support, "
+                                    + "or run /ulticloud logout and then /ulticloud login to link this server again.");
+                        assertThat(r.getThrown()).isNull();
+                    });
+            assertThat(CloudAuthManager.status().isConnected()).isFalse();
+            assertThat(CloudAuthManager.status().getConnectionDescription()).isEqualTo(
+                    "stopped — UltiCloud answered with a different server ID than this server is linked to; "
+                    + "contact UltiCloud support, or run /ulticloud logout and then /ulticloud login");
 
+        }
         List<String> lines = new CopyOnWriteArrayList<>();
         org.bukkit.command.ConsoleCommandSender sender = org.mockito.Mockito.mock(org.bukkit.command.ConsoleCommandSender.class);
-        org.mockito.Mockito.doAnswer(call -> { lines.add(call.getArgument(0)); return null; })
-                .when(sender).sendMessage(org.mockito.ArgumentMatchers.anyString());
+        org.mockito.Mockito.doAnswer(call -> { lines.add(CommandMessageTestSupport.plain(call.getArgument(0))); return null; })
+                .when(sender).sendMessage(org.mockito.ArgumentMatchers.any(Component.class));
         com.ultikits.ultitools.commands.CloudLoginCommand command = new com.ultikits.ultitools.commands.CloudLoginCommand();
-        command.status(sender);
-        assertThat(lines).anyMatch(line -> line.contains("Connection: stopped — UltiCloud answered with a different server ID"));
-        command.reconnect(sender);
-        assertThat(lines.get(lines.size() - 1)).contains(
-                "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to.");
+        try (var commandMessages = CoreCommandMessageTestSupport.bind(
+                UltiTools.getInstance(), "en")) {
+            command.status(sender);
+            assertThat(lines).anyMatch(line -> line.contains("Connection: stopped — UltiCloud answered with a different server ID"));
+            command.reconnect(sender);
+            assertThat(lines.get(lines.size() - 1)).contains(
+                    "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to.");
+        }
         advanceAgentTime(200);
         assertThat(gateway.headers).as("reconnect does not leave the mismatch").hasSize(1);
         assertNoSecrets();
@@ -213,8 +235,7 @@ class CloudConnectionLifecycleTest {
 
     @Test
     void serverIdMismatchLinesAreInBothCatalogues() throws Exception {
-        for (String key : new String[]{CloudSession.SERVER_ID_MISMATCH_KEY,
-                "Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to. "
+        for (String key : new String[]{"Reconnecting stays stopped: UltiCloud answered with a different server ID than this server is linked to. "
                         + "Contact UltiCloud support, or run /ulticloud logout and then /ulticloud login."}) {
             com.google.gson.JsonObject en = catalogue("en");
             com.google.gson.JsonObject zh = catalogue("zh");
@@ -424,8 +445,8 @@ class CloudConnectionLifecycleTest {
         assertThat(CloudAuthManager.status().getConnectionDescription()).isEqualTo("connecting");
     }
 
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
     void startupMessageUsesTheLinkSnapshotWhenItRuns(boolean stillLinked) throws Exception {
         ServerCredentialStore.save(credential("LIFE"));

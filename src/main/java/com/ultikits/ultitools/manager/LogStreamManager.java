@@ -3,7 +3,8 @@ package com.ultikits.ultitools.manager;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.handler.ConsoleMirror;
 import com.ultikits.ultitools.handler.SystemLogHandler;
-import com.ultikits.ultitools.utils.FrameworkText;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.text.Arg;
 import org.bukkit.Bukkit;
 import org.bukkit.event.Listener;
 
@@ -27,7 +28,7 @@ public class LogStreamManager implements Listener {
         try {
             Bukkit.getPluginManager().registerEvents(this, UltiTools.getInstance());
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().warning(FrameworkText.format("注册事件监听器失败: %s", e.getMessage()));
+            UltiTools.getInstance().getLogger().warning(FrameworkMessages.plain(ManagerKeys.PANEL_LOG_STREAM_LISTENER_FAILED, Arg.string("error", String.valueOf(e.getMessage()))));
         }
     }
     

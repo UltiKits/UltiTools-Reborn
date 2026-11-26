@@ -1,7 +1,11 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.commands.CoreCommandMessageTestSupport;
+import net.kyori.adventure.text.Component;
+import static org.mockito.ArgumentMatchers.any;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -24,7 +28,6 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
-import org.bukkit.ChatColor;
 import org.bukkit.command.ConsoleCommandSender;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
@@ -47,6 +50,8 @@ import com.ultikits.ultitools.commands.CloudLoginCommand;
 class CloudLogoutRevokeTest {
     static final String UUID = "0123456789abcdef0123456789abcdef";
     static final String SECRET = "ucs_LOGOUT_TEST";
+    private CommandMessageTestSupport commandMessages;
+
     @TempDir Path tempDir;
     Path credentialFile;
     ServerMock server;
@@ -89,6 +94,7 @@ class CloudLogoutRevokeTest {
             @Override public void close() { }
         });
         TestHelper.mockUltiToolsInstance(plugin -> lenient().when(plugin.getLogger()).thenReturn(logger));
+        commandMessages = CoreCommandMessageTestSupport.bind(UltiTools.getInstance(), "en");
         http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         http.createContext("/v1/agent/credential/revoke", this::answer);
         http.start();
@@ -115,6 +121,7 @@ class CloudLogoutRevokeTest {
             } finally {
                 try {
                     MockBukkitHelper.safeUnmock();
+                    commandMessages.close();
                 } finally {
                     Field instance = UltiTools.class.getDeclaredField("ultiTools");
                     instance.setAccessible(true);
@@ -140,7 +147,7 @@ class CloudLogoutRevokeTest {
         pauseReply = true;
 
         new CloudLoginCommand().logout(sender());
-        assertThat(lines).containsExactly(ChatColor.AQUA + "Unlinking this server from UltiCloud...");
+        assertThat(lines).containsExactly("Unlinking this server from UltiCloud...");
         assertThat(CloudSession.current().isCurrent()).isFalse();
         // The order logout guarantees is local: the connection is stopped (session no longer
         // current, not connected) before the revoke is sent. It does not wait for the server-side
@@ -166,9 +173,9 @@ class CloudLogoutRevokeTest {
         assertThat(CredentialStore.read().data()).containsEntry("uuid", UUID).doesNotContainKey("cloud_credential");
         assertThat(CloudSession.current().getCredential()).isNull();
         assertThat(CloudAuthManager.status().isLinked()).isFalse();
-        assertThat(lines).containsExactly(ChatColor.AQUA + "Unlinking this server from UltiCloud...",
-                ChatColor.GREEN + "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.",
-                ChatColor.GRAY + "Use /ulticloud login to link it again.");
+        assertThat(lines).containsExactly("Unlinking this server from UltiCloud...",
+                "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.",
+                "Use /ulticloud login to link it again.");
         awaitWithin(15_000, () -> events.contains("closed"), "gateway saw the close");
         assertThat(new java.util.ArrayList<>(events)).containsExactlyInAnyOrder("closed", "revoke");
         Thread.sleep(3100);
@@ -242,10 +249,10 @@ class CloudLogoutRevokeTest {
         } finally {
             CredentialStore.setSimulateWriteFailureForTesting(false);
         }
-        assertThat(lines).containsExactly(ChatColor.AQUA + "Unlinking this server from UltiCloud...",
-                ChatColor.RED + "Could not delete this server's UltiCloud credential from the local credentials file. "
+        assertThat(lines).containsExactly("Unlinking this server from UltiCloud...",
+                "Could not delete this server's UltiCloud credential from the local credentials file. "
                         + "Check the server log, then run /ulticloud logout again.",
-                ChatColor.GRAY + "Cloud features have been stopped regardless.");
+                "Cloud features have been stopped regardless.");
         assertThat(ServerCredentialStore.load()).as("the credential is still on disk").isNotNull();
         assertThat(CloudSession.current().getCredential()).isNull();
         assertThat(records.stream().filter(r -> r.getLevel() == Level.WARNING).map(LogRecord::getMessage))
@@ -373,7 +380,7 @@ class CloudLogoutRevokeTest {
 
     ConsoleCommandSender sender() {
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
-        doAnswer(call -> { lines.add(call.getArgument(0)); return null; }).when(sender).sendMessage(anyString());
+        doAnswer(call -> { lines.add(CommandMessageTestSupport.plain(call.getArgument(0))); return null; }).when(sender).sendMessage(any(Component.class));
         return sender;
     }
 

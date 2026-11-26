@@ -4,7 +4,6 @@ import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -23,7 +22,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.RemoteConsoleCommandSender;
@@ -59,8 +59,7 @@ import com.ultikits.ultitools.utils.TestHelper;
 @ExtendWith(CommandTestExtension.class)
 class CloudLoginRconDispatchTest {
 
-    private static final String CONSOLE_NOTICE = ChatColor.AQUA
-            + "Requesting a device code from UltiCloud. The code and the link will be printed in the server console.";
+    private static final String CONSOLE_NOTICE = "Requesting a device code from UltiCloud. The code and the link will be printed in the server console.";
 
     @TempDir
     Path tempDir;
@@ -98,9 +97,9 @@ class CloudLoginRconDispatchTest {
         when(rcon.isOp()).thenReturn(true);
         lenient().when(rcon.getName()).thenReturn("Rcon");
         doAnswer(inv -> {
-            received.add(inv.getArgument(0));
+            received.add(CommandMessageTestSupport.plain(inv.getArgument(0)));
             return null;
-        }).when(rcon).sendMessage(anyString());
+        }).when(rcon).sendMessage(any(Component.class));
 
         command = mock(Command.class);
         lenient().when(command.getName()).thenReturn("ulticloud");
@@ -152,8 +151,7 @@ class CloudLoginRconDispatchTest {
 
         List<String> atReturn = dispatchLogin();
 
-        assertThat(atReturn).containsExactly(ChatColor.YELLOW
-                + "This server is already linked to UltiCloud as Survival. Use /ulticloud logout first to link it again.");
+        assertThat(atReturn).containsExactly("This server is already linked to UltiCloud as Survival. Use /ulticloud logout first to link it again.");
     }
 
     @Test
@@ -164,7 +162,7 @@ class CloudLoginRconDispatchTest {
         List<String> atReturn = dispatchLogin();
 
         assertThat(atReturn).hasSize(1);
-        assertThat(atReturn.get(0)).startsWith(ChatColor.RED + "Please wait ")
-                .endsWith(" seconds before trying again.");
+        assertThat(atReturn.get(0)).startsWith("请等待 ")
+                .endsWith(" 秒后再试。");
     }
 }

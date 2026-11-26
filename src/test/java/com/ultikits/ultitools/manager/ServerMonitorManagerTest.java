@@ -5,21 +5,34 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
-
+import org.bukkit.Bukkit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 /**
@@ -51,6 +64,108 @@ class ServerMonitorManagerTest {
     @AfterEach
     void tearDown() {
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void monitorFailureDiagnosticsUseServerLanguage(String code) throws Exception {
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = collectingLogger(records);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                plugin -> when(plugin.getLogger()).thenReturn(logger));
+        IllegalStateException failure = new IllegalStateException("broken");
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(
+                        support.messages(), Locale.forLanguageTag(code));
+                var management = org.mockito.Mockito.mockStatic(ManagementFactory.class);
+                var bukkit = org.mockito.Mockito.mockStatic(Bukkit.class)) {
+            management.when(ManagementFactory::getOperatingSystemMXBean).thenThrow(failure);
+            invokeMonitor("sampleCpuUsage");
+            assertThat(serverMonitorManager.sampleAndPublishState()).isFalse();
+            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            bukkit.when(Bukkit::getWorlds).thenThrow(failure);
+            assertThat(serverMonitorManager.sampleAndPublishState()).isFalse();
+            assertThat(records).extracting(LogRecord::getMessage).containsExactly("zh".equals(code)
+                    ? new String[]{"无法获取CPU使用率: broken",
+                        "[ServerMonitor] 试图在非主线程上采样 Bukkit 状态，已拒绝。这是一个编程错误，请检查调度。",
+                        "[ServerMonitor] 采样服务器状态失败"}
+                    : new String[]{"Unable to read the CPU usage: broken",
+                        "[ServerMonitor] Refused to sample the Bukkit state off the main thread. This is a programming error; check the scheduling.",
+                        "[ServerMonitor] Failed to sample the server state"});
+            assertThat(records).extracting(LogRecord::getLevel).containsExactly(
+                    Level.FINE, Level.SEVERE, Level.WARNING);
+            assertThat(records.get(2).getThrown()).isSameAs(failure);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void tpsDiagnosticHasFixedDecimalsAndIntentionalSevenPointZeroHalfEvenRounding(String code) throws Exception {
+        List<LogRecord> records = new ArrayList<>();
+        Logger logger = collectingLogger(records);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                plugin -> when(plugin.getLogger()).thenReturn(logger));
+        try (var support = new CommandMessageTestSupport(code);
+                var scope = FrameworkMessages.overrideForTests(
+                        support.messages(), Locale.forLanguageTag(code))) {
+            // A clock is not injected into the monitor. Pin deterministic catalogue values separately,
+            // then assert the actual sampled record uses that same key, numeric arguments and level.
+            assertThat(FrameworkMessages.plain(ManagerKeys.MONITOR_TPS_UPDATE,
+                    Arg.number("tps", 19.5),
+                    Arg.number("interval", 1234))).isEqualTo("zh".equals(code)
+                        ? "TPS更新: 当前TPS=19.50, 时间间隔=1234ms" : "TPS update: current TPS=19.50, interval=1234ms");
+            assertThat(FrameworkMessages.plain(ManagerKeys.MONITOR_TPS_UPDATE,
+                    Arg.number("tps", 19.125),
+                    Arg.number("interval", 1234))).isEqualTo("zh".equals(code)
+                        ? "TPS更新: 当前TPS=19.12, 时间间隔=1234ms" : "TPS update: current TPS=19.12, interval=1234ms");
+            org.mockito.Mockito.clearInvocations(support.messages());
+            Field lastTick = ServerMonitorManager.class.getDeclaredField("lastTick");
+            lastTick.setAccessible(true);
+            lastTick.setLong(serverMonitorManager, System.currentTimeMillis());
+            invokeMonitor("updateTpsAndCpu");
+            assertThat(records).hasSize(1);
+            assertThat(records.getFirst().getLevel()).isEqualTo(Level.FINEST);
+            assertThat(records.getFirst().getMessage()).matches("zh".equals(code)
+                    ? "TPS更新: 当前TPS=20\\.00, 时间间隔=[0-9]+ms"
+                    : "TPS update: current TPS=20\\.00, interval=[0-9]+ms");
+            org.mockito.Mockito.verify(support.messages()).render(org.mockito.ArgumentMatchers.argThat(text ->
+                    text instanceof Text.Translated translated
+                        && translated.key().equals(ManagerKeys.MONITOR_TPS_UPDATE)),
+                    org.mockito.ArgumentMatchers.eq(Locale.forLanguageTag(code)));
+        }
+    }
+
+    @Test
+    void infoLoggerDoesNotRenderTpsDiagnostic() throws Exception {
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setLevel(Level.INFO);
+        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
+                plugin -> when(plugin.getLogger()).thenReturn(logger));
+        var messages = mock(Messages.class);
+        try (var scope = FrameworkMessages.overrideForTests(messages, Locale.ENGLISH)) {
+            invokeMonitor("updateTpsAndCpu");
+            assertThat(org.mockito.Mockito.mockingDetails(messages).getInvocations()).isEmpty();
+        }
+    }
+
+    private void invokeMonitor(String name) throws Exception {
+        Method method = ServerMonitorManager.class.getDeclaredMethod(name);
+        method.setAccessible(true);
+        method.invoke(serverMonitorManager);
+    }
+
+    private static Logger collectingLogger(List<LogRecord> records) {
+        Logger logger = Logger.getAnonymousLogger();
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        var handler = new Handler() {
+            @Override public void publish(LogRecord record) { records.add(record); }
+            @Override public void flush() { /* No buffer. */ }
+            @Override public void close() { /* No resource. */ }
+        };
+        handler.setLevel(Level.ALL);
+        logger.addHandler(handler);
+        return logger;
     }
 
     @Nested
