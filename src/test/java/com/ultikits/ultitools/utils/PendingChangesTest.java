@@ -484,7 +484,7 @@ class PendingChangesTest {
             @Override public void flush() { /* Untimed capture. */ }
             @Override public void close() { /* No resource. */ }
         });
-        transactions.flushReports(logger, key -> key, null);
+        transactions.flushReports(logger, null);
         assertThat(logs).singleElement().asString().contains(UpmKeys.START_INSTALL_ROLLED_BACK.translationKey(), "Demo", "2");
     }
 
@@ -505,7 +505,7 @@ class PendingChangesTest {
         try (var bukkit = org.mockito.Mockito.mockStatic(org.bukkit.Bukkit.class);
              var text = new CommandMessageTestSupport(language)) {
             bukkit.when(org.bukkit.Bukkit::getConsoleSender).thenReturn(mock(ConsoleCommandSender.class));
-            transactions.flushReports(logger, key -> key, text.messages());
+            transactions.flushReports(logger, text.messages());
         }
         assertThat(logs).containsExactly("en".equals(language) ? "Module Demo 2 is installed: this start loaded it."
                 : "模块 Demo 2 已安装：本次启动已加载。");

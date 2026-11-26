@@ -1,5 +1,10 @@
 package com.ultikits.ultitools.utils;
 
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.ParameterizedTest;
+import java.util.Locale;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -128,18 +133,24 @@ class CatalogueInstallEndToEndTest {
                 .isEqualTo(catalogue.jar());
     }
 
-    @Test
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
     @DisplayName("one byte away from the metadata's hash: nothing installed, no .part left, one integrity line")
-    void tamperedJar_isDiscardedBeforeStaging() {
+    void tamperedJar_isDiscardedBeforeStaging(String language) throws Exception {
         catalogue.mode(StubCatalogue.Mode.TAMPER_HASH);
+        try (var text = new CommandMessageTestSupport(language);
+             var override = FrameworkMessages.overrideForTests(text.messages(), Locale.forLanguageTag(language))) {
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").queued()).isFalse();
+        }
 
-        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
-
-        assertThat(result.queued()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
-        // The catalogue text of plan 22-22; the mocked framework has no language loaded, so the key itself is shown.
-        assertThat(messages()).containsExactly(
-                String.format("已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。", "demo", "1.1.0"));
+        assertThat(messages()).containsExactly(integrityLine(language));
+    }
+
+    private static String integrityLine(String language) {
+        return "en".equals(language)
+                ? "Refused to install demo 1.1.0: the file did not pass its integrity check against the catalogue (its SHA-256 or size does not match, or the catalogue gave no usable hash or size). Nothing was written to the modules folder."
+                : "已拒绝安装 demo 1.1.0：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。";
     }
 
     @Test
@@ -282,26 +293,24 @@ class CatalogueInstallEndToEndTest {
             assertThat(modulesFolderNames()).isEmpty();
         }
 
-        @Test
-        @DisplayName("integrity failures share the catalogue reason; unavailable and incomplete downloads keep their own lines")
-        void everyKindHasItsOwnLine() {
-            List<String> lines = new ArrayList<>();
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.HASH_MISMATCH));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.SIZE_MISMATCH));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.HEADER_MISMATCH));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.MISSING_METADATA));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.NOT_AVAILABLE));
-            lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", VerifiedDownload.Kind.IO_ERROR));
-
-            // Plan 22-22: every integrity failure is the one catalogue reason (which check failed is on the FINE line);
-            // a version not offered and a download that did not complete keep their own lines.
-            String integrity = String.format("已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。", "demo", "1.1.0");
-            assertThat(lines.subList(0, 4)).containsOnly(integrity);
-            assertThat(lines.subList(3, 6)).doesNotHaveDuplicates();
-            assertThat(lines.get(4)).isEqualTo("demo 1.1.0 is not available for download"
-                    + " (withdrawn, unpublished or not licensed); nothing was installed.");
-            assertThat(lines.get(5)).isEqualTo(
-                    "Could not download demo 1.1.0 (the download did not complete); nothing was installed.");
+        @ParameterizedTest
+        @ValueSource(strings = {"en", "zh"})
+        void everyKindHasItsOwnLine(String language) throws Exception {
+            try (var text = new CommandMessageTestSupport(language);
+                 var override = FrameworkMessages.overrideForTests(text.messages(), Locale.forLanguageTag(language))) {
+                List<String> lines = new ArrayList<>();
+                for (var kind : List.of(VerifiedDownload.Kind.HASH_MISMATCH, VerifiedDownload.Kind.SIZE_MISMATCH,
+                        VerifiedDownload.Kind.HEADER_MISMATCH, VerifiedDownload.Kind.MISSING_METADATA,
+                        VerifiedDownload.Kind.NOT_AVAILABLE, VerifiedDownload.Kind.IO_ERROR)) {
+                    lines.add(PluginInstallUtils.failureLine("demo", "1.1.0", kind));
+                }
+                assertThat(lines.subList(0, 4)).containsOnly(integrityLine(language));
+                assertThat(lines.subList(3, 6)).doesNotHaveDuplicates();
+                assertThat(lines.get(4)).isEqualTo("demo 1.1.0 is not available for download"
+                        + " (withdrawn, unpublished or not licensed); nothing was installed.");
+                assertThat(lines.get(5)).isEqualTo(
+                        "Could not download demo 1.1.0 (the download did not complete); nothing was installed.");
+            }
         }
     }
 

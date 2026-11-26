@@ -12,14 +12,13 @@ import java.util.List;
 import java.util.Locale;
 
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitRunnable;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.CommandKeys;
 import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -31,7 +30,6 @@ import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.ModuleApiLevels;
 import com.ultikits.ultitools.manager.UpdateManager;
-import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Text;
@@ -44,7 +42,6 @@ import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.VersionLookup;
 
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.format.TextColor;
 
@@ -57,123 +54,65 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * loaded module's runtime name against the catalogue's display name (#439).
      */
     private static final String VENDOR_PREFIX = "UltiTools-";
+    private static final String LIST_SEPARATOR = "---------------------";
+    private static final TextColor LIST_CYAN = TextColor.color(0x00ffff);
 
     @CmdMapping(format = "list <page>")
     @RunAsync
     public void listPlugins(@CmdSender CommandSender sender, @CmdParam("page") String page) {
-        int pageInt = 1;
-        if (page != null && !page.isEmpty()) {
-            try {
-                pageInt = Integer.parseInt(page);
-            } catch (NumberFormatException e) {
-                // #380: this used to swallow the exception and serve page 1, so
-                // `/upm list not-a-number` looked like it had worked. Report it in the same words
-                // TypeParserRegistry uses for every other command's numeric argument, so the two
-                // paths do not disagree about what a bad number looks like.
-                sender.sendMessage(ChatColor.RED
-                        + "Failed to parse '" + page + "' as Integer");
-                return;
-            }
+        int pageInt;
+        try {
+            pageInt = page == null || page.isEmpty() ? 1 : Integer.parseInt(page);
+        } catch (NumberFormatException e) {
+            send(sender, CommandKeys.ARGUMENT_ERROR, string("error", "Failed to parse '" + page + "' as Integer"));
+            return;
         }
-        List<UltiToolsPlugin> installedPlugins = UltiTools.getInstance().getPluginManager().getPluginList();
+        List<UltiToolsPlugin> installed = UltiTools.getInstance().getPluginManager().getPluginList();
         List<PluginEntity> plugins = PluginInstallUtils.getPluginList(pageInt, 10);
-        if (sender instanceof Player) {
-            TextComponent text = Component.text(UltiTools.getInstance().i18n("========|可用插件列表|========\n"))
-                    .color(TextColor.color(0x00ffff));
-            int i = 1;
-            for (PluginEntity plugin : plugins) {
-                text = text.append(Component.text(i + UltiTools.getInstance().i18n(".  名字：") + plugin.getName() + "\n").color(TextColor.color(0x00ffff)));
-                text = text.append(Component.text(UltiTools.getInstance().i18n("    安装状态：")).color(TextColor.color(127, 127, 127)));
-                String matchedRuntimeName = resolveInstalledRuntimeName(installedPlugins, plugin);
-                boolean installed = matchedRuntimeName != null;
-                if (installed) {
-                    text = text.append(Component.text(UltiTools.getInstance().i18n(" 已安装") + "\n").color(TextColor.color(0x00ff00)));
-                    text = text.append(
-                            Component
-                                    .text(UltiTools.getInstance().i18n("     | 卸载 |     ") + "\n")
-                                    .color(TextColor.color(255, 0, 0))
-                                    .hoverEvent(Component.text(UltiTools.getInstance().i18n("点击卸载模块")))
-                                    // #439 gate-2 Codex round 1: the LOADED module's own runtime
-                                    // name, not the catalogue's display name -- uninstallPlugin
-                                    // matches only the former.
-                                    .clickEvent(ClickEvent.runCommand("/upm uninstall " + matchedRuntimeName))
-                    );
-                } else {
-                    text = text.append(Component.text(UltiTools.getInstance().i18n(" 未安装") + "\n").color(TextColor.color(0xff0000)));
-                    text = text.append(
-                            Component
-                                    .text(UltiTools.getInstance().i18n("     | 安装 |     ") + "\n")
-                                    .color(TextColor.color(0, 255, 0))
-                                    .hoverEvent(Component.text(UltiTools.getInstance().i18n("点击安装模块")))
-                                    .clickEvent(ClickEvent.runCommand("/upm install " + plugin.getIdentifyString()))
-                    );
-                }
-                text = text.append(Component.text(UltiTools.getInstance().i18n("   简介：") + plugin.getShortDescription() + "\n").color(TextColor.color(127, 127, 127)));
-                if (i < plugins.size()) {
-                    text = text.append(Component.text("---------------------\n").color(TextColor.color(0x00ffff)));
-                }
-                i++;
+        replyOnServerThread(() -> sendPluginList(sender, pageInt, installed, plugins));
+    }
+
+    private static void sendPluginList(CommandSender sender, int page, List<UltiToolsPlugin> installed,
+                                       List<PluginEntity> plugins) {
+        send(sender, UpmKeys.LIST_HEADER);
+        boolean player = sender instanceof Player;
+        int index = 1;
+        for (PluginEntity plugin : plugins) {
+            send(sender, UpmKeys.LIST_ENTRY_NAME, number("index", index), string("name", String.valueOf(plugin.getName())));
+            if (player) {
+                sendPlayerEntry(sender, plugin, resolveInstalledRuntimeName(installed, plugin));
+            } else {
+                send(sender, UpmKeys.LIST_ENTRY_INSTALL_COMMAND, string("module", String.valueOf(plugin.getIdentifyString())));
             }
-            text = text.append(Component.text(String.format(UltiTools.getInstance().i18n("======== 第%d页 ========"), pageInt))
-                    .color(TextColor.color(0x00ffff)));
-            TextComponent finalText = text;
-            new BukkitRunnable() {
-                @Override
-                public void run() {
-                    sendComponentMessage((Player) sender, finalText);
-                }
-            }.runTask(UltiTools.getInstance());
+            send(sender, UpmKeys.LIST_ENTRY_INTRO, string("description", String.valueOf(plugin.getShortDescription())));
+            if (index < plugins.size()) {
+                sender.sendMessage(Component.text(LIST_SEPARATOR, player ? LIST_CYAN : null));
+            }
+            index++;
+        }
+        send(sender, UpmKeys.LIST_PAGE, number("page", page));
+    }
+
+    private static void sendPlayerEntry(CommandSender sender, PluginEntity plugin, String runtimeName) {
+        if (runtimeName == null) {
+            send(sender, UpmKeys.LIST_ENTRY_STATUS_NOT_INSTALLED);
+            sendListButton(sender, UpmKeys.LIST_ENTRY_INSTALL_BUTTON, UpmKeys.LIST_ENTRY_INSTALL_HOVER,
+                    "/upm install " + plugin.getIdentifyString());
         } else {
-            StringBuilder stringBuilder = new StringBuilder();
-            stringBuilder.append(UltiTools.getInstance().i18n("========|可用插件列表|========\n"));
-            int i = 1;
-            for (PluginEntity plugin : plugins) {
-                stringBuilder.append(i);
-                stringBuilder.append(UltiTools.getInstance().i18n(".  名字："));
-                stringBuilder.append(plugin.getName());
-                stringBuilder.append("\n");
-                stringBuilder.append(UltiTools.getInstance().i18n("   安装命令：/upm install "));
-                stringBuilder.append(plugin.getIdentifyString());
-                stringBuilder.append("\n");
-                stringBuilder.append(UltiTools.getInstance().i18n("   简介："));
-                stringBuilder.append(plugin.getShortDescription());
-                stringBuilder.append("\n");
-                if (i < plugins.size()) {
-                    stringBuilder.append("---------------------\n");
-                }
-                i++;
-            }
-            stringBuilder.append(String.format(UltiTools.getInstance().i18n("======== 第%d页 ========"), pageInt));
-            String finalMessage = stringBuilder.toString();
-            new BukkitRunnable() {
-                @Override
-                public void run() {
-                    sendStringMessage(sender, finalMessage);
-                }
-            }.runTask(UltiTools.getInstance());
+            send(sender, UpmKeys.LIST_ENTRY_STATUS_INSTALLED);
+            // Uninstall matches the loaded module's runtime name, not the catalogue display name.
+            sendListButton(sender, UpmKeys.LIST_ENTRY_UNINSTALL_BUTTON, UpmKeys.LIST_ENTRY_UNINSTALL_HOVER,
+                    "/upm uninstall " + runtimeName);
         }
     }
 
-    /**
-     * Send a TextComponent message to a player.
-     * This method is extracted from BukkitRunnable for testability.
-     *
-     * @param player the player to send the message to
-     * @param text   the text component to send
-     */
-    static void sendComponentMessage(Player player, TextComponent text) {
-        MessageUtils.sendMessage(player, text);
-    }
-
-    /**
-     * Send a string message to a command sender.
-     * This method is extracted from BukkitRunnable for testability.
-     *
-     * @param sender  the sender to send the message to
-     * @param message the message to send
-     */
-    static void sendStringMessage(CommandSender sender, String message) {
-        replyOnServerThread(() -> sender.sendMessage(message));
+    private static void sendListButton(CommandSender sender, MessageKey label, MessageKey hover, String command) {
+        replyOnServerThread(() -> {
+            var messages = CommandRuntime.messages();
+            Component button = messages.render(label, sender).hoverEvent(messages.render(hover, sender))
+                    .clickEvent(ClickEvent.runCommand(command));
+            sender.sendMessage(button);
+        });
     }
 
     private static void replyOnServerThread(Runnable reply) {
@@ -209,41 +148,31 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         VersionLookup lookup =
                 PluginInstallUtils.lookUpPluginVersions(plugin, pluginVersions);
         if (lookup.getOutcome() == VersionLookup.Outcome.NONE) {
-            sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(
-                    "UltiCloud 上没有找到模块 %s。"), plugin));
+            send(sender, UpmKeys.VERSIONS_NOT_FOUND, string("module", String.valueOf(plugin)));
             return;
         }
         if (lookup.isFailed()) {
-            sendStringMessage(sender, ChatColor.RED + UltiTools.getInstance().i18n("获取版本列表失败！"));
+            send(sender, UpmKeys.VERSIONS_FAILED);
             return;
         }
         if (pluginVersions.isEmpty()) {
-            // The catalogue lists only the versions this framework installs (plan 18-40): an empty
-            // list means none, which an empty table would not say.
+            // An empty successful lookup means that the catalogue has no installable version.
             int level = ModuleApiLevels.frameworkLevel();
-            sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(
-                    "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。"),
-                    plugin, level, ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL, level));
+            send(sender, UpmKeys.VERSIONS_NONE_INSTALLABLE, string("module", String.valueOf(plugin)),
+                    number("level", level), number("floor", ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL), number("max", level));
             return;
         }
-        StringBuilder stringBuilder = new StringBuilder();
-        stringBuilder.append(UltiTools.getInstance().i18n("========|可用版本列表|========\n"));
-        int i1 = 1;
-        for (String version : pluginVersions) {
-            stringBuilder.append(i1);
-            stringBuilder.append(UltiTools.getInstance().i18n(". 版本："));
-            stringBuilder.append(version);
-            stringBuilder.append("\n");
-            if (i1 == pluginVersions.size()) {
-                stringBuilder.append(UltiTools.getInstance().i18n("   安装命令：/upm install "));
-                stringBuilder.append(plugin);
-                stringBuilder.append(" [version]");
-                stringBuilder.append("\n");
-                stringBuilder.append("---------------------\n");
-            }
-            i1++;
+        replyOnServerThread(() -> sendVersionList(sender, plugin, pluginVersions));
+    }
+
+    private static void sendVersionList(CommandSender sender, String plugin, List<String> versions) {
+        send(sender, UpmKeys.VERSIONS_HEADER);
+        int index = 1;
+        for (String version : versions) {
+            send(sender, UpmKeys.VERSIONS_ENTRY, number("index", index++), string("version", String.valueOf(version)));
         }
-        sendStringMessage(sender, stringBuilder.toString());
+        send(sender, UpmKeys.VERSIONS_INSTALL_COMMAND, string("module", String.valueOf(plugin)));
+        sender.sendMessage(Component.text(LIST_SEPARATOR));
     }
 
     // Deliberately not @RunAsync, though it opens one archive per entry of the modules folder:
@@ -420,22 +349,22 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         if (!updateManager.hasAnyUpdates()) {
             if (!sendIncompleteIfAny(sender, unconfirmed(updateManager))) {
-                sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+                send(sender, UpmKeys.CHECK_NONE);
             }
             return;
         }
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("可用更新列表："));
+        send(sender, UpmKeys.CHECK_HEADER);
         UpdateInfo fwUpdate = updateManager.getFrameworkUpdate();
         if (fwUpdate != null) {
-            sender.sendMessage(ChatColor.YELLOW + String.format("  UltiTools-API %s → %s",
-                fwUpdate.getCurrentVersion(), fwUpdate.getLatestVersion()));
-            sender.sendMessage(ChatColor.GRAY + "  " + String.format(
-                UltiTools.getInstance().i18n("下载地址：%s"),
-                "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
+            send(sender, UpmKeys.CHECK_FRAMEWORK, string("current", String.valueOf(fwUpdate.getCurrentVersion())),
+                    string("latest", String.valueOf(fwUpdate.getLatestVersion())));
+            send(sender, UpmKeys.CHECK_DOWNLOAD,
+                    string("url", "https://github.com/UltiKits/UltiTools-Reborn/releases/latest"));
         }
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
-            sender.sendMessage(ChatColor.YELLOW + String.format("  %s %s → %s",
-                info.getPluginName(), info.getCurrentVersion(), info.getLatestVersion()));
+            send(sender, UpmKeys.CHECK_MODULE, string("module", String.valueOf(info.getPluginName())),
+                    string("current", String.valueOf(info.getCurrentVersion())),
+                    string("latest", String.valueOf(info.getLatestVersion())));
         }
         sendIncompleteIfAny(sender, unconfirmed(updateManager));
     }
@@ -452,11 +381,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         if (updateManager != null && updateManager.isCheckFailed()) {
             // #838: a check that died will not complete this run; do not promise that it will.
-            sendStringMessage(sender, ChatColor.YELLOW
-                    + UltiTools.getInstance().i18n("更新检查失败，详情见控制台；重启服务器后会再次检查。"));
+            send(sender, UpmKeys.CHECK_FAILED);
             return true;
         }
-        sendStringMessage(sender, ChatColor.YELLOW + UltiTools.getInstance().i18n("更新检查仍在进行，请稍后重试。"));
+        send(sender, UpmKeys.CHECK_RUNNING);
         return true;
     }
 
@@ -465,7 +393,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * update manager yet.
      */
     private static List<String> unconfirmed(UpdateManager updateManager) {
-        return updateManager == null ? Collections.<String>emptyList() : updateManager.getUnconfirmed();
+        return updateManager == null ? Collections.emptyList() : updateManager.getUnconfirmed();
     }
 
     /**
@@ -479,8 +407,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         if (names.isEmpty()) {
             return false;
         }
-        sendStringMessage(sender, ChatColor.YELLOW + String.format(
-            UltiTools.getInstance().i18n("更新检查未完成：无法确认 %s 的最新版本。"), String.join(", ", names)));
+        send(sender, UpmKeys.CHECK_INCOMPLETE, string("modules", String.join(", ", names)));
         return true;
     }
 
@@ -517,12 +444,11 @@ public class PluginInstallCommands extends BaseCommandExecutor {
             if (updateManager != null && updateManager.getUnconfirmed().contains(pluginName)) {
                 sendIncompleteIfAny(sender, Collections.singletonList(pluginName));
             } else {
-                sendStringMessage(sender, ChatColor.RED + UltiTools.getInstance().i18n("没有可用的更新。"));
+                send(sender, UpmKeys.UPDATE_NONE);
             }
             return;
         }
-        sendStringMessage(sender, ChatColor.YELLOW + String.format(
-            UltiTools.getInstance().i18n("正在更新 %s..."), pluginName));
+        send(sender, UpmKeys.UPDATE_UPDATING, string("module", String.valueOf(pluginName)));
         sendResult(sender, PluginInstallUtils.updateResult(pluginName, PluginInstallUtils.stageUpdate(identify, sender)));
     }
 
@@ -530,15 +456,14 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
         if (updateManager == null || updateManager.getModuleUpdates().isEmpty()) {
             if (!sendIncompleteIfAny(sender, unconfirmedModules(updateManager))) {
-                sendStringMessage(sender, ChatColor.GREEN + UltiTools.getInstance().i18n("没有可用的更新。"));
+                send(sender, UpmKeys.CHECK_NONE);
             }
             return;
         }
         int staged = 0;
         int notStaged = 0;
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
-            sendStringMessage(sender, ChatColor.YELLOW + String.format(
-                UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
+            send(sender, UpmKeys.UPDATE_UPDATING, string("module", String.valueOf(info.getPluginName())));
             if (sendResult(sender, PluginInstallUtils.updateResult(info.getPluginName(),
                     PluginInstallUtils.stageUpdate(info.getIdentifyString(), sender)))) {
                 staged++;
@@ -559,7 +484,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * strings genuinely agree, which they do not for every module.
      * <p>
      * <b>Preferred key: {@code identifyString}.</b> This is the field {@link
-     * PluginInstallUtils} and {@link com.ultikits.ultitools.manager.UpdateManager} already treat
+     * PluginInstallUtils} and {@link UpdateManager} already treat
      * as this framework's stable module identity for install/update/version lookups, and the one
      * field {@link PluginEntity} and {@link UltiToolsPlugin} both carry under the same name.
      * Compared only when BOTH sides carry a non-blank value -- two identify-string-less entries
@@ -690,15 +615,15 @@ public class PluginInstallCommands extends BaseCommandExecutor {
 
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("========|插件安装帮助|========"));
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm list [页数] - 查看可用插件列表"));
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm install [插件] - 安装最新插件"));
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm install [插件] [版本] - 安装某版本插件"));
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm versions [插件] - 查看插件版本列表"));
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm uninstall [插件] - 删除插件"));
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm check - 查看可用更新"));
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm update [插件] - 更新插件"));
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm update all - 更新所有插件"));
+        send(sender, UpmKeys.HELP_TITLE);
+        send(sender, UpmKeys.HELP_LIST);
+        send(sender, UpmKeys.HELP_INSTALL);
+        send(sender, UpmKeys.HELP_INSTALL_VERSION);
+        send(sender, UpmKeys.HELP_VERSIONS);
+        send(sender, UpmKeys.HELP_UNINSTALL);
+        send(sender, UpmKeys.HELP_CHECK);
+        send(sender, UpmKeys.HELP_UPDATE);
+        send(sender, UpmKeys.HELP_UPDATE_ALL);
         send(sender, UpmKeys.HELP_PENDING);
         send(sender, UpmKeys.HELP_REVOKE);
     }

@@ -7,9 +7,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -21,31 +21,13 @@ import org.junit.jupiter.api.Test;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.utils.UpmKeys;
 
 /**
- * Static contract between the {@code i18n("...")} calls in {@code src/main} and {@code lang/en.json}.
- * <p>
- * {@code Language.get} is {@code dictionary.getOrDefault(str, str)}, and this framework's keys
- * <em>are</em> the Chinese source strings. A key missing from {@code zh.json} is therefore
- * harmless -- the fallback is the Chinese key, which is the correct Chinese output. A key missing
- * from {@code en.json} renders as Chinese on an English server, silently.
- * <p>
- * Two defects motivated this, and each is one of the two tests below:
- * <ul>
- *   <li>#395 -- twenty framework messages had no English entry, including both page-boundary
- *       messages in every paginated GUI and the whole {@code /upm} interface.</li>
- *   <li>#394 -- {@code BaseCommandExecutor} asked for {@code "正确用法"}; the key that exists is
- *       {@code "指令正确用法"}. The miss fell back to the key, and because the fallback carries no
- *       format specifiers, {@code String.format} silently discarded the command name and usage
- *       string it was given. Every wrong-argument-count error printed the bare words "正确用法"
- *       and nothing else -- the most frequently seen error message in the framework, saying
- *       nothing.</li>
- * </ul>
- * The second test is the one that makes #394 a build failure rather than a translation gap: adding
- * an {@code en.json} entry for the typo'd key would have satisfied the first test alone while
- * leaving the arguments still discarded.
- *
- * @since 6.3.0
+ * The framework no longer adds literal keys to legacy {@code i18n}. Fixture calls prove that the
+ * scanner still recognizes the patterns that lost English translations or format arguments
+ * (#394, #395). The new catalogue must render the old reply without changing its wording.
  */
 @DisplayName("i18n key contract")
 class I18nKeyContractTest {
@@ -73,73 +55,44 @@ class I18nKeyContractTest {
             Pattern.compile("%(?!%)[-#+ 0,(]*\\d*(?:\\.\\d+)?[a-zA-Z]");
 
     @Test
-    @DisplayName("every literal i18n key used in src/main has an en.json entry")
-    void everyLiteralKeyIsTranslated() throws IOException {
-        Map<String, String> en = readEnglishDictionary();
-        Map<String, String> keys = collectLiteralKeys();
-
-        // Positive control: a scan that reads nothing returns an empty map, which is
-        // indistinguishable from "no violations" and would make this test pass forever.
-        assertThat(keys)
-                .as("positive control: the scan must find a known key. An empty result means the "
-                        + "scan is not reading %s, not that the codebase is clean.", SOURCE_ROOT)
-                .containsKey("获取版本列表失败！");
-
-        List<String> untranslated = keys.entrySet().stream()
-                .filter(e -> !en.containsKey(e.getKey()))
-                .map(e -> "\"" + e.getKey().replace("\n", "\\n") + "\"  used at " + e.getValue())
-                .collect(Collectors.toList());
-
-        assertThat(untranslated)
-                .as("These keys have no en.json entry. Language.get falls back to the key itself, "
-                        + "and these keys are Chinese, so an English server shows Chinese for each "
-                        + "of them -- silently (#395). Add the entry, or fix the call if the key "
-                        + "is a typo for one that exists (#394).")
-                .isEmpty();
+    @DisplayName("the migrated versions reply is unchanged and no literal i18n calls remain in src/main")
+    void noLiteralI18nKeysRemain() throws IOException {
+        Map<String, String> fixture = new LinkedHashMap<>();
+        collectLiteralKeys("Fixture.java", """
+                // i18n("ignored")
+                UltiTools.getInstance().i18n("获取版本列表失败！");
+                """, fixture);
+        assertThat(fixture).containsExactlyEntriesOf(Map.of("获取版本列表失败！", "Fixture.java:2"));
+        String expected = readEnglishDictionary().get("获取版本列表失败！");
+        assertThat(expected).isEqualTo("Could not fetch the version list!");
+        try (var text = new CommandMessageTestSupport("en")) {
+            assertThat(CommandMessageTestSupport.plain(text.messages().render(UpmKeys.VERSIONS_FAILED, Locale.ENGLISH)))
+                    .isEqualTo(expected);
+        }
+        assertThat(collectLiteralKeys()).as("no literal keys may be passed to legacy i18n").isEmpty();
     }
 
     @Test
-    @DisplayName("no String.format(i18n(k), ...) passes more arguments than k has specifiers")
-    void formatCallsHaveEnoughSpecifiers() throws IOException {
+    @DisplayName("the legacy format scanner distinguishes an argument consumer from a fallback that discards arguments")
+    void fixtureDetectsInsufficientLegacyFormatSpecifiers() throws IOException {
         Map<String, String> en = readEnglishDictionary();
-        List<String> mismatches = new ArrayList<>();
-        int examined = 0;
+        String text = stripComments("""
+                String.format(UltiTools.getInstance().i18n("下载地址：%s"), links.current());
+                String.format(UltiTools.getInstance().i18n("夹具：缺少占位符"), command.getName(), usage.getHelp());
+                """);
+        Matcher call = FORMAT_CALL.matcher(text);
+        assertThat(call.find()).isTrue();
+        assertThat(call.group(1)).isEqualTo("下载地址：%s");
+        assertThat(argumentsAfter(text, call.end())).isEqualTo(1);
+        assertThat(countSpecifiers(en.get(call.group(1)))).isEqualTo(1);
 
-        for (Path file : sourceFiles()) {
-            String text = stripComments(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
-            Matcher m = FORMAT_CALL.matcher(text);
-            while (m.find()) {
-                String key = unescape(m.group(1));
-                int arguments = argumentsAfter(text, m.end());
-                if (arguments <= 0) {
-                    continue;
-                }
-                examined++;
-                // The rendered string is the dictionary entry when present, and the key itself
-                // when not -- exactly what Language.get returns. Checking the resolved string is
-                // the point: #394's key was absent, so the fallback carried no specifiers at all.
-                String rendered = en.getOrDefault(key, key);
-                int specifiers = countSpecifiers(rendered);
-                if (specifiers < arguments) {
-                    mismatches.add(String.format(
-                            "%s: key \"%s\" resolves to \"%s\" (%d specifier(s)) but %d argument(s) "
-                                    + "are passed",
-                            file.getFileName(), key.replace("\n", "\\n"),
-                            rendered.replace("\n", "\\n"), specifiers, arguments));
-                }
-            }
-        }
-
-        assertThat(examined)
-                .as("positive control: no String.format(i18n(...), args) call was examined at all, "
-                        + "so this test proved nothing. The pattern has stopped matching.")
-                .isPositive();
-
-        assertThat(mismatches)
-                .as("String.format silently discards extra arguments when the format string has "
-                        + "no place for them, so this is never reported at runtime -- the user "
-                        + "just sees a message with the useful part missing (#394).")
-                .isEmpty();
+        // As in #394, a missing dictionary key fell back to itself and discarded both arguments.
+        assertThat(call.find()).isTrue();
+        String missing = unescape(call.group(1));
+        assertThat(en).doesNotContainKey(missing);
+        assertThat(argumentsAfter(text, call.end())).isEqualTo(2);
+        assertThat(countSpecifiers(en.getOrDefault(missing, missing))).isZero();
+        assertThat(call.find()).isFalse();
     }
 
     private Map<String, String> readEnglishDictionary() throws IOException {
@@ -156,15 +109,21 @@ class I18nKeyContractTest {
     /** Every literal i18n key in {@code src/main}, mapped to the first site that uses it. */
     private Map<String, String> collectLiteralKeys() throws IOException {
         Map<String, String> keys = new LinkedHashMap<>();
-        for (Path file : sourceFiles()) {
-            String text = stripComments(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
-            Matcher m = I18N_CALL.matcher(text);
-            while (m.find()) {
-                int line = (int) text.substring(0, m.start()).chars().filter(c -> c == '\n').count() + 1;
-                keys.putIfAbsent(unescape(m.group(1)), file.getFileName() + ":" + line);
-            }
+        List<Path> files = sourceFiles();
+        assertThat(files.size()).as("control: the source tree was found").isGreaterThan(200);
+        for (Path file : files) {
+            collectLiteralKeys(file.getFileName().toString(), Files.readString(file), keys);
         }
         return keys;
+    }
+
+    private void collectLiteralKeys(String fileName, String source, Map<String, String> keys) {
+        String text = stripComments(source);
+        Matcher m = I18N_CALL.matcher(text);
+        while (m.find()) {
+            int line = (int) text.substring(0, m.start()).chars().filter(c -> c == '\n').count() + 1;
+            keys.putIfAbsent(unescape(m.group(1)), fileName + ":" + line);
+        }
     }
 
     /**

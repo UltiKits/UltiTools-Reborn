@@ -1,5 +1,9 @@
 package com.ultikits.ultitools.utils;
 
+import org.junit.jupiter.params.provider.ValueSource;
+import java.util.Locale;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -7,8 +11,6 @@ import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -26,8 +28,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.MockedStatic;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.stub.StubCatalogue;
 
@@ -103,20 +103,23 @@ class InstallRefusalCatalogueTest {
         }
     }
 
-    @Test
-    @DisplayName("the operator reads English with language en and Chinese with language zh, same placeholders")
-    void bothReasonsAreTranslated() throws IOException {
-        JsonObject english = catalogue("en");
-        JsonObject chinese = catalogue("zh");
-        for (String key : new String[] {
-                "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。",
-                "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。"}) {
-            assertThat(english.has(key)).as(key).isTrue();
-            assertThat(chinese.has(key)).as(key).isTrue();
-            String en = String.format(english.get(key).getAsString(), "demo", "1.1");
-            String zh = String.format(chinese.get(key).getAsString(), "demo", "1.1");
-            assertThat(en).contains("demo 1.1").doesNotContainPattern("[\\u3000-\\u9fff\\uff00-\\uffef]");
-            assertThat(zh).contains("demo 1.1").containsPattern("[\\u4e00-\\u9fff]");
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    @DisplayName("the sender sees each refusal in the selected locale with the original wording")
+    void bothReasonsAreTranslated(String language) {
+        Locale locale = Locale.forLanguageTag(language);
+        Arg[] args = {Arg.string("module", "demo"), Arg.string("version", "1.1")};
+        try (var text = new CommandMessageTestSupport(language)) {
+            String integrity = "en".equals(language)
+                    ? "Refused to install demo 1.1: the file did not pass its integrity check against the catalogue (its SHA-256 or size does not match, or the catalogue gave no usable hash or size). Nothing was written to the modules folder."
+                    : "已拒绝安装 demo 1.1：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。";
+            String licence = "en".equals(language)
+                    ? "Cannot install demo 1.1: this version requires a licence and is not offered for public download. Nothing was written to the modules folder."
+                    : "无法安装 demo 1.1：该版本需要许可证，不提供公开下载。模块目录没有任何改动。";
+            assertThat(CommandMessageTestSupport.plain(text.messages().render(UpmKeys.INSTALL_REFUSED_INTEGRITY_FAILED,
+                    locale, args))).isEqualTo(integrity);
+            assertThat(CommandMessageTestSupport.plain(text.messages().render(UpmKeys.INSTALL_REFUSED_LICENCE_REQUIRED,
+                    locale, args))).isEqualTo(licence);
         }
     }
 
@@ -128,13 +131,5 @@ class InstallRefusalCatalogueTest {
 
         assertThat(source).doesNotContain("failed its integrity check").doesNotContain("requires a licence")
                 .doesNotContain("carries no usable hash or size");
-    }
-
-    private static JsonObject catalogue(String language) throws IOException {
-        try (InputStream in = InstallRefusalCatalogueTest.class.getClassLoader()
-                .getResourceAsStream("lang/" + language + ".json")) {
-            assertThat(in).isNotNull();
-            return JsonParser.parseReader(new InputStreamReader(in, StandardCharsets.UTF_8)).getAsJsonObject();
-        }
     }
 }
