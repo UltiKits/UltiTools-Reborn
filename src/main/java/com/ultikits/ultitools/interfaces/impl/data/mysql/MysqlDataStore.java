@@ -1,5 +1,9 @@
 package com.ultikits.ultitools.interfaces.impl.data.mysql;
 
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.interfaces.impl.data.DataKeys;
+
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.data.BaseDataEntity;
 import com.ultikits.ultitools.annotations.Table;
@@ -67,7 +71,7 @@ public class MysqlDataStore implements DataStore {
         try {
             dataSource = new HikariDataSource(config);
         } catch (Exception e) {
-            UltiTools.getInstance().getLogger().log(Level.SEVERE, UltiTools.getInstance().i18n("Mysql数据库连接失败：") + e.getMessage());
+            UltiTools.getInstance().getLogger().log(Level.SEVERE, FrameworkMessages.plain(DataKeys.DATA_MYSQL_CONNECTION_FAILED, Arg.string("error", String.valueOf(e.getMessage()))));
         }
     }
 

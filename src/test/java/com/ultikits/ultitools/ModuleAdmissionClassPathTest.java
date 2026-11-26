@@ -1,5 +1,7 @@
 package com.ultikits.ultitools;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
+import com.ultikits.ultitools.manager.FrameworkMessagesExtension;
 import com.ultikits.ultitools.bootstrap.ModuleClassPath;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,6 +45,9 @@ import java.util.logging.Logger;
 
 /** Admission must isolate bytes, not merely skip a module's registration. */
 class ModuleAdmissionClassPathTest {
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages =
+            new FrameworkMessagesExtension();
     private static final String MAIN = "fixture.admission.Main";
     @TempDir Path modules;
 

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -54,6 +55,7 @@ import net.bytebuddy.jar.asm.Opcodes;
  */
 @DisplayName("The boot load summary counts every module JAR that did not load (18-41)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(FrameworkMessagesExtension.class)
 class PluginManagerLoadSummaryTest {
 
     private static final String PACKAGE = "com.ultikits.testfixtures.loadsummary.";

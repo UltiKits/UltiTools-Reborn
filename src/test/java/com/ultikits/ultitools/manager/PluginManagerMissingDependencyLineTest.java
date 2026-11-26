@@ -2,18 +2,16 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.extension.ExtendWith;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -30,8 +28,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 
 import com.ultikits.testfixtures.dependmissing.AbsentEconomyApi;
 import com.ultikits.testfixtures.dependmissing.EconomyDependentModule;
@@ -50,6 +46,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("#554: a module whose required plugin is missing gets one line naming it")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(FrameworkMessagesExtension.class)
 class PluginManagerMissingDependencyLineTest {
 
     private static final String REQUIRED_PLUGIN = "FakeVault";
@@ -202,21 +199,4 @@ class PluginManagerMissingDependencyLineTest {
                 .startsWith("[UltiTools-API] Cannot initialize plugin for " + EconomyDependentModule.class.getName());
         assertThat(warnings.get(0).getThrown()).isInstanceOf(NoClassDefFoundError.class);
     }
-
-    @Test
-    @DisplayName("both shipped framework catalogues translate the line, and it formats with module and plugin")
-    void bothCataloguesTranslateTheLine() throws IOException {
-        String key = "Module '%s' requires %s, which is not installed or not enabled; the module is not loaded.";
-        for (String catalogue : new String[]{"/lang/en.json", "/lang/zh.json"}) {
-            Map<String, String> entries;
-            try (Reader reader = new InputStreamReader(
-                    PluginManager.class.getResourceAsStream(catalogue), StandardCharsets.UTF_8)) {
-                entries = new Gson().fromJson(reader, new TypeToken<Map<String, String>>() { }.getType());
-            }
-            assertThat(entries.get(key)).as(catalogue).isNotNull();
-            assertThat(String.format(entries.get(key), "UltiEconomy", "Vault"))
-                    .as(catalogue).contains("UltiEconomy", "Vault");
-        }
-    }
 }
-

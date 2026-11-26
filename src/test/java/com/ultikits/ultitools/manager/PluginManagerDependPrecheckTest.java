@@ -2,6 +2,7 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,6 +53,8 @@ import com.ultikits.ultitools.utils.TestHelper;
 @DisplayName("#554: a module whose required plugin is not installed is refused before construction")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class PluginManagerDependPrecheckTest {
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages = new FrameworkMessagesExtension();
 
     private static final String REQUIRED_PLUGIN = "FakeVault";
     private static final String MODULE_NAME = "PrecheckDependent";

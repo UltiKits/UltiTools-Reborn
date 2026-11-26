@@ -13,6 +13,8 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
+import com.ultikits.ultitools.manager.FrameworkMessagesExtension;
 import java.io.File;
 import java.util.Properties;
 
@@ -58,6 +60,10 @@ import lombok.EqualsAndHashCode;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("MysqlDataStore 测试")
 class MysqlDataStoreTest {
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages =
+            new FrameworkMessagesExtension("en");
+
 
     @Mock
     private UltiTools mockUltiTools;
@@ -242,7 +248,7 @@ class MysqlDataStoreTest {
                 MysqlDataStore store = new MysqlDataStore();
 
                 // Assert - 应该记录错误日志
-                verify(mockLogger).log(eq(Level.SEVERE), contains("Mysql数据库连接失败"));
+                verify(mockLogger).log(eq(Level.SEVERE), contains("MySQL connection failed:"));
                 assertThat(store.getDataSource()).isNull();
             }
         }
@@ -637,18 +643,18 @@ class MysqlDataStoreTest {
                 MysqlDataStore store = new MysqlDataStore();
 
                 // Assert
-                verify(mockLogger).log(eq(Level.SEVERE), contains("Mysql数据库连接失败"));
+                verify(mockLogger).log(eq(Level.SEVERE), contains("MySQL connection failed:"));
                 assertThat(store.getDataSource()).isNull();
             }
         }
 
         @Test
-        @DisplayName("应该使用 i18n 转换错误消息")
+        @DisplayName("应该使用新目录渲染错误消息且不调用旧 i18n")
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
-        void shouldUseI18nForErrorMessage() {
+        void shouldUseCatalogueForErrorMessage() {
             // Arrange
             setupMysqlConfig();
-            when(mockUltiTools.i18n("Mysql数据库连接失败：")).thenReturn("MySQL connection failed: ");
+
 
             try (MockedConstruction<HikariDataSource> mockedConstruction = 
                     mockConstruction(HikariDataSource.class, (mock, context) -> {
@@ -658,9 +664,10 @@ class MysqlDataStoreTest {
                 // Act
                 MysqlDataStore store = new MysqlDataStore();
 
-                // Assert - MockedConstruction 包装异常消息，所以只验证 i18n 被调用
-                verify(mockUltiTools).i18n("Mysql数据库连接失败：");
+                // MockedConstruction wraps the cause; verify catalogue wording and absence of legacy lookups.
+                verify(mockUltiTools, org.mockito.Mockito.never()).i18n(anyString());
                 verify(mockLogger).log(eq(Level.SEVERE), contains("MySQL connection failed:"));
+                assertThat(store.getDataSource()).isNull();
             }
         }
     }

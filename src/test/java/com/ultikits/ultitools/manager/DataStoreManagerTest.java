@@ -2,14 +2,15 @@ package com.ultikits.ultitools.manager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -36,7 +38,11 @@ import org.junit.jupiter.api.Timeout;
 import org.mockito.ArgumentCaptor;
 
 import com.ultikits.ultitools.context.SimpleContainer;
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.text.Messages;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import org.bukkit.configuration.file.YamlConfiguration;
 import com.ultikits.ultitools.interfaces.impl.data.json.JsonStore;
 import com.ultikits.ultitools.interfaces.impl.data.sqlite.SQLiteDataStore;
 import com.ultikits.ultitools.testutil.PoolStateAssertions;
@@ -52,6 +58,10 @@ import org.mockbukkit.mockbukkit.ServerMock;
 @DisplayName("DataStoreManager 测试")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class DataStoreManagerTest {
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages =
+            new FrameworkMessagesExtension("zh");
+
 
     private ServerMock server;
 
@@ -75,9 +85,7 @@ class DataStoreManagerTest {
     @AfterEach
     void tearDown() {
         clearDataMap();
-        // 下面有用例会把 i18n 打成返回 null / 抛异常的桩，并发布到 UltiTools 的静态单例上。
-        // 这个字段不会被 safeUnmock 清掉，所以这里换回一个行为正常的 mock，
-        // 免得污染同一个 JVM fork 里后面跑的测试类。
+        // safeUnmock 不会清理 UltiTools 单例；恢复默认测试替身，避免污染后续测试。
         com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
         com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
     }
@@ -754,10 +762,10 @@ class DataStoreManagerTest {
             DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json");
 
             // Assert
-            List<String> messages = severeMessages(logger);
-            assertThat(messages).anyMatch(msg -> msg.contains("json"));
-            assertThat(messages).anyMatch(msg -> msg.contains("mysql.enable"));
-            assertThat(messages).anyMatch(msg -> msg.contains("datasource.type"));
+            assertThat(severeMessages(logger)).containsExactly(
+                    "数据存储降级：config.yml 里 datasource.type 配置为 'mysql'，实际使用的是 'json'。原因："
+                            + "mysql.enable 为 false，MySQL 数据源从未初始化",
+                    "玩家数据将读写 'json' 存储；不同后端之间的数据并不互通，如果这不是你要的，请停服修正 config.yml 后重启");
         }
 
         @Test
@@ -861,31 +869,27 @@ class DataStoreManagerTest {
         }
 
         @Test
-        @DisplayName("i18n 返回 null 时应该回落到原文")
-        void nullTranslationShouldFallBackToRawText() {
-            // Arrange - 打桩必须在发布到静态字段之前完成，见 TestHelper 的注释与 issue #250
-            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
-                    ultiTools -> when(ultiTools.i18n(anyString())).thenReturn(null));
-            Logger logger = mock(Logger.class);
+        @DisplayName("目录渲染异常时框架仍然使用已降级的 JSON 存储")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
+        void throwingTranslationDoesNotPreventStorageDowngrade() throws Exception {
+            var failure = new IllegalStateException("test storage renderer failed");
+            var messages = mock(Messages.class, ignored -> { throw failure; });
+            var plugin = mock(UltiTools.class);
+            var config = new YamlConfiguration();
+            config.set("datasource.type", "mysql");
+            when(plugin.getConfig()).thenReturn(config);
+            when(plugin.getLogger()).thenReturn(mock(Logger.class));
+            doCallRealMethod().when(plugin).getDataStore();
+            var json = mock(DataStore.class);
+            when(json.getStoreType()).thenReturn("json");
+            DataStoreManager.register(json);
+            var init = UltiTools.class.getDeclaredMethod("initDataStore");
+            init.setAccessible(true);
 
-            // Act
-            DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json");
-
-            // Assert
-            assertThat(severeMessages(logger)).anyMatch(msg -> msg.contains("datasource.type"));
-        }
-
-        @Test
-        @DisplayName("i18n 抛异常时不应该把诊断本身带崩")
-        void throwingTranslationShouldNotBreakDiagnostics() {
-            // Arrange
-            com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance(
-                    ultiTools -> when(ultiTools.i18n(anyString())).thenThrow(new IllegalStateException("boom")));
-            Logger logger = mock(Logger.class);
-
-            // Act & Assert - 诊断跑在「已经出问题」的路径上，它自己不能再炸一次
-            assertDoesNotThrow(() -> DataStoreManager.reportBackendSelection(logger, "mysql", false, false, "json"));
-            assertThat(severeMessages(logger)).anyMatch(msg -> msg.contains("datasource.type"));
+            try (var scope = FrameworkMessages.overrideForTests(messages, Locale.ENGLISH)) {
+                assertDoesNotThrow(() -> init.invoke(plugin));
+                assertThat(plugin.getDataStore()).isSameAs(json);
+            }
         }
     }
 

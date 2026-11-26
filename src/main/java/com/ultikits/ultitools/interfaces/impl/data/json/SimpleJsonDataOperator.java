@@ -1,5 +1,9 @@
 package com.ultikits.ultitools.interfaces.impl.data.json;
 
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.interfaces.impl.data.DataKeys;
+
 import java.io.File;
 import java.io.Reader;
 import java.io.Serializable;
@@ -30,7 +34,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -53,7 +56,6 @@ import com.ultikits.ultitools.interfaces.impl.data.RowCountingDelete;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
 import com.ultikits.ultitools.utils.BeanCopyUtil;
 import com.ultikits.ultitools.utils.FileUtils;
-import com.ultikits.ultitools.utils.FrameworkText;
 import com.ultikits.ultitools.utils.JsonPathUtil;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
@@ -175,7 +177,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
                     T entity = GSON.fromJson(reader, type);
                     cache.put(FileUtils.mainName(dataFile), entity);
                 } catch (Exception e) {
-                    Bukkit.getLogger().log(Level.SEVERE, ChatColor.RED + FrameworkText.format("发现一个数据损坏！位置：%s", dataFile.getAbsolutePath()));
+                    Bukkit.getLogger().log(Level.SEVERE, FrameworkMessages.plain(DataKeys.DATA_JSON_CORRUPTED, Arg.string("path", dataFile.getAbsolutePath())));
                 }
             });
         }

@@ -2,10 +2,10 @@ package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mockStatic;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Handler;
@@ -29,12 +30,16 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
-import com.google.gson.JsonParser;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.manager.FrameworkMessagesExtension;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.sun.net.httpserver.HttpServer;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.exceptions.DataAccessException;
 
 class LegacyTokenCleanupTest {
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages = new FrameworkMessagesExtension();
     private static final String UUID = "0123456789abcdef0123456789abcdef";
     private static final String LEGACY = "{\"uuid\":\"" + UUID + "\",\"cloud_token\":{\"access_token\":\"old-test-only\"}}";
     private static final String WARNING = "The account login saved by an earlier UltiTools version is no longer used and was removed from %s. Run /ulticloud login to re-attach this server.";
@@ -87,26 +92,23 @@ class LegacyTokenCleanupTest {
     @ParameterizedTest
     @ValueSource(strings = {"en", "zh"})
     void removesOnlyObsoleteTokenAndWarnsOnceInSelectedLanguage(String language) throws Exception {
-        com.google.gson.JsonObject catalogue = JsonParser.parseString(new String(Files.readAllBytes(
-                java.nio.file.Paths.get("src/main/resources/lang/" + language + ".json")), StandardCharsets.UTF_8)).getAsJsonObject();
-        lenient().when(UltiTools.getInstance().i18n(anyString())).thenAnswer(call -> {
-            String key = call.getArgument(0);
-            return catalogue.has(key) ? catalogue.get(key).getAsString() : key;
-        });
-        Files.write(file, LEGACY.getBytes(StandardCharsets.UTF_8));
-        assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isFalse();
-        assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid").containsEntry("uuid", UUID);
-        String expected = "zh".equals(language)
-                ? "早期 UltiTools 版本保存的账号登录已不再使用，已从 %s 删除。请执行 /ulticloud login 接回此服务器。" : WARNING;
-        assertThat(records.stream().filter(r -> r.getLevel() == Level.WARNING).map(LogRecord::getMessage))
-                .containsExactly(String.format(expected, file.toAbsolutePath()));
-        byte[] before = hash();
-        FileTime time = Files.getLastModifiedTime(file);
-        records.clear();
-        assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isFalse();
-        assertThat(hash()).isEqualTo(before);
-        assertThat(Files.getLastModifiedTime(file)).isEqualTo(time);
-        assertThat(records).isEmpty();
+        try (var support = new CommandMessageTestSupport(language);
+                var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.forLanguageTag(language))) {
+            Files.write(file, LEGACY.getBytes(StandardCharsets.UTF_8));
+            assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isFalse();
+            assertThat(CredentialStore.read().data()).containsOnlyKeys("uuid").containsEntry("uuid", UUID);
+            String expected = "zh".equals(language)
+                    ? "早期 UltiTools 版本保存的账号登录已不再使用，已从 %s 删除。请执行 /ulticloud login 接回此服务器。" : WARNING;
+            assertThat(records.stream().filter(r -> r.getLevel() == Level.WARNING).map(LogRecord::getMessage))
+                    .containsExactly(String.format(expected, file.toAbsolutePath()));
+            byte[] before = hash();
+            FileTime time = Files.getLastModifiedTime(file);
+            records.clear();
+            assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isFalse();
+            assertThat(hash()).isEqualTo(before);
+            assertThat(Files.getLastModifiedTime(file)).isEqualTo(time);
+            assertThat(records).isEmpty();
+        }
     }
 
     @Test
