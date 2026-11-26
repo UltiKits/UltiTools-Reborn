@@ -455,6 +455,9 @@ class CloudConnectionLifecycleTest {
         org.bukkit.Server server = org.mockito.Mockito.mock(org.bukkit.Server.class);
         org.bukkit.scheduler.BukkitScheduler scheduler = org.mockito.Mockito.mock(org.bukkit.scheduler.BukkitScheduler.class);
         org.mockito.Mockito.when(server.getScheduler()).thenReturn(scheduler);
+        var frameworkScheduler = org.mockito.Mockito.mock(com.ultikits.ultitools.scheduling.Scheduler.class);
+        var global = org.mockito.Mockito.mock(com.ultikits.ultitools.scheduling.TaskContext.class);
+        org.mockito.Mockito.when(frameworkScheduler.global()).thenReturn(global);
         com.ultikits.ultitools.interfaces.DataStore store =
                 org.mockito.Mockito.mock(com.ultikits.ultitools.interfaces.DataStore.class);
         org.mockito.Mockito.when(store.getStoreType()).thenReturn("json");
@@ -463,7 +466,10 @@ class CloudConnectionLifecycleTest {
         dataStore.set(plugin, store);
         org.bukkit.configuration.file.YamlConfiguration env = new org.bukkit.configuration.file.YamlConfiguration();
         env.set("version", "6.3.1-SNAPSHOT");
-        try (org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = org.mockito.Mockito.mockStatic(org.bukkit.Bukkit.class);
+        try (var scheduling = org.mockito.Mockito.mockStatic(com.ultikits.ultitools.scheduling.internal.FrameworkScheduling.class);
+             var catalogue = new CommandMessageTestSupport("en");
+             var messageScope = FrameworkMessages.overrideForTests(catalogue.messages(), Locale.ENGLISH);
+             org.mockito.MockedStatic<org.bukkit.Bukkit> bukkit = org.mockito.Mockito.mockStatic(org.bukkit.Bukkit.class);
              org.mockito.MockedStatic<UltiTools> tools = org.mockito.Mockito.mockStatic(UltiTools.class,
                      org.mockito.Mockito.CALLS_REAL_METHODS);
              org.mockito.MockedConstruction<com.ultikits.ultitools.manager.UpdateManager> updates =
@@ -472,11 +478,12 @@ class CloudConnectionLifecycleTest {
             bukkit.when(org.bukkit.Bukkit::getPluginManager).thenReturn(
                     org.mockito.Mockito.mock(org.bukkit.plugin.PluginManager.class));
             tools.when(UltiTools::getEnv).thenReturn(env);
+            scheduling.when(com.ultikits.ultitools.scheduling.internal.FrameworkScheduling::scheduler).thenReturn(frameworkScheduler);
             java.lang.reflect.Method startup = UltiTools.class.getDeclaredMethod("scheduleStartupMessages");
             startup.setAccessible(true);
             startup.invoke(plugin);
             org.mockito.ArgumentCaptor<Runnable> task = org.mockito.ArgumentCaptor.forClass(Runnable.class);
-            org.mockito.Mockito.verify(scheduler).scheduleSyncDelayedTask(org.mockito.Mockito.eq(plugin), task.capture());
+            org.mockito.Mockito.verify(global).run(task.capture());
             if (!stillLinked) {
                 ServerCredentialStore.deleteIfMatches("cred-LIFE");
                 assertThat(CloudSession.current().loadServerCredential()).isFalse();

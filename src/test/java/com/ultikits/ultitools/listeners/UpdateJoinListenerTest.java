@@ -3,6 +3,8 @@ package com.ultikits.ultitools.listeners;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
+import org.junit.jupiter.api.extension.RegisterExtension;
+import com.ultikits.ultitools.manager.FrameworkMessagesExtension;
 import java.lang.reflect.Field;
 import java.util.*;
 import java.util.logging.Logger;
@@ -21,6 +23,10 @@ import com.ultikits.ultitools.manager.UpdateManager;
 
 @DisplayName("UpdateJoinListener Tests")
 class UpdateJoinListenerTest {
+    @RegisterExtension
+    final FrameworkMessagesExtension frameworkMessages =
+            new FrameworkMessagesExtension("en");
+
 
     private UpdateManager mockUpdateManager;
     private UpdateJoinListener listener;
@@ -51,9 +57,10 @@ class UpdateJoinListenerTest {
         PlayerJoinEvent event = new PlayerJoinEvent(player, "player joined");
         listener.onPlayerJoin(event);
 
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<net.kyori.adventure.text.Component> captor = ArgumentCaptor.forClass(net.kyori.adventure.text.Component.class);
         verify(player).sendMessage(captor.capture());
-        assertThat(captor.getValue()).contains("2");
+        assertThat(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(captor.getValue()))
+                .isEqualTo("[UltiTools] 2 update(s) available. Run /upm check for details.");
         verify(mockUpdateManager).markPlayerNotified(player.getUniqueId());
     }
 
@@ -66,7 +73,7 @@ class UpdateJoinListenerTest {
         PlayerJoinEvent event = new PlayerJoinEvent(player, "player joined");
         listener.onPlayerJoin(event);
 
-        verify(player, never()).sendMessage(anyString());
+        verify(player, never()).sendMessage(any(net.kyori.adventure.text.Component.class));
     }
 
     @Test
@@ -84,7 +91,7 @@ class UpdateJoinListenerTest {
         PlayerJoinEvent event = new PlayerJoinEvent(player, "player joined");
         listener.onPlayerJoin(event);
 
-        verify(player, never()).sendMessage(anyString());
+        verify(player, never()).sendMessage(any(net.kyori.adventure.text.Component.class));
     }
 
     @Test
@@ -103,7 +110,7 @@ class UpdateJoinListenerTest {
         listener.onPlayerJoin(new PlayerJoinEvent(player, "player joined"));
         listener.onPlayerJoin(new PlayerJoinEvent(player, "player joined"));
 
-        verify(player, never()).sendMessage(anyString());
+        verify(player, never()).sendMessage(any(net.kyori.adventure.text.Component.class));
         verify(mockUpdateManager, never()).markPlayerNotified(any());
     }
 
@@ -119,7 +126,7 @@ class UpdateJoinListenerTest {
         PlayerJoinEvent event = new PlayerJoinEvent(player, "player joined");
         listener.onPlayerJoin(event);
 
-        verify(player, never()).sendMessage(anyString());
+        verify(player, never()).sendMessage(any(net.kyori.adventure.text.Component.class));
     }
 
     @Test
@@ -138,10 +145,11 @@ class UpdateJoinListenerTest {
         PlayerJoinEvent event = new PlayerJoinEvent(player, "player joined");
         listener.onPlayerJoin(event);
 
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<net.kyori.adventure.text.Component> captor = ArgumentCaptor.forClass(net.kyori.adventure.text.Component.class);
         verify(player).sendMessage(captor.capture());
         // 1 framework + 1 module = 2
-        assertThat(captor.getValue()).contains("2");
+        assertThat(com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport.plain(captor.getValue()))
+                .isEqualTo("[UltiTools] 2 update(s) available. Run /upm check for details.");
     }
 
     /**
@@ -196,12 +204,12 @@ class UpdateJoinListenerTest {
             when(player.getUniqueId()).thenReturn(uuid);
 
             realListener.onPlayerJoin(new PlayerJoinEvent(player, "player joined"));
-            verify(player, times(1)).sendMessage(anyString());
+            verify(player, times(1)).sendMessage(any(net.kyori.adventure.text.Component.class));
 
             liveManager.onPlayerQuit(uuid);
 
             realListener.onPlayerJoin(new PlayerJoinEvent(player, "player joined"));
-            verify(player, times(1)).sendMessage(anyString());
+            verify(player, times(1)).sendMessage(any(net.kyori.adventure.text.Component.class));
         }
     }
 }
