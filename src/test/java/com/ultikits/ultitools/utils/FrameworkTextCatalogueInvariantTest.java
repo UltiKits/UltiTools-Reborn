@@ -35,8 +35,8 @@ import com.google.gson.JsonParser;
  * <ol>
  *   <li>the direct first argument of an {@code i18n(...)}, {@code localize(...)} or
  *       {@code FrameworkText.text/format(...)} call, with the key present in {@code en.json};</li>
- *   <li>a catalogue key reached through a variable, listed in {@link #KEYS_VIA_VARIABLE} and present in
- *       both catalogues;</li>
+ *   <li>one of the two legacy UPM diagnostics in {@link #KEYS_VIA_VARIABLE}, matched by declaration
+ *       site and present in both catalogues;</li>
  *   <li>a named exemption in {@link #EXEMPTIONS}, each with its reason and its exact literal count,
  *       so a new literal in an exempt file still fails;</li>
  *   <li>the whole initializer of a {@code static final String} declared in a nested class named
@@ -93,12 +93,8 @@ class FrameworkTextCatalogueInvariantTest {
                             + "value so an existing install keeps its folder; an identifier, never shown "
                             + "(the display name getName() is English)"));
 
-    /** Literals that reach the catalogue through a variable or a constructor field, not a literal argument. */
+    /** These two diagnostics still use FrameworkText.format until their log migration. */
     private static final List<VariableKey> KEYS_VIA_VARIABLE = List.of(
-            new VariableKey("com/ultikits/ultitools/commands/UltiToolsCommands.java", "UltiToolsCommands", "help",
-                    "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul reload <模块名> 重载指定模块\n"
-                            + "/ul list 查看已加载的模块列表\n================"),
-            // These two diagnostics still use FrameworkText.format until their log migration.
             new VariableKey("com/ultikits/ultitools/utils/PluginInstallUtils.java", "PluginInstallUtils",
                     "REASON_INTEGRITY_FAILED", "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。"),
             new VariableKey("com/ultikits/ultitools/utils/PluginInstallUtils.java", "PluginInstallUtils",
@@ -181,8 +177,7 @@ class FrameworkTextCatalogueInvariantTest {
         Map<String, String> misused = holderMisuses(sources, holderConstants);
         List<String> violations = new ArrayList<>();
         for (JavaLiteralScanner.Literal literal : literals) {
-            if (isTranslated(literal) || isVariableKeySite(literal)
-                    || exemptionFor(literal) != null) {
+            if (isTranslated(literal) || isVariableKeySite(literal) || exemptionFor(literal) != null) {
                 continue;
             }
             if (!isHolderConstant(literal)) {

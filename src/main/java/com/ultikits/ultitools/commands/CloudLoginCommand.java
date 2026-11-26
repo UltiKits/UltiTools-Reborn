@@ -2,7 +2,15 @@ package com.ultikits.ultitools.commands;
 
 import java.util.logging.Level;
 
-import org.bukkit.ChatColor;
+import static com.ultikits.ultitools.commands.CoreCommandKeys.*;
+
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Text;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.command.RemoteConsoleCommandSender;
@@ -31,35 +39,6 @@ import com.ultikits.ultitools.utils.CloudAuthManager;
 @CmdExecutor(description = "UltiCloud Authentication Commands", alias = "ulticloud", requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.CONSOLE)
 public class CloudLoginCommand extends BaseCommandExecutor {
-
-    static final String UNLINKING_KEY = "Unlinking this server from UltiCloud...";
-    static final String REVOKED_KEY = "Unlinked this server from UltiCloud and revoked its credential. Cloud features are now stopped.";
-    static final String LINK_AGAIN_KEY = "Use /ulticloud login to link it again.";
-    static final String REVOKE_FAILED_KEY = "Unlinked this server locally, but UltiCloud could not be reached to revoke its credential.";
-    static final String REVOKE_IN_PANEL_KEY = "The cloud credential may still be valid. Revoke it in the panel: server settings > Revoke credential.";
-    static final String CANCELLED_KEY = "Cancelled the pending UltiCloud link request. Cloud features are stopped.";
-    static final String NOT_LINKED_KEY = "This server is not linked to UltiCloud.";
-    static final String STOPPED_KEY = "Cloud features have been stopped regardless.";
-    static final String LOCAL_DELETE_FAILED_KEY = "Could not delete this server's UltiCloud credential from the local "
-        + "credentials file. Check the server log, then run /ulticloud logout again.";
-    static final String RECONNECT_STARTED_KEY = "Reconnecting to UltiCloud now.";
-    static final String RECONNECT_STATUS_KEY = "Use /ulticloud status to see the result.";
-    static final String ALREADY_CONNECTED_KEY = "This server is already connected to UltiCloud.";
-    static final String ALREADY_CONNECTING_KEY = "A connection attempt to UltiCloud is already in progress.";
-    static final String UPGRADE_REQUIRED_KEY = "UltiCloud no longer accepts this UltiTools version. Upgrade UltiTools, then restart the server.";
-    static final String RECONNECT_NOT_LINKED_KEY = "This server is not linked to UltiCloud. Use /ulticloud login to link it.";
-    static final String RECONNECT_RATE_LIMITED_KEY = "Please wait %d seconds before trying again.";
-    /** Said, without echoing the input, when {@code /ulticloud login <code>} gets text that cannot be a code. */
-    static final String INVALID_REPAIR_CODE_KEY = "That is not a valid UltiCloud re-pair code. "
-        + "Copy the whole code from the panel and try again.";
-    /**
-     * Said when {@code /ulticloud reconnect} finds the connection stopped by a server-ID mismatch
-     * (contract answer 21): the server is still linked, but only a restart or a new login leaves
-     * that state.
-     */
-    static final String RECONNECT_SERVER_ID_MISMATCH_KEY = "Reconnecting stays stopped: UltiCloud answered with a "
-        + "different server ID than this server is linked to. Contact UltiCloud support, or run /ulticloud logout "
-        + "and then /ulticloud login.";
 
     /**
      * Starts the device login. Deliberately <b>not</b> {@code @RunAsync} (#740): since 6.3.0 a
@@ -96,7 +75,7 @@ public class CloudLoginCommand extends BaseCommandExecutor {
             return;
         }
         if (!CloudAuthManager.isWellFormedRepairCode(code)) {
-            say(sender, ChatColor.RED, INVALID_REPAIR_CODE_KEY);
+            say(sender, ULTICLOUD_LOGIN_INVALID_CODE);
             return;
         }
         CloudAuthManager.loginWithCode(code, new LoginOutput(sender, true));
@@ -107,29 +86,29 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         if (refusePanelAuthentication(sender)) {
             return;
         }
-        say(sender, ChatColor.AQUA, UNLINKING_KEY);
+        say(sender, ULTICLOUD_LOGOUT_UNLINKING);
         CloudAuthManager.logoutReporting(outcome -> {
             switch (outcome) {
                 case REVOKED:
-                    say(sender, ChatColor.GREEN, REVOKED_KEY);
-                    say(sender, ChatColor.GRAY, LINK_AGAIN_KEY);
+                    say(sender, ULTICLOUD_LOGOUT_REVOKED);
+                    say(sender, ULTICLOUD_LOGOUT_LINK_AGAIN);
                     break;
                 case DELETED_LOCALLY_REVOKE_FAILED:
-                    say(sender, ChatColor.YELLOW, REVOKE_FAILED_KEY);
-                    say(sender, ChatColor.YELLOW, REVOKE_IN_PANEL_KEY);
-                    say(sender, ChatColor.GRAY, LINK_AGAIN_KEY);
+                    say(sender, ULTICLOUD_LOGOUT_REVOKE_FAILED);
+                    say(sender, ULTICLOUD_LOGOUT_REVOKE_IN_PANEL);
+                    say(sender, ULTICLOUD_LOGOUT_LINK_AGAIN);
                     break;
                 case CANCELLED_PENDING:
-                    say(sender, ChatColor.GREEN, CANCELLED_KEY);
+                    say(sender, ULTICLOUD_LOGOUT_CANCELLED);
                     break;
                 case LOCAL_DELETE_FAILED:
-                    say(sender, ChatColor.RED, LOCAL_DELETE_FAILED_KEY);
-                    say(sender, ChatColor.GRAY, STOPPED_KEY);
+                    say(sender, ULTICLOUD_LOGOUT_LOCAL_DELETE_FAILED);
+                    say(sender, ULTICLOUD_LOGOUT_STOPPED);
                     break;
                 case NOT_LINKED:
                 default:
-                    say(sender, ChatColor.YELLOW, NOT_LINKED_KEY);
-                    say(sender, ChatColor.GRAY, STOPPED_KEY);
+                    say(sender, ULTICLOUD_LOGOUT_NOT_LINKED);
+                    say(sender, ULTICLOUD_LOGOUT_STOPPED);
             }
         });
     }
@@ -143,7 +122,7 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         if (sender instanceof Player || !CommandExecutionManager.isPanelDispatch()) {
             return false;
         }
-        say(sender, ChatColor.RED, "UltiCloud login/logout must be run from the server console, not the panel.");
+        say(sender, ULTICLOUD_PANEL_REFUSED);
         return true;
     }
 
@@ -151,13 +130,16 @@ public class CloudLoginCommand extends BaseCommandExecutor {
     public void status(@CmdSender CommandSender sender) {
         CloudAuthManager.CloudStatus status = CloudAuthManager.status();
         if (status.isLinked()) {
-            String name = status.getServerName() != null ? status.getServerName() : "an unnamed server";
-            sender.sendMessage(ChatColor.GREEN + "UltiCloud: Linked as " + name + " (server ID "
-                + status.getServerId() + ")");
-            sender.sendMessage(ChatColor.GRAY + "Connection: " + status.getConnectionDescription());
+            Arg name = status.getServerName() != null
+                    ? Arg.string("name", status.getServerName())
+                    : Arg.text("name", Text.of(ULTICLOUD_STATUS_UNNAMED));
+            CommandRuntime.messages().send(sender, ULTICLOUD_STATUS_LINKED, name,
+                    Arg.string("server_id", String.valueOf(status.getServerId())));
+            CommandRuntime.messages().send(sender, ULTICLOUD_STATUS_CONNECTION,
+                    Arg.string("connection", String.valueOf(status.getConnectionDescription())));
         } else {
-            sender.sendMessage(ChatColor.YELLOW + "UltiCloud: Not linked");
-            sender.sendMessage(ChatColor.GRAY + "Use /ulticloud login to link this server.");
+            CommandRuntime.messages().send(sender, ULTICLOUD_STATUS_NOT_LINKED);
+            CommandRuntime.messages().send(sender, ULTICLOUD_STATUS_LOGIN_HINT);
         }
     }
 
@@ -166,41 +148,38 @@ public class CloudLoginCommand extends BaseCommandExecutor {
         CloudAuthManager.ReconnectResult result = CloudAuthManager.reconnect();
         switch (result.getKind()) {
             case STARTED:
-                say(sender, ChatColor.GREEN, RECONNECT_STARTED_KEY);
-                say(sender, ChatColor.GRAY, RECONNECT_STATUS_KEY);
+                say(sender, ULTICLOUD_RECONNECT_STARTED);
+                say(sender, ULTICLOUD_RECONNECT_STATUS_HINT);
                 break;
             case ALREADY_CONNECTED:
-                say(sender, ChatColor.GREEN, ALREADY_CONNECTED_KEY);
+                say(sender, ULTICLOUD_RECONNECT_ALREADY_CONNECTED);
                 break;
             case ALREADY_CONNECTING:
-                say(sender, ChatColor.YELLOW, ALREADY_CONNECTING_KEY);
+                say(sender, ULTICLOUD_RECONNECT_ALREADY_CONNECTING);
                 break;
             case UPGRADE_REQUIRED:
-                say(sender, ChatColor.YELLOW, UPGRADE_REQUIRED_KEY);
+                say(sender, ULTICLOUD_RECONNECT_UPGRADE_REQUIRED);
                 break;
             case RATE_LIMITED:
-                say(sender, ChatColor.RED, RECONNECT_RATE_LIMITED_KEY, result.getRemainingSeconds());
+                say(sender, ULTICLOUD_RATE_LIMITED, Arg.number("seconds", result.getRemainingSeconds()));
                 break;
             case NOT_LINKED:
             default:
                 // Still linked yet not reconnectable: the server-ID mismatch stop (plan 22-20).
                 CloudAuthManager.CloudStatus status = CloudAuthManager.status();
-                say(sender, ChatColor.YELLOW, status != null && status.isLinked()
-                    ? RECONNECT_SERVER_ID_MISMATCH_KEY : RECONNECT_NOT_LINKED_KEY);
+                say(sender, status != null && status.isLinked()
+                    ? ULTICLOUD_RECONNECT_SERVER_ID_MISMATCH : ULTICLOUD_RECONNECT_NOT_LINKED);
         }
     }
 
     @Override
     protected void handleHelp(CommandSender sender) {
-        sender.sendMessage(ChatColor.AQUA + "=== UltiCloud Commands ===");
-        sender.sendMessage(ChatColor.WHITE + "/ulticloud login" + ChatColor.GRAY + " - Link this server to UltiCloud");
-        sender.sendMessage(ChatColor.WHITE + "/ulticloud login <code>" + ChatColor.GRAY
-            + " - Reattach this server with the re-pair code from the panel");
-        sender.sendMessage(ChatColor.WHITE + "/ulticloud logout" + ChatColor.GRAY
-            + " - Unlink this server and revoke its credential");
-        sender.sendMessage(ChatColor.WHITE + "/ulticloud status" + ChatColor.GRAY + " - Show link and connection status");
-        sender.sendMessage(ChatColor.WHITE + "/ulticloud reconnect" + ChatColor.GRAY
-            + " - Retry the UltiCloud connection now");
+        CommandRuntime.messages().send(sender, ULTICLOUD_HELP_HEADER);
+        CommandRuntime.messages().send(sender, ULTICLOUD_HELP_LOGIN);
+        CommandRuntime.messages().send(sender, ULTICLOUD_HELP_LOGIN_CODE);
+        CommandRuntime.messages().send(sender, ULTICLOUD_HELP_LOGOUT);
+        CommandRuntime.messages().send(sender, ULTICLOUD_HELP_STATUS);
+        CommandRuntime.messages().send(sender, ULTICLOUD_HELP_RECONNECT);
     }
 
     /**
@@ -213,14 +192,11 @@ public class CloudLoginCommand extends BaseCommandExecutor {
             || !(sender instanceof ConsoleCommandSender) && !(sender instanceof Player);
     }
 
-    private static void say(CommandSender sender, ChatColor colour, String key, Object... values) {
-        sendLine(sender, colour + String.format(UltiTools.getInstance().i18n(key), values));
-    }
-
-    private static void sendLine(CommandSender sender, String line) {
+    private static void say(CommandSender sender, MessageKey key, Arg... args) {
+        Component line = CommandRuntime.messages().render(key, sender, args);
         sender.sendMessage(line);
         if (isRemoteSender(sender)) {
-            UltiTools.getInstance().getLogger().log(Level.INFO, ChatColor.stripColor(line));
+            UltiTools.getInstance().getLogger().log(Level.INFO, PlainTextComponentSerializer.plainText().serialize(line));
         }
     }
 
@@ -231,13 +207,6 @@ public class CloudLoginCommand extends BaseCommandExecutor {
      * session's executor; the console and players see each line once.
      */
     private static final class LoginOutput implements CloudAuthManager.DeviceLoginListener {
-
-        private static final String REQUESTING = ChatColor.AQUA + "Requesting a device code from UltiCloud...";
-        private static final String REQUESTING_REMOTE = ChatColor.AQUA
-            + "Requesting a device code from UltiCloud. The code and the link will be printed in the server console.";
-        private static final String REDEEMING = ChatColor.AQUA + "Redeeming the re-pair code with UltiCloud...";
-        private static final String REDEEMING_REMOTE = ChatColor.AQUA
-            + "Redeeming the re-pair code with UltiCloud. The result will be printed in the server console.";
 
         private final CommandSender sender;
         private final boolean remote;
@@ -250,57 +219,52 @@ public class CloudLoginCommand extends BaseCommandExecutor {
             this.withCode = withCode;
         }
 
-        /** Sends {@code line}; for a remote sender also logs it to the console at INFO. */
-        private void say(String line) {
-            sendLine(sender, line);
-        }
-
-        private static void logToConsole(String line) {
-            UltiTools.getInstance().getLogger().log(Level.INFO, ChatColor.stripColor(line));
+        /** Sends a catalogue message; remote replies are also logged as plain text. */
+        private void say(MessageKey key, Arg... args) {
+            CloudLoginCommand.say(sender, key, args);
         }
 
         @Override
         public void onAlreadyLinked(String serverName) {
-            say(ChatColor.YELLOW + "This server is already linked to UltiCloud as " + serverName
-                + ". Use /ulticloud logout first to link it again.");
+            say(ULTICLOUD_LOGIN_ALREADY_LINKED, Arg.string("server", String.valueOf(serverName)));
         }
 
         @Override
         public void onRateLimited(long seconds) {
-            say(ChatColor.RED + "Please wait " + seconds + " seconds before trying again.");
+            say(ULTICLOUD_RATE_LIMITED, Arg.number("seconds", seconds));
         }
 
         @Override
         public void onRequesting() {
-            // Reached only after the already-linked and rate-limit decisions, so a remote sender is
-            // told the code goes to the console only when a code is really being requested.
-            String line = withCode ? REDEEMING : REQUESTING;
+            // Only actual requests tell remote senders to look for the result in the console.
+            MessageKey local = withCode ? ULTICLOUD_LOGIN_REDEEMING : ULTICLOUD_LOGIN_REQUESTING;
             if (remote) {
-                sender.sendMessage(withCode ? REDEEMING_REMOTE : REQUESTING_REMOTE);
-                logToConsole(line);
+                CommandRuntime.messages().send(sender,
+                        withCode ? ULTICLOUD_LOGIN_REDEEMING_REMOTE : ULTICLOUD_LOGIN_REQUESTING_REMOTE);
+                UltiTools.getInstance().getLogger().log(Level.INFO,
+                        PlainTextComponentSerializer.plainText().serialize(CommandRuntime.messages().render(local, sender)));
             } else {
-                sender.sendMessage(line);
+                CommandRuntime.messages().send(sender, local);
             }
         }
 
         @Override
         public void onCode(String verificationUri, String userCode, String verificationUriComplete,
                 long expiresInSeconds) {
-            say(ChatColor.GREEN + "========================================");
-            say(ChatColor.GREEN + " To link this server to UltiCloud, open:");
-            say(ChatColor.AQUA + " " + verificationUri);
-            say(ChatColor.GREEN + " and enter the code:");
-            say(ChatColor.AQUA + " " + userCode);
-            say(ChatColor.GRAY + " Or open this link directly: " + verificationUriComplete);
-            say(ChatColor.GREEN + "========================================");
-            say(ChatColor.GRAY + "The code expires in " + minutes(expiresInSeconds)
-                + " minutes. Waiting for confirmation...");
+            say(ULTICLOUD_LOGIN_SEPARATOR);
+            say(ULTICLOUD_LOGIN_OPEN);
+            say(ULTICLOUD_LOGIN_URI, Arg.string("uri", String.valueOf(verificationUri)));
+            say(ULTICLOUD_LOGIN_ENTER_CODE);
+            say(ULTICLOUD_LOGIN_CODE, Arg.string("code", String.valueOf(userCode)));
+            say(ULTICLOUD_LOGIN_DIRECT_LINK, Arg.string("uri", String.valueOf(verificationUriComplete)));
+            say(ULTICLOUD_LOGIN_SEPARATOR);
+            say(ULTICLOUD_LOGIN_EXPIRES, Arg.number("minutes", minutes(expiresInSeconds)));
         }
 
         @Override
         public void onRequestFailed(String reason) {
-            say(ChatColor.RED + (withCode ? "Could not use the re-pair code: " : "Failed to get a device code: ")
-                + reason);
+            say(withCode ? ULTICLOUD_LOGIN_CODE_FAILED : ULTICLOUD_LOGIN_REQUEST_FAILED,
+                    Arg.string("reason", String.valueOf(reason)));
         }
 
         private static long minutes(long seconds) {

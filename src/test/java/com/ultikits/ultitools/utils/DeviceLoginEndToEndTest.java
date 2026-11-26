@@ -1,7 +1,11 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.commands.CoreCommandMessageTestSupport;
+import net.kyori.adventure.text.Component;
+import static org.mockito.ArgumentMatchers.any;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -62,6 +66,8 @@ class DeviceLoginEndToEndTest {
     private static final String VERIFICATION_URI = "https://panel.ultikits.com/device";
     private static final String COMPLETE_URI = "https://panel.ultikits.com/device?code=BCDF-GHJK";
     private static final String USER_CODE = "BCDF-GHJK";
+
+    private CommandMessageTestSupport commandMessages;
 
     @TempDir
     Path tempDir;
@@ -127,6 +133,7 @@ class DeviceLoginEndToEndTest {
             lenient().when(ultiTools.getLogger()).thenReturn(logger);
             lenient().when(ultiTools.getDescription()).thenReturn(description);
         });
+        commandMessages = CoreCommandMessageTestSupport.bind(UltiTools.getInstance(), "en");
 
         cloud = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         cloud.createContext("/", this::answer);
@@ -149,6 +156,7 @@ class DeviceLoginEndToEndTest {
         instanceField.setAccessible(true);
         instanceField.set(null, null);
         MockBukkitHelper.safeUnmock();
+        commandMessages.close();
     }
 
     private void answer(HttpExchange exchange) throws IOException {
@@ -226,9 +234,9 @@ class DeviceLoginEndToEndTest {
     void deviceLoginLinksTheServerAndWritesTheCredential() throws Exception {
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
         doAnswer(invocation -> {
-            senderLines.add(invocation.getArgument(0));
+            senderLines.add(CommandMessageTestSupport.plain(invocation.getArgument(0)));
             return null;
-        }).when(sender).sendMessage(anyString());
+        }).when(sender).sendMessage(any(Component.class));
 
         new CloudLoginCommand().login(sender);
         // Keep the real HTTP client and its off-primary-thread execution, but advance virtual

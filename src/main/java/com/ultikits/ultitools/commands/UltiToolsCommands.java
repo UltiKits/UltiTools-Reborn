@@ -13,6 +13,11 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.ReloadReport;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
+import com.ultikits.ultitools.manager.ManagerKeys;
+import com.ultikits.ultitools.text.Arg;
+
+import static com.ultikits.ultitools.commands.CoreCommandKeys.*;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -31,16 +36,6 @@ import com.ultikits.ultitools.manager.PluginManager;
 @CmdExecutor(description = "UltiToolsCommands", alias = {"ul", "ultitools", "ulti"}, requireOp = true)
 @CmdTarget(CmdTarget.CmdTargetType.BOTH)
 public class UltiToolsCommands extends BaseCommandExecutor {
-    /** Framework i18n key: the {@code /ul reload <name>} reply when the module's reload threw (#509). */
-    static final String RELOAD_FAILED_REPLY_KEY = "Module %s failed to reload: %s. See the console for details.";
-
-    /**
-     * Framework i18n key: the {@code /ul reload <name>} reply when the module's reload hook reported
-     * parts that did not reload (#529). The same text as the {@code /ul reload} summary line for
-     * such a module, whose key {@code PluginManager} declares.
-     */
-    static final String RELOAD_PARTIAL_REPLY_KEY = "Module %s reloaded partially; not reloaded: %s";
-
     /**
      * Reloads the framework and every module. {@code /ul reload} is handled by {@link
      * #reloadAll(CommandSender)} since 6.3.0, which also replies the reload summary to the sender
@@ -94,25 +89,25 @@ public class UltiToolsCommands extends BaseCommandExecutor {
                 try {
                     report = plugin.reloadWithReport();
                 } catch (Exception | Error e) {
-                    sender.sendMessage(String.format(UltiTools.getInstance().i18n(RELOAD_FAILED_REPLY_KEY),
-                            plugin.getPluginName(), describeFailure(e)));
+                    CommandRuntime.messages().send(sender, UL_RELOAD_FAILED,
+                            Arg.string("module", String.valueOf(plugin.getPluginName())),
+                            Arg.string("error", String.valueOf(describeFailure(e))));
                     return;
                 }
                 // #529: a reload the module reported as partial is not answered with success.
                 if (report.isPartial()) {
                     if (!isNativeConsole(sender)) {
-                        sender.sendMessage(String.format(UltiTools.getInstance().i18n(RELOAD_PARTIAL_REPLY_KEY),
-                                plugin.getPluginName(), String.join("; ", report.getPartialReasons())));
+                        CommandRuntime.messages().send(sender, ManagerKeys.RELOAD_PARTIAL,
+                                Arg.string("module", String.valueOf(plugin.getPluginName())),
+                                Arg.string("reasons", String.join("; ", report.getPartialReasons())));
                     }
                     return;
                 }
-                sender.sendMessage(String.format(
-                        UltiTools.getInstance().i18n("模块 %s 已重载"), name));
+                CommandRuntime.messages().send(sender, UL_RELOAD_DONE, Arg.string("module", String.valueOf(name)));
                 return;
             }
         }
-        sender.sendMessage(String.format(
-                UltiTools.getInstance().i18n("模块 %s 不存在，请使用 /ul list 查看已加载的模块"), name));
+        CommandRuntime.messages().send(sender, UL_RELOAD_NOT_FOUND, Arg.string("module", String.valueOf(name)));
     }
 
     /** Only a console sender can be the native console; ordinary feedback needs no server lookup. */
@@ -157,7 +152,6 @@ public class UltiToolsCommands extends BaseCommandExecutor {
      */
     @Override
     protected void handleHelp(CommandSender sender) {
-        String help = "=== UltiTools 命令列表 ===\n/ul reload 重载插件模块\n/ul reload <模块名> 重载指定模块\n/ul list 查看已加载的模块列表\n================";
-        sender.sendMessage(UltiTools.getInstance().i18n(help));
+        CommandRuntime.messages().send(sender, UL_HELP);
     }
 }

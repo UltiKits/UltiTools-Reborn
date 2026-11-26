@@ -1,7 +1,11 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.commands.CoreCommandMessageTestSupport;
+import net.kyori.adventure.text.Component;
+import static org.mockito.ArgumentMatchers.any;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -20,7 +24,6 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
-import org.bukkit.ChatColor;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.PluginDescriptionFile;
@@ -65,6 +68,8 @@ class RepairCodeLoginEndToEndTest {
     private static final String EXPIRED = "UltiCloud: this re-pair code has expired or was already used. Create a "
             + "new one in the panel (server settings > Revoke and re-pair), or run /ulticloud login without a code.";
 
+    private CommandMessageTestSupport commandMessages;
+
     @TempDir
     Path temp;
 
@@ -101,6 +106,7 @@ class RepairCodeLoginEndToEndTest {
             lenient().when(plugin.getDescription()).thenReturn(new PluginDescriptionFile(
                     "UltiTools", "6.4.0-SNAPSHOT", "com.ultikits.ultitools.UltiTools"));
         });
+        commandMessages = CoreCommandMessageTestSupport.bind(UltiTools.getInstance(), "en");
         CloudTestAccess.useTemporaryCredentials(state);
         stub = UltiCloudStub.start(UltiCloudStub.Options.defaults().accessLog(temp.resolve("access.log"))
                 .acceptCredential(OLD_CREDENTIAL, SERVER_ID));
@@ -125,6 +131,7 @@ class RepairCodeLoginEndToEndTest {
             } finally {
                 try {
                     MockBukkitHelper.safeUnmock();
+                    commandMessages.close();
                 } finally {
                     Field instance = UltiTools.class.getDeclaredField("ultiTools");
                     instance.setAccessible(true);
@@ -153,9 +160,9 @@ class RepairCodeLoginEndToEndTest {
     private ConsoleCommandSender console() {
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
         doAnswer(call -> {
-            senderLines.add(call.getArgument(0));
+            senderLines.add(CommandMessageTestSupport.plain(call.getArgument(0)));
             return null;
-        }).when(sender).sendMessage(anyString());
+        }).when(sender).sendMessage(any(Component.class));
         return sender;
     }
 
@@ -184,7 +191,7 @@ class RepairCodeLoginEndToEndTest {
         assertThat(stub.accessLog().count(TOKEN)).isGreaterThanOrEqualTo(1);
         assertThat(stub.accessLog().count(AUTHORIZE)).as("no new device authorization").isZero();
         assertThat(String.join("\n", senderLines))
-                .contains(ChatColor.AQUA + "Redeeming the re-pair code with UltiCloud...");
+                .contains("Redeeming the re-pair code with UltiCloud...");
         assertThat(infos()).contains("UltiCloud: this server is now linked as Survival (server ID " + SERVER_ID + ").");
         assertCodeNeverShown(code);
     }
@@ -234,7 +241,7 @@ class RepairCodeLoginEndToEndTest {
 
         new CloudLoginCommand().login(console(), malformed);
 
-        assertThat(senderLines).containsExactly(ChatColor.RED + "That is not a valid UltiCloud re-pair code. "
+        assertThat(senderLines).containsExactly("That is not a valid UltiCloud re-pair code. "
                 + "Copy the whole code from the panel and try again.");
         assertThat(stub.accessLog().count(TOKEN)).isZero();
         assertThat(stub.accessLog().count(AUTHORIZE)).isZero();
@@ -248,8 +255,8 @@ class RepairCodeLoginEndToEndTest {
 
         new CloudLoginCommand().login(console(), code);
 
-        assertThat(senderLines).containsExactly(ChatColor.YELLOW
-                + "This server is already linked to UltiCloud as Survival. Use /ulticloud logout first to link it again.");
+        assertThat(senderLines).containsExactly(
+                "This server is already linked to UltiCloud as Survival. Use /ulticloud logout first to link it again.");
         assertThat(stub.accessLog().count(TOKEN)).isZero();
     }
 
