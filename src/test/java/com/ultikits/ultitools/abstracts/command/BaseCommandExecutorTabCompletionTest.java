@@ -7,8 +7,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import org.bukkit.command.Command;
@@ -21,6 +25,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
@@ -32,6 +37,7 @@ import com.ultikits.ultitools.annotations.command.CmdSender;
 import com.ultikits.ultitools.annotations.command.CmdTarget;
 import com.ultikits.ultitools.commands.tabcomplete.TabCompletionManager;
 import com.ultikits.ultitools.manager.CommandManager;
+import com.ultikits.ultitools.text.ModuleCatalogueFixture;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.TestHelper;
 
@@ -51,6 +57,11 @@ import com.ultikits.ultitools.utils.TestHelper;
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 @ExtendWith(CommandTestExtension.class)
 class BaseCommandExecutorTabCompletionTest {
+    private static final String MODE_HINT = "command.hint.mode";
+    private static final String NOTATION_HINT = "command.hint.notation";
+
+    @TempDir Path tempDir;
+    private ModuleCatalogueFixture catalogue;
 
     private ServerMock server;
     private PlayerMock player;
@@ -76,7 +87,19 @@ class BaseCommandExecutorTabCompletionTest {
 
     @AfterEach
     void tearDown() {
-        MockBukkitHelper.safeUnmock();
+        try {
+            if (catalogue != null) {
+                catalogue.close();
+            }
+        } finally {
+            MockBukkitHelper.safeUnmock();
+        }
+    }
+
+    private void loadHint(String path, String text) throws IOException {
+        catalogue = new ModuleCatalogueFixture(tempDir);
+        catalogue.shipped("en", Map.of(path, text));
+        when(mockPlugin.moduleTexts()).thenReturn(Optional.of(catalogue.preparedTexts()));
     }
 
     // ========================================================================================
@@ -293,9 +316,9 @@ class BaseCommandExecutorTabCompletionTest {
         }
 
         @Test
-        @DisplayName("suggest= naming a non-existent method still falls back to the i18n hint text")
-        void fallsBackToI18nHintWhenSuggestMethodMissing() {
-            when(mockPlugin.i18n("aHintOnlyKey")).thenReturn("Pick a mode");
+        @DisplayName("suggest= naming a non-existent method falls back to a module message")
+        void fallsBackToCatalogueHintWhenSuggestMethodMissing() throws IOException {
+            loadHint(MODE_HINT, "Pick a mode");
             MultiTokenExecutor executor = new MultiTokenExecutor();
 
             List<String> completions =
@@ -493,9 +516,9 @@ class BaseCommandExecutorTabCompletionTest {
         }
 
         @Test
-        @DisplayName("a suggest value naming a non-existent method still falls back to the i18n hint text, unchanged")
-        void suggestNamingMissingMethodStillFallsBackToHint() {
-            when(mockPlugin.i18n("aHintOnlyKeyForNotation")).thenReturn("Pick a notation");
+        @DisplayName("a suggest value naming no method falls back to a module message")
+        void suggestNamingMissingMethodStillFallsBackToHint() throws IOException {
+            loadHint(NOTATION_HINT, "Pick a notation");
             KeyNotationExecutor executor = new KeyNotationExecutor();
 
             List<String> completions =
@@ -712,10 +735,8 @@ class BaseCommandExecutorTabCompletionTest {
 
         @CmdMapping(format = "mode <choice>")
         public void modeCommand(@CmdSender CommandSender sender,
-                                 @CmdParam(value = "choice", suggest = "aHintOnlyKey") String choice) {
-            // Test stub -- "aHintOnlyKey" names no method on this class, exercising the i18n hint
-            // fallback (D-07 leaves this fallback unchanged; pinned here so plan 05-06 cannot
-            // break it accidentally).
+                                 @CmdParam(value = "choice", suggest = MODE_HINT) String choice) {
+            // The message path has no corresponding method, exercising the hint fallback.
         }
 
         @CmdMapping(format = "teleport <player> <world>")
@@ -788,9 +809,8 @@ class BaseCommandExecutorTabCompletionTest {
 
         @CmdMapping(format = "hint <choice>")
         public void hintCommand(@CmdSender CommandSender sender,
-                                 @CmdParam(value = "choice", suggest = "aHintOnlyKeyForNotation") String choice) {
-            // Test stub -- "aHintOnlyKeyForNotation" names no method, exercising the unchanged
-            // i18n hint fallback (D-07 leaves it deliberately unchanged).
+                                 @CmdParam(value = "choice", suggest = NOTATION_HINT) String choice) {
+            // The message path has no corresponding method, exercising the hint fallback.
         }
 
         // Wrong-attribute trap (D-07 Pitfall 2 / T-05-28): the parameter's DISPLAY NAME
