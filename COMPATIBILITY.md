@@ -302,6 +302,13 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
   During coexistence, the legacy path still loads custom files as before. New `Messages` use the
   official prefix of a custom configured name (`zh-myserver` → `zh`, unmatched safe names → `en`)
   without treating that custom file as a new catalogue or adding an invalid-locale warning.
+- **Module annotation text:** `@ConfigEntry(comment = "{path}")`, `@CmdExecutor(description = …)`,
+  and `@CmdParam(suggest = …)` names without a matching provider method use plain text from the
+  module's `messages/` catalogues when the path resolves in the server fallback language or the
+  module's source language. An unresolved comment keeps its token and warns once per field;
+  unresolved descriptions and hints display the original text. Move 6.x token translations from
+  `lang/` to `messages/<locale>.yml`. Text from a legacy custom `lang/` file no longer identifies
+  an existing comment as framework-written; comments relying on that match are kept as operator content.
 
 中文补充：7.0 的新装 `language` 与 `fallback-language` 均默认 `auto`。玩家跟随客户端语言；后备
 语言只按上述 11 个系统时区 ID 选 `zh`，其他选 `en`，不按时差猜测。云主机和容器常用 UTC，因此
@@ -311,6 +318,7 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 `zh-myserver` 等自定义名称的后备取官方前缀语言 `zh`。已有配置继续沿用原语言，绝不改写服主文件。
 若服主从已有文件删去了 `language`，7.0 按 `auto` 处理，不再取 6.x 的中文默认，也不把该键写回。
 时区在启动和配置重载时解析，玩家语言每次投递时读取。
+模块的注释令牌、命令描述及无对应方法的补全提示按服务器后备语言解析 `messages/` 路径；找不到时描述和提示照原文显示、注释保留令牌并按字段告警一次，6.x 令牌译文须搬到 `messages/<locale>.yml`，仅匹配旧自定义 `lang/` 译文的既有注释按服主内容保留。
 翻译顺序为请求语言、后备语言、模块源语言、键本身；参数仍按请求语言格式化。服主只改上级覆盖
 文件，`reference/` 是框架每次启动重写的只读参考；`/ul reload <模块>` 重载该模块的覆盖，完整的 `/ul reload` 同时重读框架覆盖。6.x 的语言
 文件、自定义名称和修改不自动迁移，新目录使用点分键与 MiniMessage，不解释 `§` / `&` 颜色码。
