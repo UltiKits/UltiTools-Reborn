@@ -9,6 +9,7 @@ import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -56,6 +57,8 @@ import com.ultikits.ultitools.commands.PluginInstallCommands;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
 import com.ultikits.ultitools.abstracts.command.CommandContext;
 import com.ultikits.ultitools.abstracts.command.CommandRuntime;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import net.kyori.adventure.text.Component;
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import com.ultikits.ultitools.scheduling.TaskHandle;
 import com.ultikits.ultitools.scheduling.TaskContext;
@@ -102,7 +105,6 @@ class CatalogueClientPagingTest {
         assertThat(modules.mkdirs()).isTrue();
         instance = mock(UltiTools.class);
         when(instance.getDataFolder()).thenReturn(dataFolder);
-        when(instance.i18n(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
         ultiTools = mockStatic(UltiTools.class);
         ultiTools.when(UltiTools::getInstance).thenReturn(instance);
         ultiTools.when(UltiTools::getPluginVersion).thenReturn(LEVEL);
@@ -148,11 +150,14 @@ class CatalogueClientPagingTest {
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             command.listVersions(sender, MODULE);
         }
-        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
-        verify(sender).sendMessage(message.capture());
+        ArgumentCaptor<Component> message = ArgumentCaptor.forClass(Component.class);
+        verify(sender, times(entries.size() + 3)).sendMessage(message.capture());
+        List<String> lines = message.getAllValues().stream().map(CommandMessageTestSupport::plain).toList();
+        assertThat(lines.getFirst()).isEqualTo("========|可用版本列表|========");
         for (int i = 0; i < entries.size(); i++) {
-            assertThat(message.getValue()).contains((i + 1) + ". 版本：" + names().get(i) + "\n");
+            assertThat(lines.get(i + 1)).isEqualTo((i + 1) + ". 版本：" + names().get(i));
         }
+        assertThat(lines).endsWith("   安装命令：/upm install " + MODULE + " [version]", "---------------------");
         assertQueries(3);
     }
 

@@ -303,12 +303,10 @@ class FrameworkTextCatalogueInvariantTest {
     @DisplayName("no Chinese literal in src/main/java bypasses the catalogue")
     void noChineseLiteralBypassesTheCatalogue() throws IOException {
         List<JavaLiteralScanner.Literal> literals = cjkLiterals();
-        // Control: the scan sees literals that are translated today, so a zero below is not a blind scan.
-        // The count shrinks with every migration to the catalogue, so the control asserts presence, not
-        // a snapshot size. The change that removes the last legacy call must replace it with a fixture.
+        // The /upm migration removed the last literal translator call; T3 removes the API itself.
         assertThat(literals.stream().filter(FrameworkTextCatalogueInvariantTest::isTranslated).count())
-                .as("control: the scan finds literals that are direct arguments of a translator call")
-                .isPositive();
+                .as("no literal translator calls remain in main sources")
+                .isZero();
 
         List<String> violations = findViolations(mainSources(), catalogue("en"), catalogue("zh"));
         assertThat(violations)
@@ -345,43 +343,19 @@ class FrameworkTextCatalogueInvariantTest {
     }
 
     @Test
-    @DisplayName("every translated literal is an en.json key; helper keys are in both catalogues")
-    void translatedKeysAreInTheCatalogues() throws IOException {
-        JsonObject en = catalogue("en");
-        JsonObject zh = catalogue("zh");
-        List<String> missingEn = new ArrayList<>();
-        List<String> missingZh = new ArrayList<>();
-        for (JavaLiteralScanner.Literal literal : cjkLiterals()) {
-            if (!isTranslated(literal)) {
-                continue;
-            }
-            if (!en.has(literal.value)) {
-                missingEn.add(literal.toString());
-            }
-            if (isHelperCall(literal) && !zh.has(literal.value)) {
-                missingZh.add(literal.toString());
-            }
-        }
-        assertThat(missingEn).as("translated literals with no en.json entry").isEmpty();
-        assertThat(missingZh).as("helper keys with no zh.json entry").isEmpty();
-    }
-
-    @Test
-    @DisplayName("a helper format key and its English value carry the same placeholders, in the same order")
-    void helperFormatKeysKeepTheirPlaceholders() throws IOException {
-        Pattern spec = Pattern.compile("%(?:\\d+\\$)?[-#+ 0,(]*\\d*(?:\\.\\d+)?[a-zA-Z]");
-        JsonObject en = catalogue("en");
-        List<String> mismatched = new ArrayList<>();
-        for (JavaLiteralScanner.Literal literal : cjkLiterals()) {
-            if (!isHelperCall(literal) || !"format".equals(literal.callName) || !en.has(literal.value)) {
-                continue;
-            }
-            String english = en.get(literal.value).getAsString();
-            if (!placeholders(spec, literal.value).equals(placeholders(spec, english))) {
-                mismatched.add(literal.value + " -> " + english);
-            }
-        }
-        assertThat(mismatched).isEmpty();
+    void literalTranslatorControlUsesFixtureSource() {
+        List<JavaLiteralScanner.Literal> literals = cjkLiterals(Map.of("Fixture.java", """
+                class Fixture {
+                    void example(String x) {
+                        UltiTools.getInstance().i18n("夹具翻译");
+                        FrameworkText.format("夹具格式：%s", x);
+                    }
+                }
+                """));
+        assertThat(literals).extracting(literal -> literal.value).containsExactly("夹具翻译", "夹具格式：%s");
+        assertThat(literals).allMatch(FrameworkTextCatalogueInvariantTest::isTranslated);
+        assertThat(literals).filteredOn(FrameworkTextCatalogueInvariantTest::isHelperCall)
+                .extracting(literal -> literal.value).containsExactly("夹具格式：%s");
     }
 
     /** Legacy keys predate source-text format specifiers; never rename those public lookup keys. */

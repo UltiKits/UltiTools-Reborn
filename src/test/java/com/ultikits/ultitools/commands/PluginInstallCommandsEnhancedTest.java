@@ -1,5 +1,14 @@
 package com.ultikits.ultitools.commands;
 
+import org.mockito.Mockito;
+import org.mockito.AdditionalAnswers;
+import com.ultikits.ultitools.command.engine.CommandTestSupport;
+import org.bukkit.configuration.file.YamlConfiguration;
+import com.ultikits.ultitools.utils.TestHelper;
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.scheduler.BukkitScheduler;
+import org.bukkit.Bukkit;
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.scheduling.TaskHandle;
@@ -26,6 +35,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.stream.Stream;
 
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
@@ -44,7 +56,6 @@ import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.entities.PluginEntity;
 import com.ultikits.ultitools.manager.PluginManager;
-import com.ultikits.ultitools.utils.MessageUtils;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.VersionLookup;
 
@@ -52,7 +63,6 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.event.ClickEvent;
 
 @DisplayName("PluginInstallCommands Enhanced Coverage Tests")
@@ -67,23 +77,22 @@ class PluginInstallCommandsEnhancedTest {
     private PluginInstallCommands executor;
     private PluginManager mockPluginManager;
     private MockedStatic<PluginInstallUtils> mockedUtils;
-    private MockedStatic<MessageUtils> mockedMessageUtils;
     private MockedStatic<UltiTools> mockedUltiTools;
-    private MockedStatic<org.bukkit.Bukkit> mockedBukkit;
+    private MockedStatic<Bukkit> mockedBukkit;
     private boolean mockingAvailable = false;
 
     @BeforeEach
     void setUp() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        MockBukkitHelper.ensureCleanState();
         
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
+        TestHelper.mockUltiToolsInstance();
         UltiTools instance = UltiTools.getInstance();
         
         mockedUltiTools = mockStatic(UltiTools.class);
         mockedUltiTools.when(UltiTools::getInstance).thenReturn(instance);
-        org.bukkit.configuration.file.YamlConfiguration config = new org.bukkit.configuration.file.YamlConfiguration();
+        YamlConfiguration config = new YamlConfiguration();
         config.set("api-url", "http://localhost");
         mockedUltiTools.when(UltiTools::getEnv).thenReturn(config);
         
@@ -91,7 +100,6 @@ class PluginInstallCommandsEnhancedTest {
         File dataFolder = new File("target/test-data/plugins/UltiTools");
         dataFolder.mkdirs();
         when(instance.getDataFolder()).thenReturn(dataFolder);
-        when(instance.i18n(anyString())).thenAnswer(i -> i.getArgument(0));
         when(instance.isEnabled()).thenReturn(true);
         when(instance.getName()).thenReturn("UltiTools");
         org.bukkit.plugin.PluginDescriptionFile pdf = new org.bukkit.plugin.PluginDescriptionFile("UltiTools", "1.0.0", "com.ultikits.ultitools.UltiTools");
@@ -112,21 +120,6 @@ class PluginInstallCommandsEnhancedTest {
         
         try {
             mockedUtils = mockStatic(PluginInstallUtils.class);
-            mockedMessageUtils = mockStatic(MessageUtils.class);
-            mockedMessageUtils.when(() -> MessageUtils.sendMessage(any(Player.class), any(String.class)))
-                .thenAnswer(invocation -> {
-                    Player p = invocation.getArgument(0);
-                    String msg = invocation.getArgument(1);
-                    p.sendMessage(msg);
-                    return null;
-                });
-            mockedMessageUtils.when(() -> MessageUtils.sendMessage(any(Player.class), any(TextComponent.class)))
-                .thenAnswer(invocation -> {
-                    Player p = invocation.getArgument(0);
-                    TextComponent t = invocation.getArgument(1);
-                    p.sendMessage(t);
-                    return null;
-                });
             mockingAvailable = true;
             
             // Setup default behaviors
@@ -158,16 +151,16 @@ class PluginInstallCommandsEnhancedTest {
         }
         // Output-only tests keep thread-local static stubs on this thread. Real worker execution
         // and main-thread delivery are covered by CatalogueClientPagingTest.
-        org.bukkit.scheduler.BukkitScheduler scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class,
-                org.mockito.AdditionalAnswers.delegatesTo(server.getScheduler()));
-        org.mockito.Mockito.doAnswer(invocation -> {
+        BukkitScheduler scheduler = mock(BukkitScheduler.class,
+                AdditionalAnswers.delegatesTo(server.getScheduler()));
+        Mockito.doAnswer(invocation -> {
             invocation.<Runnable>getArgument(1).run();
-            return mock(org.bukkit.scheduler.BukkitTask.class);
+            return mock(BukkitTask.class);
         }).when(scheduler).runTaskAsynchronously(any(org.bukkit.plugin.Plugin.class), any(Runnable.class));
-        mockedBukkit = mockStatic(org.bukkit.Bukkit.class, org.mockito.Mockito.CALLS_REAL_METHODS);
-        mockedBukkit.when(org.bukkit.Bukkit::getScheduler).thenReturn(scheduler);
+        mockedBukkit = mockStatic(Bukkit.class, Mockito.CALLS_REAL_METHODS);
+        mockedBukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
         TaskContext async = CommandRuntime.scheduler().async();
-        org.mockito.Mockito.doAnswer(invocation -> {
+        Mockito.doAnswer(invocation -> {
             invocation.getArgument(0, Runnable.class).run();
             return mock(TaskHandle.class);
         }).when(async).run(any(Runnable.class));
@@ -184,19 +177,13 @@ class PluginInstallCommandsEnhancedTest {
             } catch (Exception ignored) {
             }
         }
-        if (mockedMessageUtils != null) {
-            try {
-                mockedMessageUtils.close();
-            } catch (Exception ignored) {
-            }
-        }
         if (mockedUltiTools != null) {
             try {
                 mockedUltiTools.close();
             } catch (Exception ignored) {
             }
         }
-        com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+        MockBukkitHelper.safeUnmock();
     }
 
     // ==================== Help Command Tests ====================
@@ -204,9 +191,10 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("Should display all help commands")
     void testHelpDisplaysAllCommands() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"help"});
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"help"});
         server.getScheduler().performOneTick();
         
         List<String> messages = collectAllMessages(player);
@@ -225,6 +213,7 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("Player list - should show installed plugin with uninstall option")
     void testPlayerListShowsInstalledPlugin() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
         // Setup installed plugin
@@ -254,6 +243,7 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("Player list - should show uninstalled plugin with install option")
     void testPlayerListShowsUninstalledPlugin() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
         when(mockPluginManager.getPluginList()).thenReturn(Collections.emptyList());
@@ -279,6 +269,7 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("Player list - should show multiple plugins with different statuses")
     void testPlayerListMultiplePlugins() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
         UltiToolsPlugin mockPlugin = mock(UltiToolsPlugin.class);
@@ -310,6 +301,7 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("Player list - install and uninstall buttons keep their run-command click events")
     void testPlayerListButtonsKeepClickEvents() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         assertThat(mockingAvailable).as("the component-delivery fixture must be available").isTrue();
 
         UltiToolsPlugin installed = mock(UltiToolsPlugin.class);
@@ -323,19 +315,23 @@ class PluginInstallCommandsEnhancedTest {
         executor.listPlugins(player, "1");
         server.getScheduler().performTicks(2);
 
-        Component received = player.nextComponentMessage();
-        assertThat(received).as("the player must receive the list component").isNotNull();
+        List<Component> lines = new ArrayList<>();
+        Component received;
+        while ((received = player.nextComponentMessage()) != null) {
+            lines.add(received);
+        }
+        assertThat(lines).as("each row is sent as a separate message").hasSize(11);
         List<String> commands = new ArrayList<>();
-        collectRunCommands(received, commands);
+        lines.forEach(line -> collectRunCommands(line, commands));
         assertThat(commands)
                 .as("uninstall uses the loaded runtime name; install uses the catalogue identifier")
                 .containsExactly("/upm uninstall UltiTools-Economy", "/upm install com.ultikits.mail");
-        assertThat(player.nextComponentMessage()).as("one list component is one message").isNull();
     }
 
     @Test
     @DisplayName("Player list - should handle default page (page 1)")
     void testPlayerListDefaultPage() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
         when(mockPluginManager.getPluginList()).thenReturn(Collections.emptyList());
@@ -360,6 +356,7 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("Player list - should handle different page numbers")
     void testPlayerListDifferentPages() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
         when(mockPluginManager.getPluginList()).thenReturn(Collections.emptyList());
@@ -381,6 +378,7 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("Player list - should handle invalid page number gracefully")
     void testPlayerListInvalidPageNumber() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
 
         when(mockPluginManager.getPluginList()).thenReturn(Collections.emptyList());
@@ -404,6 +402,7 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("Player list - should handle empty plugin list")
     void testPlayerListEmpty() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
         when(mockPluginManager.getPluginList()).thenReturn(Collections.emptyList());
@@ -426,22 +425,16 @@ class PluginInstallCommandsEnhancedTest {
     @DisplayName("Console list - should use plain text format")
     void testConsoleListPlainText() {
         if (!mockingAvailable) return;
-        
         when(mockPluginManager.getPluginList()).thenReturn(Collections.emptyList());
-        
         PluginEntity entity = createPlugin("ConsolePlugin", "console-id", "Console test");
-        mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
-                .thenReturn(Collections.singletonList(entity));
-        
-        // Uses a valid page deliberately. This test is about the console's plain-text rendering,
-        // and it previously passed "invalid" only because that was silently treated as page 1
-        // (#380). Now a bad page returns before any listing happens, which would make this test
-        // pass for the wrong reason.
-        executor.listPlugins(player, "1");
-        
+        mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10)).thenReturn(List.of(entity));
+
+        var sender = server.getConsoleSender();
+        executor.listPlugins(sender, "1");
         waitForAsync();
-        
-        // Console sender receives messages differently
+
+        assertThat(sender.nextMessage()).contains("可用插件列表");
+        assertThat(sender.nextMessage()).contains("ConsolePlugin");
         verify(mockPluginManager, atLeastOnce()).getPluginList();
     }
 
@@ -449,17 +442,16 @@ class PluginInstallCommandsEnhancedTest {
     @DisplayName("Console list - should show install commands")
     void testConsoleListShowsInstallCommands() {
         if (!mockingAvailable) return;
-        
         when(mockPluginManager.getPluginList()).thenReturn(Collections.emptyList());
-        
         PluginEntity entity = createPlugin("CmdPlugin", "cmd-id", "Command test");
-        mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10))
-                .thenReturn(Collections.singletonList(entity));
-        
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm", new String[]{"list"});
-        
+        mockedUtils.when(() -> PluginInstallUtils.getPluginList(1, 10)).thenReturn(List.of(entity));
+
+        var sender = server.getConsoleSender();
+        CommandTestSupport.dispatch(executor, sender, mockCommand, "upm", new String[]{"list"});
         waitForAsync();
-        
+
+        assertThat(Stream.generate(sender::nextMessage).takeWhile(Objects::nonNull).toList())
+                .contains("   安装命令：/upm install cmd-id");
         verify(mockPluginManager, atLeastOnce()).getPluginList();
     }
 
@@ -473,7 +465,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("test-plugin"), eq("1.0.0"), any(CommandSender.class)))
                 .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "test-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
         
@@ -491,7 +483,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("bad-plugin"), eq("1.0.0"), any(CommandSender.class)))
                 .thenReturn(PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_FAILED));
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "bad-plugin", "1.0.0"});
         server.getScheduler().performOneTick();
         
@@ -507,7 +499,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("latest-plugin"), isNull(), any(CommandSender.class)))
                 .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "latest-plugin"});
         server.getScheduler().performOneTick();
         
@@ -525,7 +517,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("fail-plugin"), isNull(), any(CommandSender.class)))
                 .thenReturn(PendingCommandTestSupport.reply(false, UpmKeys.INSTALL_FAILED));
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"install", "fail-plugin"});
         server.getScheduler().performOneTick();
         
@@ -541,7 +533,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.installReporting(eq("console-plugin"), isNull(), any(CommandSender.class)))
                 .thenReturn(PendingCommandTestSupport.install("test-plugin", "1.0.0"));
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
+        boolean result = CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
                 new String[]{"install", "console-plugin"});
         server.getScheduler().performOneTick();
         
@@ -553,13 +545,14 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("List versions - should display all versions")
     void testListVersions() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
         List<String> versions = Arrays.asList("1.0.0", "1.0.1", "1.1.0", "2.0.0");
         mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("versioned-plugin"))
                 .thenReturn(versions);
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"versions", "versioned-plugin"});
         server.getScheduler().performOneTick();
         
@@ -578,12 +571,13 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("List versions - should handle null response")
     void testListVersionsNull() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
         mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("null-plugin"))
                 .thenReturn(null);
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"versions", "null-plugin"});
         server.getScheduler().performOneTick();
         
@@ -594,12 +588,13 @@ class PluginInstallCommandsEnhancedTest {
     @Test
     @DisplayName("List versions - should handle empty list")
     void testListVersionsEmpty() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (!mockingAvailable) return;
         
         mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("empty-plugin"))
                 .thenReturn(Collections.emptyList());
         
-        com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
+        CommandTestSupport.dispatch(executor, player, mockCommand, "upm",
                 new String[]{"versions", "empty-plugin"});
         server.getScheduler().performOneTick();
         
@@ -620,7 +615,7 @@ class PluginInstallCommandsEnhancedTest {
         mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("console-versions"))
                 .thenReturn(versions);
         
-        boolean result = com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
+        boolean result = CommandTestSupport.dispatch(executor, console, mockCommand, "upm",
                 new String[]{"versions", "console-versions"});
         server.getScheduler().performOneTick();
         

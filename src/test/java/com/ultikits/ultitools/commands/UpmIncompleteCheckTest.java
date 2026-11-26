@@ -2,7 +2,7 @@ package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -27,7 +27,13 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import com.ultikits.ultitools.utils.UpmKeys;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import org.bukkit.Bukkit;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.UpdateManager;
@@ -43,6 +49,7 @@ import com.ultikits.ultitools.utils.PluginInstallUtils;
  */
 @DisplayName("D19-032: /upm check and /upm update say the update check is incomplete instead of 'No updates available.'")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class UpmIncompleteCheckTest {
 
     private static final String NONE = "没有可用的更新。";
@@ -51,25 +58,25 @@ class UpmIncompleteCheckTest {
     private static final String FAILED = "更新检查失败，详情见控制台；重启服务器后会再次检查。";
 
     private MockedStatic<UltiTools> ultiMock;
-    private MockedStatic<org.bukkit.Bukkit> bukkitMock;
+    private MockedStatic<Bukkit> bukkitMock;
     private UpdateManager updateManager;
     private CommandSender sender;
     private final List<String> said = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
-        bukkitMock = mockStatic(org.bukkit.Bukkit.class);
-        bukkitMock.when(org.bukkit.Bukkit::isPrimaryThread).thenReturn(true);
+        bukkitMock = mockStatic(Bukkit.class);
+        bukkitMock.when(Bukkit::isPrimaryThread).thenReturn(true);
         ultiMock = mockStatic(UltiTools.class);
         UltiTools instance = mock(UltiTools.class);
-        when(instance.i18n(anyString())).thenAnswer(inv -> inv.getArgument(0));
         ultiMock.when(UltiTools::getInstance).thenReturn(instance);
         updateManager = mock(UpdateManager.class);
         when(updateManager.isCheckComplete()).thenReturn(true);
         when(instance.getUpdateManager()).thenReturn(updateManager);
         when(updateManager.getModuleUpdates()).thenReturn(new HashMap<>());
         sender = mock(CommandSender.class);
-        doAnswer(inv -> said.add(inv.getArgument(0))).when(sender).sendMessage(anyString());
+        doAnswer(inv -> said.add(LegacyComponentSerializer.legacySection().serialize(inv.getArgument(0))))
+                .when(sender).sendMessage(any(Component.class));
     }
 
     @AfterEach
@@ -167,24 +174,22 @@ class UpmIncompleteCheckTest {
     @ParameterizedTest
     @ValueSource(strings = {"en", "zh"})
     @DisplayName("#838: both shipped language catalogues contain the failed message")
-    void failedMessageIsLocalized(String language) throws Exception {
-        try (java.io.InputStream in = getClass().getClassLoader()
-                .getResourceAsStream("lang/" + language + ".json")) {
-            String expected = "en".equals(language)
-                    ? "Update check failed; see the console. It runs again at the next server start." : FAILED;
-            assertThat(new ObjectMapper().readTree(in).path(FAILED).asText()).isEqualTo(expected);
+    void failedMessageIsLocalized(String language) {
+        try (var text = new CommandMessageTestSupport(language)) {
+            String expected = "en".equals(language) ? "Update check failed; see the console. It runs again at the next server start." : FAILED;
+            assertThat(CommandMessageTestSupport.plain(text.messages().render(UpmKeys.CHECK_FAILED, sender)))
+                    .isEqualTo(expected);
         }
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"en", "zh"})
     @DisplayName("#663: both shipped language catalogues contain the pending message")
-    void pendingMessageIsLocalized(String language) throws Exception {
-        try (java.io.InputStream in = getClass().getClassLoader()
-                .getResourceAsStream("lang/" + language + ".json")) {
-            String expected = "en".equals(language)
-                    ? "Update check still running; try again in a few seconds." : PENDING;
-            assertThat(new ObjectMapper().readTree(in).path(PENDING).asText()).isEqualTo(expected);
+    void pendingMessageIsLocalized(String language) {
+        try (var text = new CommandMessageTestSupport(language)) {
+            String expected = "en".equals(language) ? "Update check still running; try again in a few seconds." : PENDING;
+            assertThat(CommandMessageTestSupport.plain(text.messages().render(UpmKeys.CHECK_RUNNING, sender)))
+                    .isEqualTo(expected);
         }
     }
 
@@ -223,7 +228,7 @@ class UpmIncompleteCheckTest {
     @DisplayName("control: /upm check with every lookup confirmed and nothing found still says No updates available")
     void checkConfirmedNone() {
         when(updateManager.hasAnyUpdates()).thenReturn(false);
-        when(updateManager.getUnconfirmed()).thenReturn(Collections.<String>emptyList());
+        when(updateManager.getUnconfirmed()).thenReturn(Collections.emptyList());
 
         new PluginInstallCommands().checkUpdates(sender);
 
