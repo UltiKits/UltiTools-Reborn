@@ -5949,7 +5949,17 @@ Before removing a module, back up your world and check which kinds of content it
 `bootstrap/contributions.json` and `bootstrap/datapacks/` under the UltiTools data directory are
 framework-owned; do not edit them. The record tracks what modules declared, not what Paper
 accepted. If a Paper callback fails after some of a module's entries have already been written,
-Paper cannot undo those writes during the same start; they remain until the next restart.
+Paper cannot undo those writes during the same start; they remain until the next restart. A module
+whose bootstrap succeeds but whose enable fails contributes its content again on every start that
+its JAR remains installed and its bootstrap succeeds. To stop those contributions, remove the
+module's JAR and restart the server.
+
+**Known limitations:**
+
+- At startup, if a tag refers to another module's enchantment and that enchantment fails to register,
+  the module declaring the tag also fails to load.
+- If a failed start for a module causes its generated data pack ZIP to be pruned, a prior
+  `datapack disable` for that pack is reset. Paper enables the pack again when it reappears.
 
 These channels are experimental because they depend on experimental Paper APIs. Future 7.x releases
 may change them when Paper changes; any such changes will be listed here.
@@ -5965,4 +5975,12 @@ may change them when Paper changes; any such changes will be listed here.
 移除模块前请备份世界：加载并保存区块后，物品上的自定义附魔会永久丢失；数据包带来的配方与进度会消失；
 新增的物品分类会失效。UltiTools 数据目录下的 `bootstrap/contributions.json` 和 `bootstrap/datapacks/`
 由框架维护，不要手动编辑。台账记录的是声明，不是 Paper 的写入结果；写入过程中失败时，已写入的内容
-可能留到下次重启。这些通道依赖 Paper 的实验性接口，后续 7.x 版本如有调整会记在本文。
+可能留到下次重启。如果模块引导成功却在启用阶段加载失败，只要 JAR 还在且引导成功，每次启动仍会写入其内容。
+要停止写入，请移走该模块的 JAR，再重启服务器。
+
+**已知限制：**
+
+- 启动时，如果模块的标签引用了另一个模块的附魔，而该附魔未能注册，声明标签的模块也会加载失败。
+- 如果模块某次启动失败导致生成的数据包 ZIP 被清理，先前对该包执行的 `datapack disable` 会失效；数据包再次出现时，Paper 会重新启用它。
+
+这些通道依赖 Paper 的实验性接口，后续 7.x 版本如有调整会记在本文。

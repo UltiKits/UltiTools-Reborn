@@ -21,6 +21,8 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.ultikits.ultitools.manager.ModuleJarAdmission;
+
 class ContributionLedgerTest {
     private static final String MODULE = "MyModule";
     private static final Instant FIRST = Instant.parse("2026-11-25T12:00:00Z");
@@ -86,6 +88,32 @@ class ContributionLedgerTest {
         var reinstalled = update(start(List.of(EDGE, PACK)), SECOND.plusSeconds(2));
         assertThat(reinstalled.rows().get(MODULE).removedAt()).isNull();
         assertThat(reinstalled.rows().get(MODULE).present()).isTrue();
+    }
+
+    @Test
+    void jarRefusedByApiLevelDoesNotProduceARemovalWarning() throws IOException {
+        var before = update(start(List.of(EDGE)), FIRST);
+        Path jar = BootstrapFixtures.jar(data.resolve("mymodule.jar"),
+                BootstrapFixtures.descriptor(MODULE, null).replace("api-version: 700", "api-version: 630"), Map.of());
+        var admission = new ModuleJarAdmission();
+        assertThat(admission.inspect(jar.toFile()).isApiAllowed()).isFalse();
+
+        var after = ContributionLedger.update(data, admission, new ContributionRegistry(admission, logger), logger);
+        assertThat(after.removed()).isEmpty();
+        assertThat(after.dropped()).isEmpty();
+        assertThat(after.rows()).isEqualTo(before.rows());
+    }
+
+    @Test
+    void absentJarStillProducesARemovalWarning() throws IOException {
+        Path jar = BootstrapFixtures.jar(data.resolve("mymodule.jar"), BootstrapFixtures.descriptor(MODULE, null), Map.of());
+        update(start(List.of(EDGE)), FIRST);
+        Files.delete(jar);
+
+        var admission = new ModuleJarAdmission();
+        var after = ContributionLedger.update(data, admission, new ContributionRegistry(admission, logger), logger);
+        assertThat(after.removed()).containsExactlyEntriesOf(Map.of(MODULE, List.of(EDGE)));
+        assertThat(after.rows().get(MODULE).present()).isFalse();
     }
 
     @Test

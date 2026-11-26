@@ -79,11 +79,8 @@ final class ContributionLedger implements ModuleContentLedger {
     static ContributionLedger update(Path dataFolder, ModuleJarAdmission admission, ContributionRegistry registry,
                                      Logger logger) {
         Set<String> installed = new LinkedHashSet<>();
-        admission.entries().forEach((jar, entry) -> {
-            if (entry.isApiAllowed()) {
-                installed.add(ModuleBootstraps.moduleName(jar, entry.getMetadata()));
-            }
-        });
+        // An API refusal prevents this start's declarations; it does not uninstall the JAR.
+        admission.entries().forEach((jar, entry) -> installed.add(ModuleBootstraps.moduleName(jar, entry.getMetadata())));
         Map<String, List<ContentEntry>> declared = new LinkedHashMap<>();
         for (var module : registry.modules()) {
             if (!registry.failed(module.jar())) {
@@ -229,7 +226,7 @@ final class ContributionLedger implements ModuleContentLedger {
             throw new IOException("not a framework-owned record file: " + file);
         }
         byte[] bytes = (GSON.toJson(new Snapshot(SCHEMA, rows)) + '\n').getBytes(StandardCharsets.UTF_8);
-        Path temporary = Files.createTempFile(file.getParent(), ".contributions-", ".tmp");
+        Path temporary = Files.createTempFile(file.getParent(), BootstrapFiles.LEDGER_TEMP_PREFIX, BootstrapFiles.TEMP_SUFFIX);
         try {
             try (FileChannel channel = FileChannel.open(temporary, WRITE)) {
                 writer.write(channel, bytes);

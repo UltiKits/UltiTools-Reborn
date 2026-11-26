@@ -13,13 +13,16 @@ import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.ultikits.ultitools.manager.ModuleJarAdmission;
 
 class EmbeddedDatapacksTest {
     @TempDir Path data;
     private final Logger logger = Logger.getAnonymousLogger();
-    private final ContributionRegistry registry = new ContributionRegistry(new ModuleJarAdmission(), logger);
+    private final ModuleJarAdmission admission = new ModuleJarAdmission();
+    private final ContributionRegistry registry = new ContributionRegistry(admission, logger);
 
     @Test
     void copiesOnlyBundledEntriesInOrderAndDoesNotRewriteUnchangedZip() throws Exception {
@@ -74,5 +77,72 @@ class EmbeddedDatapacksTest {
         EmbeddedDatapacks.prepare(data, registry, logger);
         assertThat(registry.failed(jar)).isTrue();
         assertThat(data.resolve("bootstrap/datapacks/demo.one.zip")).doesNotExist();
+    }
+
+    @Test
+    void rechecksTheArchiveForWorldGenerationBeforeExtracting() throws Exception {
+        Path jar = data.resolve("demo.jar");
+        var descriptor = BootstrapFixtures.descriptor("Demo", null);
+        BootstrapFixtures.jar(jar, descriptor, Map.of(), Map.of("datapacks/one/pack.mcmeta", "{}"));
+        var module = new ModuleContributions("Demo", jar);
+        module.datapacks().embedded("one");
+        module.seal();
+        registry.accept(module);
+
+        BootstrapFixtures.jar(jar, descriptor, Map.of(), Map.of("datapacks/one/pack.mcmeta", "{}",
+                "datapacks/one/overlay/data/demo/worldgen/biome/probe.json", "{}"));
+        EmbeddedDatapacks.prepare(data, registry, logger);
+
+        assertThat(registry.failed(jar)).isTrue();
+        assertThat(registry.worldgenRefusals()).containsExactly(new ModuleContributions.WorldgenRefusal(
+                "Demo", "one", "overlay/data/demo/worldgen/"));
+        assertThat(registry.hasDatapacks()).isFalse();
+        assertThat(data.resolve("bootstrap/datapacks/demo.one.zip")).doesNotExist();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"data/demo/../a.json", "data/./demo/a.json", "data\\demo\\a.json",
+            "data//demo/a.json", "/data/demo/a.json"})
+    void rejectsMalformedRelativeEntryPaths(String relative) throws Exception {
+        Path jar = BootstrapFixtures.jar(data.resolve("demo.jar"), BootstrapFixtures.descriptor("Demo", null), Map.of(),
+                Map.of("datapacks/one/pack.mcmeta", "{}", "datapacks/one/" + relative, "{}"));
+        var module = new ModuleContributions("Demo", jar);
+        module.datapacks().embedded("one");
+        module.seal();
+        registry.accept(module);
+
+        EmbeddedDatapacks.prepare(data, registry, logger);
+
+        assertThat(admission.inspect(jar.toFile()).getBootstrapFailure())
+                .hasMessage("Invalid bundled data pack entry: " + relative);
+        assertThat(registry.hasDatapacks()).isFalse();
+        assertThat(data.resolve("bootstrap/datapacks/demo.one.zip")).doesNotExist();
+    }
+
+    @Test
+    void failureOfTheSecondPackPrunesTheFirstDerivedZipToo() throws Exception {
+        Path jar = data.resolve("demo.jar");
+        var descriptor = BootstrapFixtures.descriptor("Demo", null);
+        BootstrapFixtures.jar(jar, descriptor, Map.of(),
+                Map.of("datapacks/one/pack.mcmeta", "{}", "datapacks/two/pack.mcmeta", "{}"));
+        var module = new ModuleContributions("Demo", jar);
+        module.datapacks().embedded("one");
+        module.datapacks().embedded("two");
+        module.seal();
+        registry.accept(module);
+        EmbeddedDatapacks.prepare(data, registry, logger);
+        Path first = data.resolve("bootstrap/datapacks/demo.one.zip");
+        Path second = data.resolve("bootstrap/datapacks/demo.two.zip");
+        assertThat(first).isRegularFile();
+        assertThat(second).isRegularFile();
+
+        BootstrapFixtures.jar(jar, descriptor, Map.of(), Map.of("datapacks/one/pack.mcmeta", "{}"));
+        EmbeddedDatapacks.prepare(data, registry, logger);
+
+        assertThat(registry.failed(jar)).isTrue();
+        assertThat(admission.inspect(jar.toFile()).getBootstrapFailure()).hasMessageContaining("datapacks/two/pack.mcmeta");
+        assertThat(registry.hasDatapacks()).isFalse();
+        assertThat(first).doesNotExist();
+        assertThat(second).doesNotExist();
     }
 }

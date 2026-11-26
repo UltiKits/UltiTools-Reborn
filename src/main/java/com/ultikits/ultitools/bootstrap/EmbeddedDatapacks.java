@@ -39,8 +39,7 @@ final class EmbeddedDatapacks {
     }
 
     static void prepare(Path dataFolder, ContributionRegistry registry, Logger logger) {
-        Path root = BootstrapFiles.root(dataFolder);
-        Path directory = root.resolve("datapacks");
+        Path directory = BootstrapFiles.datapacks(BootstrapFiles.root(dataFolder));
         List<PreparedPack> packs = new ArrayList<>();
         for (var module : registry.modules()) {
             if (!module.packNames().isEmpty() && !registry.failed(module.jar())) {
@@ -86,7 +85,7 @@ final class EmbeddedDatapacks {
         if (exists && !Files.isRegularFile(target, NOFOLLOW_LINKS)) {
             throw new IOException("Not a derived data pack ZIP: " + target);
         }
-        Path temporary = Files.createTempFile(target.getParent(), ".pack-", ".tmp");
+        Path temporary = Files.createTempFile(target.getParent(), BootstrapFiles.PACK_TEMP_PREFIX, BootstrapFiles.TEMP_SUFFIX);
         try {
             writeZip(archive, name, temporary);
             if (!exists || !Arrays.equals(sha256(temporary), sha256(target))) {

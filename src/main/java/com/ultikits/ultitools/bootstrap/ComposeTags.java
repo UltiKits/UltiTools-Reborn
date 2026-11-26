@@ -10,9 +10,10 @@ import io.papermc.paper.registry.tag.TagKey;
 /**
  * Access to tags while Paper composes the enchantment registry.
  *
- * Experimental: built on Paper APIs that Paper marks experimental ({@code PluginBootstrap},
- * {@code LifecycleEvents.TAGS}, {@code LifecycleEvents.DATAPACK_DISCOVERY}). A later 7.x release may
- * change this interface when Paper changes them; such changes are listed in COMPATIBILITY.md.
+ * Experimental: these channels use Paper's bootstrap lifecycle and {@code RegistryEvents.ENCHANTMENT}.
+ * Paper 26.3 marks {@code PluginBootstrap}, {@code LifecycleEvents.TAGS},
+ * {@code LifecycleEvents.DATAPACK_DISCOVERY} and {@code io.papermc.paper.registry.tag.Tag} experimental.
+ * A later 7.x release may adapt this interface to Paper changes; see COMPATIBILITY.md.
  *
  * @since 7.0.0
  */

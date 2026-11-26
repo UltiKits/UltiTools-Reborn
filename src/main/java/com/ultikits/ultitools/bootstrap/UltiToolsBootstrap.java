@@ -51,6 +51,7 @@ public final class UltiToolsBootstrap implements PluginBootstrap {
     }
 
     private BootstrapResult prepare(BootstrapContext context, File dataFolder, Logger logger) {
+        BootstrapFiles.cleanStaleTemporaries(dataFolder.toPath(), logger);
         ModuleFileTransactions transactions = new ModuleFileTransactions(dataFolder);
         ModuleJarAdmission admission = new ModuleJarAdmission();
         URL serverJar = ModuleClassPath.serverJarOf(logger);
