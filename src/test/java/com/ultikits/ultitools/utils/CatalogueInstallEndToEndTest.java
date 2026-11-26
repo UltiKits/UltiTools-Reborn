@@ -120,12 +120,11 @@ class CatalogueInstallEndToEndTest {
     @Test
     @DisplayName("a JAR whose hash and byte count match the version is installed, byte for byte")
     void matchingJar_isInstalled() throws IOException {
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
 
-        assertThat(result.isInstalled()).isTrue();
-        assertThat(result.getFileName()).isEqualTo("demo-1.1.0.jar");
-        assertThat(modulesFolderNames()).containsExactly("demo-1.1.0.jar");
-        assertThat(Files.readAllBytes(new File(modules, "demo-1.1.0.jar").toPath()))
+        assertThat(result.queued()).isTrue();
+        assertThat(modulesFolderNames()).isEmpty();
+        assertThat(Files.readAllBytes(PendingTestValues.stagedJar(modules, "demo-1.1.0.jar").toPath()))
                 .isEqualTo(catalogue.jar());
     }
 
@@ -134,20 +133,19 @@ class CatalogueInstallEndToEndTest {
     void tamperedJar_isDiscardedBeforeStaging() {
         catalogue.mode(StubCatalogue.Mode.TAMPER_HASH);
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getFileName()).isNull();
+        assertThat(result.queued()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
         // The catalogue text of plan 22-22; the mocked framework has no language loaded, so the key itself is shown.
         assertThat(messages()).containsExactly(
-                String.format(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED, "demo", "1.1.0"));
+                String.format("已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。", "demo", "1.1.0"));
     }
 
     @Test
     @DisplayName("only /v1/catalogue/* is requested, no request carries Authorization, no /plugin/* is reached")
     void onlyV2CataloguePathsAreRequested() {
-        assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").isInstalled()).isTrue();
+        assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").queued()).isTrue();
 
         List<String> paths = catalogue.paths();
         assertThat(paths).isNotEmpty();
@@ -174,9 +172,9 @@ class CatalogueInstallEndToEndTest {
         void longDescription_isRead() {
             catalogue.longDescription(25_000);
 
-            PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
+            PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
 
-            assertThat(result.isInstalled()).isTrue();
+            assertThat(result.queued()).isTrue();
             assertThat(PluginInstallUtils.getPlugin("demo").getDescription()).hasSize(50_000);
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getOutcome())
                     .isEqualTo(VersionLookup.Outcome.FOUND);
@@ -190,7 +188,7 @@ class CatalogueInstallEndToEndTest {
             assertThat(PluginInstallUtils.getPluginVersions("demo")).hasSize(20);
             assertThat(PluginInstallUtils.lookUpPluginLatestVersion("demo").getOutcome())
                     .isEqualTo(VersionLookup.Outcome.FOUND);
-            assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
+            assertThat(PluginInstallUtils.installReporting("demo", null).queued()).isTrue();
         }
 
         @Test
@@ -250,9 +248,9 @@ class CatalogueInstallEndToEndTest {
         void foreignDownloadUrl_isRefusedWithoutARequest() {
             catalogue.mode(StubCatalogue.Mode.FOREIGN_URL);
 
-            PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
+            PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", "1.1.0");
 
-            assertThat(result.isInstalled()).isFalse();
+            assertThat(result.queued()).isFalse();
             assertThat(catalogue.paths()).as("nothing was requested from the foreign host or locally")
                     .noneMatch(path -> path.endsWith("/download"));
             assertThat(messages()).containsExactly(
@@ -265,7 +263,7 @@ class CatalogueInstallEndToEndTest {
         void forbidden_isNotAvailable() {
             catalogue.mode(StubCatalogue.Mode.FORBIDDEN);
 
-            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").isInstalled()).isFalse();
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").queued()).isFalse();
 
             assertThat(messages()).containsExactly("demo 1.1.0 is not available for download"
                     + " (withdrawn, unpublished or not licensed); nothing was installed.");
@@ -277,7 +275,7 @@ class CatalogueInstallEndToEndTest {
         void serverError_isATransportFailure() {
             catalogue.mode(StubCatalogue.Mode.SERVER_ERROR);
 
-            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").isInstalled()).isFalse();
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").queued()).isFalse();
 
             assertThat(messages()).containsExactly(
                     "Could not download demo 1.1.0 (the download did not complete); nothing was installed.");
@@ -297,7 +295,7 @@ class CatalogueInstallEndToEndTest {
 
             // Plan 22-22: every integrity failure is the one catalogue reason (which check failed is on the FINE line);
             // a version not offered and a download that did not complete keep their own lines.
-            String integrity = String.format(PluginInstallUtils.InstallResult.Keys.REASON_INTEGRITY_FAILED, "demo", "1.1.0");
+            String integrity = String.format("已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。", "demo", "1.1.0");
             assertThat(lines.subList(0, 4)).containsOnly(integrity);
             assertThat(lines.subList(3, 6)).doesNotHaveDuplicates();
             assertThat(lines.get(4)).isEqualTo("demo 1.1.0 is not available for download"
@@ -344,7 +342,7 @@ class CatalogueInstallEndToEndTest {
         void foreignUrlMakesNoRequest() {
             catalogue.mode(StubCatalogue.Mode.FOREIGN_URL);
 
-            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").isInstalled()).isFalse();
+            assertThat(PluginInstallUtils.installReporting("demo", "1.1.0").queued()).isFalse();
 
             assertThat(catalogue.paths()).as("only the metadata routes were asked")
                     .noneMatch(requested -> requested.endsWith("/download"));

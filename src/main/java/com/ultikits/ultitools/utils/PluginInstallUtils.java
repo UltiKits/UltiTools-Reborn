@@ -5,12 +5,22 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.URI;
 import java.net.URL;
+import java.util.function.Function;
+
+import org.bukkit.command.CommandSender;
+
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Text;
+import static com.ultikits.ultitools.text.Arg.number;
+import static com.ultikits.ultitools.text.Arg.string;
+import static com.ultikits.ultitools.utils.ModuleFileTransactions.text;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -38,9 +48,14 @@ import com.ultikits.ultitools.manager.PluginManager;
  */
 public class PluginInstallUtils {
     private static final Logger LOGGER = Logger.getLogger(PluginInstallUtils.class.getName());
+    private static final String CATALOGUE_URL_PROPERTY = "ultitools.catalogue.url";
+    private static final String REASON_INTEGRITY_FAILED =
+            "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。";
+    private static final String REASON_LICENCE_REQUIRED =
+            "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。";
 
     /** How the uninstall asks a loaded module which JAR it came from; a test passes its own. */
-    static final java.util.function.Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
+    static final Function<UltiToolsPlugin, File> DEFAULT_MODULE_CODE_SOURCE =
             module -> codeSourceLocationOf(module.getClass());
 
     /**
@@ -94,13 +109,46 @@ public class PluginInstallUtils {
         if (baseUrl == null) {
             synchronized (PluginInstallUtils.class) {
                 if (baseUrl == null) {
-                    baseUrl = UltiTools.getEnv().getString("api-url");
+                    baseUrl = configuredCatalogueUrl();
                 }
             }
         }
         return baseUrl;
     }
     
+    /** Resolves an explicitly configured test URL early enough for its diagnostic to appear at startup. */
+    @ApiStatus.Internal
+    public static void initializeCatalogueUrl() {
+        getBaseUrl();
+    }
+
+    private static String configuredCatalogueUrl() {
+        String value = System.getProperty(CATALOGUE_URL_PROPERTY);
+        if (value != null) {
+            if (isLoopbackCatalogueUrl(value)) {
+                LOGGER.warning("The module catalogue URL was overridden by ultitools.catalogue.url to " + value
+                        + " (for testing only).");
+                return value;
+            }
+            LOGGER.warning("Ignoring ultitools.catalogue.url: expected an HTTP(S) URL on a loopback host "
+                    + "(127.0.0.1, [::1], or localhost) with no user info, query, or fragment.");
+        }
+        return UltiTools.getEnv().getString("api-url");
+    }
+
+    private static boolean isLoopbackCatalogueUrl(String value) {
+        try {
+            URI url = URI.create(value);
+            String host = url.getHost();
+            return ("https".equals(url.getScheme()) || "http".equals(url.getScheme()))
+                    && ("127.0.0.1".equals(host) || "[::1]".equals(host) || "localhost".equalsIgnoreCase(host))
+                    && url.getPort() <= 65535 && url.getPort() != 0 && url.getUserInfo() == null
+                    && url.getRawQuery() == null && url.getRawFragment() == null;
+        } catch (IllegalArgumentException malformed) {
+            return false;
+        }
+    }
+
     /**
      * Set a custom base URL for testing purposes.
      * This should only be used in unit tests.
@@ -296,125 +344,161 @@ public class PluginInstallUtils {
     }
 
     /**
-     * Install latest plugin.
-     *
-     * <p>As of 6.3.0 only a module whose {@code plugin.yml} declares an {@code api-version} from
-     * {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} up to this framework's level is installed;
-     * for any other this returns {@code false} and writes nothing to the modules folder. See
-     * {@link #installReporting(String, String)}.
-     *
-     * @param idString the plugin ID
-     * @return whether the install succeeded
+     * Requests an installation of the latest compatible version.
+     * @param idString the catalogue module identifier
+     * @return whether a new change was recorded for the next start
      */
     public static boolean installLatestPlugin(String idString) {
-        return installReporting(idString, null).isInstalled();
+        return installReporting(idString, null).queued();
     }
 
     /**
-     * Install plugin.
-     *
-     * <p>As of 6.3.0 only a module whose {@code plugin.yml} declares an {@code api-version} from
-     * {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} up to this framework's level is installed;
-     * for any other this returns {@code false} and writes nothing to the modules folder. See
-     * {@link #installReporting(String, String)}.
-     *
-     * @param idString the plugin ID
-     * @param version  the version
-     * @return whether the install succeeded
+     * Requests an installation of the specified version.
+     * @param idString the catalogue module identifier
+     * @param version the catalogue version
+     * @return whether a new change was recorded for the next start
      */
     public static boolean installPlugin(String idString, String version) {
-        return installReporting(idString, version == null ? "" : version).isInstalled();
+        return installReporting(idString, version == null ? "" : version).queued();
     }
 
-    /**
-     * Installs a module from the v2 catalogue and says why when it does not (plan 22-18).
-     *
-     * <p>The version's metadata names the byte count and the SHA-256 of the JAR it offers, and the
-     * JAR is accepted only when both match the bytes that arrived (see {@link VerifiedDownload}).
-     * It is downloaded under a name the module loader never lists or puts on the class path (it
-     * reads only {@code *.jar}), on the same file system so that accepting it is one atomic
-     * rename. Its {@code plugin.yml} is then read again, and the module is refused -- the download
-     * deleted, the modules folder as it was -- unless its {@code api-version} is an integer from
-     * {@link ModuleApiLevels#MIN_INSTALLABLE_API_LEVEL} to this framework's level. That check is the
-     * backstop for a catalogue that does not filter or records a version wrongly. An accepted JAR
-     * replaces a file of the same final name, as the download always did.
-     *
-     * <p>A version the catalogue lists but does not offer for public download (licence required)
-     * is refused before anything is requested, with its own line; the framework implements no
-     * licensing of its own.
-     *
-     * @param idString      the module's identify-string
-     * @param versionOrNull the version, or {@code null} for the latest version the catalogue offers
-     *                      this framework
-     * @return the outcome; a refusal the operator is told about has already been logged
-     */
+    /** @return the install request, with no command sender (for internal programmatic callers) */
     @ApiStatus.Internal
-    public static InstallResult installReporting(String idString, String versionOrNull) {
+    public static PendingResult installReporting(String idString, String versionOrNull) {
+        return installReporting(idString, versionOrNull, null);
+    }
+
+    /** Queues a verified catalogue module without changing the running modules or their files. */
+    @ApiStatus.Internal
+    public static PendingResult installReporting(String idString, String versionOrNull, CommandSender sender) {
         int level = ModuleApiLevels.frameworkLevel();
         int floor = ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL;
-        String requested = idString == null ? null : idString.trim();
-        if (CatalogueClient.module(idString) == null) {
-            return InstallResult.failed();
+        String requested = idString == null ? "?" : idString.trim();
+        PluginEntity module = CatalogueClient.module(idString);
+        if (module == null) {
+            return PendingResult.reply(UpmKeys.INSTALL_FAILED);
         }
-        String version = versionOrNull;
         CatalogueClient.Version metadata;
-        if (version == null) {
+        if (versionOrNull == null) {
             List<CatalogueClient.Version> versions = CatalogueClient.versions(idString, level);
             if (versions == null) {
-                return InstallResult.failed();
+                return PendingResult.reply(UpmKeys.INSTALL_FAILED);
             }
             metadata = CatalogueClient.newest(versions);
             if (metadata == null) {
-                return InstallResult.refused(InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION, requested, level,
-                        floor, level);
+                return PendingResult.reply(UpmKeys.INSTALL_REFUSED_NO_COMPATIBLE_VERSION, string("module", requested),
+                        number("level", level), number("floor", floor), number("max", level));
             }
-            version = metadata.version();
         } else {
-            metadata = CatalogueClient.version(idString, version.trim());
+            metadata = CatalogueClient.version(idString, versionOrNull.trim());
             if (metadata == null) {
-                return InstallResult.failed();
+                return PendingResult.reply(UpmKeys.INSTALL_FAILED);
             }
             Integer moduleLevel = metadata.apiLevel();
             if (moduleLevel != null && !ModuleApiLevels.isInstallable(moduleLevel, floor, level)) {
-                return InstallResult.refused(InstallResult.Keys.REASON_VERSION_INCOMPATIBLE, requested,
-                        version.trim(), level, floor, level);
+                return PendingResult.reply(UpmKeys.INSTALL_REFUSED_VERSION_INCOMPATIBLE, string("module", requested),
+                        string("version", versionOrNull.trim()), number("level", level), number("floor", floor), number("max", level));
             }
-            version = version.trim();
         }
-        if (version == null || version.trim().isEmpty()) {
-            return InstallResult.failed();
-        }
-        return installVersion(metadata, idString, requested, version, level);
+        return installVersion(metadata, module, requested, level, sender);
     }
 
-    /**
-     * The second half of {@link #installReporting}: the version is known. A version the catalogue
-     * does not offer for public download is refused here, before any request, and every other
-     * version goes through the verified download.
-     */
-    private static InstallResult installVersion(CatalogueClient.Version metadata, String idString, String requested,
-                                                String version, int level) {
-        String fileName = installedJarName(idString, version);
-        if (fileName == null) {
-            return InstallResult.failed();
+    private static PendingResult installVersion(CatalogueClient.Version metadata, PluginEntity module, String requested,
+                                                int level, CommandSender sender) {
+        String version = metadata.version();
+        String identify = module.getIdentifyString() == null ? requested : module.getIdentifyString();
+        if (installedJarName(identify, version) == null) {
+            return PendingResult.reply(UpmKeys.INSTALL_FAILED);
         }
-        if (!metadata.downloadable()) {
-            if (licenceRequired(metadata)) {
-                LOGGER.log(Level.WARNING, FrameworkText.format(InstallResult.Keys.REASON_LICENCE_REQUIRED, requested,
-                        version));
-                return InstallResult.refused(InstallResult.Keys.REASON_LICENCE_REQUIRED, requested, version);
+        UltiTools framework = UltiTools.getInstance();
+        PluginManager manager = framework.getPluginManager();
+        String name = module.getName();
+        if (name == null || name.isBlank()) {
+            name = requested;
+        }
+        var download = new InstallStaging(metadata, requested, level);
+        var staged = transactions(framework).stageChange(identify, version, name, PendingChanges.Requester.from(sender),
+                () -> loadedSnapshot(manager), DEFAULT_MODULE_CODE_SOURCE, download, download,
+                recordedMainClass(manager == null ? null : manager.getModuleJarIndex()));
+        return installResult(name, staged, download.refusal);
+    }
+
+    private static List<UltiToolsPlugin> loadedSnapshot(PluginManager manager) {
+        // The manager takes an independent snapshot; staging must not iterate its backing list.
+        return manager == null ? List.of() : manager.getPluginList();
+    }
+
+    private static PendingResult installResult(String name, ModuleFileTransactions.StageResult staged,
+                                               PendingResult admissionRefusal) {
+        var result = PendingResult.builder();
+        appendPreviousFailure(result, name, staged);
+        if (admissionRefusal == null || UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING.equals(staged.getReasonKey())) {
+            appendStageReply(result, name, staged, true);
+        } else {
+            result.replies.addAll(admissionRefusal.replies());
+        }
+        return result.build();
+    }
+
+    /** The metadata and admission result of one install request, never shared across downloads. */
+    private static final class InstallStaging implements ModuleFileTransactions.Catalogue, ModuleFileTransactions.Downloader {
+        private final CatalogueClient.Version metadata;
+        private final String requested;
+        private final int level;
+        private PendingResult refusal;
+
+        private InstallStaging(CatalogueClient.Version metadata, String requested, int level) {
+            this.metadata = metadata;
+            this.requested = requested;
+            this.level = level;
+        }
+
+        @Override
+        public String latestVersion(String id) {
+            return metadata.version();
+        }
+
+        @Override
+        public String downloadLink(String id, String desiredVersion) {
+            String version = metadata.version();
+            if (!metadata.downloadable()) {
+                if (licenceRequired(metadata)) {
+                    LOGGER.log(Level.WARNING, FrameworkText.format(REASON_LICENCE_REQUIRED, requested,
+                            version));
+                    refusal = PendingResult.reply(UpmKeys.INSTALL_REFUSED_LICENCE_REQUIRED,
+                            string("module", requested), string("version", version));
+                } else {
+                    LOGGER.log(Level.WARNING, notAvailableLine(requested, version));
+                    refusal = PendingResult.reply(UpmKeys.INSTALL_FAILED);
+                }
+                return null;
             }
-            LOGGER.log(Level.WARNING, notAvailableLine(requested, version));
-            return InstallResult.failed();
+            String url = CatalogueClient.absoluteDownloadUrl(metadata.downloadUrl());
+            if (url == null) {
+                LOGGER.log(Level.SEVERE, foreignDownloadLine(requested, version));
+                refusal = PendingResult.reply(UpmKeys.INSTALL_FAILED);
+            }
+            return url;
         }
-        String url = CatalogueClient.absoluteDownloadUrl(metadata.downloadUrl());
-        if (url == null) {
-            // A catalogue pointing a download away from its own host is an attack signal, not an
-            // unavailable version: refused before any request, and said as what it is.
-            LOGGER.log(Level.SEVERE, foreignDownloadLine(requested, version));
-            return InstallResult.failed();
+
+        @Override
+        public void download(String url, String file, File folder) throws IOException {
+            refusal = downloadAndAdmit(url, metadata, file, folder, requested, metadata.version(), level);
+            if (refusal != null) {
+                throw new IOException("the downloaded module was not admitted");
+            }
         }
-        return downloadAndAdmit(url, metadata, fileName, requested, version, level);
+    }
+
+    /** @return the running framework's journal view */
+    @ApiStatus.Internal
+    public static PendingChanges pendingChanges() {
+        return new PendingChanges(transactions(UltiTools.getInstance()));
+    }
+
+    private static ModuleFileTransactions transactions(UltiTools framework) {
+        ModuleFileTransactions existing = framework.getModuleFileTransactions();
+        return existing != null ? existing : new ModuleFileTransactions(framework.getDataFolder());
     }
 
     /**
@@ -422,9 +506,8 @@ public class PluginInstallUtils {
      * and either renames it to {@code fileName} or deletes it. No partial file survives this method,
      * whatever happens.
      */
-    private static InstallResult downloadAndAdmit(String url, CatalogueClient.Version metadata, String fileName,
-                                                  String requested, String version, int level) {
-        File folder = modulesFolder();
+    private static PendingResult downloadAndAdmit(String url, CatalogueClient.Version metadata, String fileName,
+                                                 File folder, String requested, String version, int level) {
         File part = new File(folder, fileName + PART_SUFFIX);
         VerifiedDownload.Result download = VerifiedDownload.fetch(url, metadata.sha256(), metadata.sizeBytes(),
                 part.toPath());
@@ -434,12 +517,13 @@ public class PluginInstallUtils {
                     + download.kind() + "; expected sha256 " + VerifiedDownload.shortHash(metadata.sha256())
                     + ", size " + metadata.sizeBytes());
             return isIntegrityFailure(download.kind())
-                    ? InstallResult.refused(InstallResult.Keys.REASON_INTEGRITY_FAILED, requested, version)
-                    : InstallResult.failed();
+                    ? PendingResult.reply(UpmKeys.INSTALL_REFUSED_INTEGRITY_FAILED,
+                            string("module", requested), string("version", version))
+                    : PendingResult.reply(UpmKeys.INSTALL_FAILED);
         }
         boolean admitted = false;
         try {
-            InstallResult refusal = refusalOf(part, requested, version, level);
+            PendingResult refusal = refusalOf(part, requested, version, level);
             if (refusal != null) {
                 return refusal;
             }
@@ -447,14 +531,13 @@ public class PluginInstallUtils {
             admitted = true;
         } catch (IOException e) {
             LOGGER.log(Level.SEVERE, "Failed to install " + requested + " " + version + ": " + e.getMessage());
-            return InstallResult.failed();
+            return PendingResult.reply(UpmKeys.INSTALL_FAILED);
         } finally {
             if (!admitted) {
                 deleteQuietly(part);
             }
         }
-        forgetDeferredRemoval(fileName);
-        return InstallResult.installed(fileName);
+        return null;
     }
 
     /**
@@ -462,7 +545,7 @@ public class PluginInstallUtils {
      * version and the reason, and that nothing was installed. A withdrawn version, a transport
      * failure and an integrity failure cannot be mistaken for one another; every integrity failure
      * (hash, size, hash header, no usable hash or size) is the catalogue text
-     * {@link InstallResult.Keys#REASON_INTEGRITY_FAILED} in the server's language (plan 22-22), and
+     * {@link UpmKeys#INSTALL_REFUSED_INTEGRITY_FAILED} in the server's language (plan 22-22), and
      * which check failed is on the FINE line beside it. Only short hash prefixes may join it in the
      * local log, never a whole URL.
      *
@@ -473,7 +556,7 @@ public class PluginInstallUtils {
      */
     static String failureLine(String module, String version, VerifiedDownload.Kind kind) {
         if (isIntegrityFailure(kind)) {
-            return FrameworkText.format(InstallResult.Keys.REASON_INTEGRITY_FAILED, module, version);
+            return FrameworkText.format(REASON_INTEGRITY_FAILED, module, version);
         }
         switch (kind) {
             case NOT_AVAILABLE:
@@ -515,7 +598,7 @@ public class PluginInstallUtils {
 
     /**
      * The line for a version the catalogue lists but does not offer for another reason than a licence (that one is
-     * {@link InstallResult.Keys#REASON_LICENCE_REQUIRED}); it is not an integrity failure.
+     * {@link UpmKeys#INSTALL_REFUSED_LICENCE_REQUIRED}); it is not an integrity failure.
      */
     private static String notAvailableLine(String module, String version) {
         return module + " " + version + " is not available for download (no public download);"
@@ -528,19 +611,22 @@ public class PluginInstallUtils {
      * check of {@link SecurityPolicy#isValidModuleJar} does not apply to the {@code .part} name), then
      * the declared {@code api-version}.
      */
-    private static InstallResult refusalOf(File part, String requested, String version, int level) {
+    private static PendingResult refusalOf(File part, String requested, String version, int level) {
         int floor = ModuleApiLevels.MIN_INSTALLABLE_API_LEVEL;
         if (!isSafeArchive(part)) {
-            return InstallResult.refused(InstallResult.Keys.REASON_JAR_INVALID, requested, version);
+            return PendingResult.reply(UpmKeys.INSTALL_REFUSED_JAR_INVALID, string("module", requested),
+                    string("version", version));
         }
         String declared = PluginYmlReader.readFromJarFile(part).getApiVersion();
         if (declared == null || declared.trim().isEmpty()) {
-            return InstallResult.refused(InstallResult.Keys.REASON_JAR_NO_LEVEL, requested, version, level, floor, level);
+            return PendingResult.reply(UpmKeys.INSTALL_REFUSED_JAR_NO_LEVEL, string("module", requested),
+                    string("version", version), number("level", level), number("floor", floor), number("max", level));
         }
         Integer moduleLevel = ModuleApiLevels.parse(declared);
         if (moduleLevel == null || !ModuleApiLevels.isInstallable(moduleLevel, floor, level)) {
-            return InstallResult.refused(InstallResult.Keys.REASON_JAR_LEVEL_REFUSED, requested, version, declared.trim(),
-                    level, floor, level);
+            return PendingResult.reply(UpmKeys.INSTALL_REFUSED_JAR_LEVEL_REFUSED, string("module", requested),
+                    string("version", version), string("declared", declared.trim()),
+                    number("level", level), number("floor", floor), number("max", level));
         }
         return null;
     }
@@ -572,101 +658,121 @@ public class PluginInstallUtils {
         }
     }
 
-    /**
-     * What {@link #installReporting(String, String)} did. The reason strings are i18n keys
-     * (Chinese, with their English values in {@code lang/en.json}), formatted with
-     * {@link #getReasonArgs()}.
-     */
+    /** A command reply in the framework catalogue, with typed arguments. */
     @ApiStatus.Internal
-    public static final class InstallResult {
+    public record PendingReply(MessageKey key, List<Arg> args) {
+        public PendingReply {
+            args = List.copyOf(args);
+        }
+    }
 
-        private final boolean installed;
-        private final String fileName;
-        private final String reasonKey;
-        private final Object[] reasonArgs;
-
-        private InstallResult(boolean installed, String fileName, String reasonKey, Object[] reasonArgs) {
-            this.installed = installed;
-            this.fileName = fileName;
-            this.reasonKey = reasonKey;
-            this.reasonArgs = reasonArgs;
+    /** Result of an install, update, or uninstall request; no chat or logger dependencies. */
+    @ApiStatus.Internal
+    public record PendingResult(boolean queued, List<PendingReply> replies, String warningModule, ModuleContent content) {
+        public PendingResult {
+            replies = List.copyOf(replies);
         }
 
-        /**
-         * @param fileName the file written into the modules folder
-         * @return an install that succeeded
-         */
-        public static InstallResult installed(String fileName) {
-            return new InstallResult(true, fileName, null, new Object[0]);
-        }
+        static Builder builder() { return new Builder(); }
+        static PendingResult reply(MessageKey key, Arg... args) { return builder().add(key, args).build(); }
 
-        /** @return a failure with no reason to report beyond "install failed" */
-        public static InstallResult failed() {
-            return new InstallResult(false, null, null, new Object[0]);
-        }
+        static final class Builder {
+            private boolean queued;
+            private final List<PendingReply> replies = new ArrayList<>();
+            private String warningModule;
+            private ModuleContent content = ModuleContent.NONE;
 
-        /**
-         * @param reasonKey  one of the {@link Keys} reasons
-         * @param reasonArgs its arguments
-         * @return a refusal with its reason
-         */
-        public static InstallResult refused(String reasonKey, Object... reasonArgs) {
-            return new InstallResult(false, null, reasonKey, reasonArgs.clone());
-        }
-
-        /** @return whether the module was installed */
-        public boolean isInstalled() {
-            return installed;
-        }
-
-        /** @return the file written into the modules folder, or {@code null} */
-        public String getFileName() {
-            return fileName;
-        }
-
-        /** @return the reason's i18n key, or {@code null} */
-        public String getReasonKey() {
-            return reasonKey;
-        }
-
-        /** @return the reason's arguments, empty when there is no reason */
-        public Object[] getReasonArgs() {
-            return reasonArgs.clone();
-        }
-
-        /**
-         * The reasons, as catalogue keys (Chinese, with their English values in
-         * {@code lang/en.json}); a nested {@code Keys} holder like {@link ModuleFileTransactions.Keys}.
-         */
-        public static final class Keys {
-            /** Args: module, framework level, floor, framework level. */
-            public static final String REASON_NO_COMPATIBLE_VERSION =
-                    "无法安装 %s：云端没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
-            /** Args: module, version, framework level, floor, framework level. */
-            public static final String REASON_VERSION_INCOMPATIBLE =
-                    "无法安装 %s %s：该版本不能安装在本服务器上。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。模块目录没有任何改动。";
-            /** Args: module, version, declared api-version as written, framework level, floor, framework level. */
-            public static final String REASON_JAR_LEVEL_REFUSED =
-                    "已拒绝安装 %s %s：下载的 JAR 声明 api-version %s。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
-            /** Args: module, version, framework level, floor, framework level. */
-            public static final String REASON_JAR_NO_LEVEL =
-                    "已拒绝安装 %s %s：下载的 JAR 没有声明 api-version。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。下载的文件已删除，模块目录没有任何改动。";
-            /**
-             * Args: module, version. The download did not match the catalogue's SHA-256 or size (including the
-             * {@code X-Content-SHA256} header), or the catalogue entry named no usable hash or size (plan 22-18,
-             * 22-22); nothing was installed.
-             */
-            public static final String REASON_INTEGRITY_FAILED =
-                    "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。";
-            /** Args: module, version. The catalogue lists the version but offers it only with a licence (plan 22-18, 22-22). */
-            public static final String REASON_LICENCE_REQUIRED =
-                    "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。";
-            /** Args: module, version. */
-            public static final String REASON_JAR_INVALID =
-                    "已拒绝安装 %s %s：下载的文件不是有效的模块 JAR。下载的文件已删除，模块目录没有任何改动。";
-
-            private Keys() {
+            Builder queued() {
+                queued = true;
+                return this;
             }
+
+            Builder add(MessageKey key, Arg... args) {
+                replies.add(new PendingReply(key, List.of(args)));
+                return this;
+            }
+
+            Builder warning(String module, ModuleContent warning) {
+                warningModule = module;
+                content = warning;
+                return this;
+            }
+
+            Builder undetermined(List<String> files) {
+                if (!files.isEmpty()) {
+                    add(UpmKeys.UNINSTALL_UNDETERMINED, number("count", files.size()),
+                            string("files", String.join(", ", files)));
+                }
+                return this;
+            }
+
+            PendingResult build() { return new PendingResult(queued, replies, warningModule, content); }
+        }
+    }
+
+    /** Converts the shared stage result into update replies in the operator's language. */
+    @ApiStatus.Internal
+    public static PendingResult updateResult(String requested, ModuleFileTransactions.StageResult staged) {
+        var result = PendingResult.builder();
+        appendPreviousFailure(result, requested, staged);
+        appendStageReply(result, requested, staged, false);
+        return result.build();
+    }
+
+    private static void appendPreviousFailure(PendingResult.Builder result, String requested,
+                                              ModuleFileTransactions.StageResult staged) {
+        if (staged.getPreviousFailure() != null) {
+            result.add(UpmKeys.PENDING_PREVIOUS_FAILED, string("module", requested),
+                    string("failure", staged.getPreviousFailure()));
+        }
+    }
+
+    private static void appendStageReply(PendingResult.Builder result, String requested,
+                                         ModuleFileTransactions.StageResult staged, boolean install) {
+        Arg module = string("module", staged.getModuleName() != null ? staged.getModuleName() : requested);
+        Arg from = string("from", text(staged.getOldVersion()));
+        Arg to = string("to", text(staged.getNewVersion()));
+        Arg version = string("version", text(staged.getNewVersion()));
+        Arg old = string("old_version", text(staged.getPreviousVersion()));
+        switch (staged.getOutcome()) {
+            case QUEUED_INSTALL -> result.queued().add(UpmKeys.INSTALL_QUEUED, module, version);
+            case REPLACED_INSTALL -> result.queued().add(UpmKeys.INSTALL_REPLACED_INSTALL, module, old, version);
+            case STAGED -> {
+                if (install) {
+                    result.queued().add(UpmKeys.INSTALL_AS_UPDATE, module, from, version);
+                } else {
+                    result.queued().add(UpmKeys.UPDATE_STAGED, module, from, to);
+                }
+            }
+            case REPLACED_UPDATE -> result.queued().add(UpmKeys.UPDATE_REPLACED, module, old, from, to);
+            case CANCELLED_UNINSTALL -> result.queued().add(UpmKeys.INSTALL_CANCELLED_UNINSTALL, module, from, version);
+            case CANCELLED_UNINSTALL_SAME -> result.add(UpmKeys.INSTALL_CANCELLED_UNINSTALL_SAME, module, version);
+            case CANCELLED_UPDATE -> result.add(UpmKeys.INSTALL_CANCELLED_UPDATE_SAME, module, old, version);
+            case ALREADY_CURRENT -> result.add(UpmKeys.INSTALL_ALREADY_CURRENT, module, version);
+            case ALREADY_STAGED -> result.add(UpmKeys.PENDING_UNCHANGED, module, version);
+            case BUSY -> result.add(UpmKeys.PENDING_BUSY, module);
+            case UNFINISHED -> result.add(UpmKeys.PENDING_UNFINISHED, module);
+            case PENDING_UNINSTALL -> result.add(UpmKeys.UPDATE_PENDING_UNINSTALL, module);
+            case FAILED -> appendStageFailure(result, module, staged, install);
+            default -> throw new IllegalStateException("Unhandled staging outcome: " + staged.getOutcome());
+        }
+    }
+
+    private static void appendStageFailure(PendingResult.Builder result, Arg module,
+                                           ModuleFileTransactions.StageResult staged, boolean install) {
+        MessageKey reason = staged.getReasonKey();
+        Arg[] args = staged.getReasonArgs();
+        if (UpmKeys.REASON_NEEDS_OPERATOR.equals(reason)) {
+            result.add(UpmKeys.PENDING_NEEDS_OPERATOR, module, args[0], args[1]);
+        } else if (install && UpmKeys.REASON_RECORD_FAILED.equals(reason)) {
+            result.add(UpmKeys.INSTALL_NOT_RECORDED, module, args[0]);
+        } else if (UpmKeys.INSTALL_REFUSED_TARGET_EXISTS.equals(reason)) {
+            result.add(reason, args);
+        } else if (install && reason == null) {
+            result.add(UpmKeys.INSTALL_FAILED);
+        } else {
+            result.add(install ? UpmKeys.INSTALL_NOT_STAGED : UpmKeys.UPDATE_NOT_STAGED,
+                    module, Arg.text("reason", Text.of(reason, args)));
         }
     }
 
@@ -723,13 +829,17 @@ public class PluginInstallUtils {
      */
     @ApiStatus.Internal
     public static ModuleFileTransactions.StageResult stageUpdate(String identifyString) {
+        return stageUpdate(identifyString, null);
+    }
+
+    /** Requests a restart-time update as the supplied command sender. */
+    @ApiStatus.Internal
+    public static ModuleFileTransactions.StageResult stageUpdate(String identifyString, CommandSender sender) {
         UltiTools ultiTools = UltiTools.getInstance();
         PluginManager pluginManager = ultiTools.getPluginManager();
-        // The loaded modules are read by staging under its lock, not snapshotted here: an uninstall
-        // completing between a snapshot and the lock would be missed (Codex round 16).
         StagingCatalogue staging = new StagingCatalogue();
-        return new ModuleFileTransactions(ultiTools.getDataFolder()).stageUpdate(identifyString,
-                () -> new ArrayList<>(pluginManager.getPluginList()), DEFAULT_MODULE_CODE_SOURCE,
+        return transactions(ultiTools).stageChange(identifyString, null, null, PendingChanges.Requester.from(sender),
+                () -> loadedSnapshot(pluginManager), DEFAULT_MODULE_CODE_SOURCE,
                 staging, staging, recordedMainClass(pluginManager.getModuleJarIndex()));
     }
 
@@ -841,7 +951,7 @@ public class PluginInstallUtils {
      * @param index the loader's index, or {@code null}
      * @return the resolver
      */
-    static java.util.function.Function<UltiToolsPlugin, String> recordedMainClass(ModuleJarIndex index) {
+    static Function<UltiToolsPlugin, String> recordedMainClass(ModuleJarIndex index) {
         if (index == null) {
             return module -> null;
         }
@@ -849,20 +959,6 @@ public class PluginInstallUtils {
             String mainClass = index.mainClassOf(module);
             return index.jarsDeclaring(mainClass).isEmpty() ? null : mainClass;
         };
-    }
-
-    /**
-     * After an install wrote {@code fileName} into the modules folder, forgets a deletion an earlier
-     * uninstall recorded for that name, so the next start does not delete the new install (#518).
-     * A failure is logged: the install itself succeeded.
-     */
-    private static void forgetDeferredRemoval(String fileName) {
-        try {
-            new ModuleFileTransactions(UltiTools.getInstance().getDataFolder()).forgetDeferredRemoval(fileName);
-        } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "Installed " + fileName + ", but a deletion recorded for that name by an"
-                    + " earlier uninstall could not be cancelled; the next start may delete it", e);
-        }
     }
 
     /**
@@ -936,7 +1032,7 @@ public class PluginInstallUtils {
      */
     private static Presence probe(File file, java.nio.file.LinkOption... options) {
         try {
-            java.nio.file.attribute.BasicFileAttributes attributes = java.nio.file.Files.readAttributes(
+            java.nio.file.attribute.BasicFileAttributes attributes = Files.readAttributes(
                     file.toPath(), java.nio.file.attribute.BasicFileAttributes.class, options);
             if (attributes.isDirectory()) {
                 return Presence.DIRECTORY;
@@ -1165,438 +1261,122 @@ public class PluginInstallUtils {
         UNDETERMINED
     }
 
-    /**
-     * Raised when the uninstall refuses to act because its outcome would be undefined: two possible
-     * targets, or a target whose JAR another running module shares. A type the command owns, so the
-     * refusal is reported as itself rather than escaping as a command error.
-     */
+    /** A refusal with a localisable reply and an English log message. */
     @ApiStatus.Internal
     public static class UninstallRefusedException extends IllegalStateException {
         private static final long serialVersionUID = 1L;
+        private final transient MessageKey key;
+        private final transient Arg[] args;
 
-        private UninstallRefusedException(String message) {
+        UninstallRefusedException(String message, MessageKey key, Arg... args) {
             super(message);
+            this.key = key;
+            this.args = args.clone();
         }
     }
 
-    /**
-     * Raised when the name the operator typed could be more than one loaded module's, so the
-     * uninstall changed nothing.
-     */
+    /** Records the JARs a module will lose at the next start; never unloads it during this run. */
     @ApiStatus.Internal
-    public static final class AmbiguousModuleNameException extends UninstallRefusedException {
-        private static final long serialVersionUID = 1L;
-
-        private AmbiguousModuleNameException(String message) {
-            super(message);
-        }
+    public static PendingResult requestUninstall(String name, CommandSender requester) {
+        return requestUninstall(name, requester, DEFAULT_MODULE_CODE_SOURCE);
     }
 
-    /**
-     * Raised when a module's own unload threw. The module is still removed from the loaded modules
-     * and its JARs are still deleted; the JAR outcome is attached as suppressed.
-     *
-     * <p>A type of its own rather than a bare {@code IllegalStateException}, so the reply that says
-     * "its own unload threw" is structurally true rather than true of whatever else might raise one
-     * (gate 1, IN-06). It extends {@code IllegalStateException} because that is what the method's
-     * javadoc has documented since this branch began.
-     */
-    @ApiStatus.Internal
-    public static final class ModuleUnloadFailedException extends IllegalStateException {
-        private static final long serialVersionUID = 1L;
-
-        private ModuleUnloadFailedException(String message, Throwable cause) {
-            super(message, cause);
+    static PendingResult requestUninstall(String name, CommandSender requester,
+                                          Function<UltiToolsPlugin, File> codeSource) {
+        if (name == null || name.isBlank()) {
+            return PendingResult.reply(UpmKeys.UNINSTALL_NOT_FOUND);
         }
-
-        /**
-         * @param message what to tell the caller
-         * @param cause   what the module's unload threw
-         * @return the failure
-         */
-        public static ModuleUnloadFailedException of(String message, Throwable cause) {
-            return new ModuleUnloadFailedException(message, cause);
-        }
-    }
-
-    /**
-     * The entries an uninstall could not identify, carried on whatever failure leaves the method.
-     *
-     * <p>State C outlives every other outcome: a module whose unload threw, a JAR that could not
-     * be deleted and "nothing here could be identified as this module's" are all still true beside
-     * "these entries said nothing", and one of those entries may be the module's own JAR. An
-     * explicit type is what lets a caller tell this apart from the failures it travels with,
-     * rather than guessing from the shape of a {@code FileSystemException}.
-     */
-    @ApiStatus.Internal
-    public static final class UndeterminedEntriesException extends java.nio.file.FileSystemException {
-        private static final long serialVersionUID = 1L;
-
-        private final List<String> entries;
-
-        private UndeterminedEntriesException(List<String> entries) {
-            super(entries.isEmpty() ? null : entries.get(0), null,
-                    "could not be identified, so whether any of them is a JAR of this module is unknown");
-            this.entries = Collections.unmodifiableList(new ArrayList<>(entries));
-        }
-
-        /**
-         * @param entries the absolute paths of the entries whose identity could not be determined
-         * @return the carrier for them
-         */
-        public static UndeterminedEntriesException of(List<String> entries) {
-            return new UndeterminedEntriesException(entries);
-        }
-
-        /** @return the absolute paths of the entries whose identity could not be determined */
-        public List<String> entries() {
-            return entries;
-        }
-    }
-
-    /**
-     * The uninstall could not delete these JARs now -- the running server holds them open, or the
-     * folder is not writable -- and has recorded them, so the next start deletes them before any
-     * module loads (#518). A failure type of its own, so a caller tells the operator exactly that
-     * rather than asking them to delete a file they cannot delete while the server runs.
-     */
-    @ApiStatus.Internal
-    public static final class RemovalDeferredException extends java.nio.file.FileSystemException {
-        private static final long serialVersionUID = 1L;
-
-        private final List<String> deferredFiles;
-        private final String reason;
-
-        private RemovalDeferredException(List<String> deferredFiles, String reason) {
-            super(deferredFiles.isEmpty() ? null : deferredFiles.get(0), null,
-                    "could not be deleted now (" + reason + "); deleted at the next start, before modules load");
-            this.deferredFiles = Collections.unmodifiableList(new ArrayList<>(deferredFiles));
-            this.reason = reason;
-            // The uninstall's failure contract (#501): getFile() names the first JAR and one
-            // suppressed FileSystemException names each further one, so a caller walking the chain
-            // is told every file.
-            for (int i = 1; i < deferredFiles.size(); i++) {
-                addSuppressed(new java.nio.file.FileSystemException(deferredFiles.get(i), null, getReason()));
+        return ModuleFileTransactions.underLock(() -> {
+            try {
+                return requestUninstallLocked(name.trim(), requester, codeSource);
+            } catch (UninstallRefusedException refusal) {
+                return PendingResult.reply(refusal.key, refusal.args);
+            } catch (SecurityException denied) {
+                return PendingResult.reply(UpmKeys.UNINSTALL_NOT_RECORDED, string("module", name),
+                        string("error", text(denied.getMessage())));
             }
-        }
-
-        /**
-         * @param deferredFiles the absolute paths of the JARs recorded for deletion at the next start
-         * @param reason        why they could not be deleted now
-         * @return the failure
-         */
-        public static RemovalDeferredException of(List<String> deferredFiles, String reason) {
-            return new RemovalDeferredException(deferredFiles, reason);
-        }
-
-        /** @return the absolute paths of the JARs recorded for deletion at the next start */
-        public List<String> deferredFiles() {
-            return deferredFiles;
-        }
-
-        /** @return why they could not be deleted now */
-        public String getReason() {
-            return reason;
-        }
+        });
     }
 
-    /**
-     * The uninstall could not delete these JARs now and could not record their deletion for the next
-     * start either (#518). Attached, suppressed, to the {@code FileSystemException} that names the
-     * JARs still on disk, with the record failure as its cause.
-     *
-     * <p>Deliberately not a {@code FileSystemException}: every {@code FileSystemException} in an
-     * uninstall's failure names a module JAR still on disk, which is what lets a caller walking the
-     * chain tell the operator which files to delete by hand. The record failure names a transaction
-     * record, its folder or a temporary file under the server root's {@code .ultikits} folder,
-     * beside the credential store -- none of them a module JAR, and none for the operator to delete.
-     * An explicit type, like {@link UndeterminedEntriesException}, is what keeps it apart.
-     */
-    @ApiStatus.Internal
-    public static final class RemovalNotRecordedException extends IOException {
-        private static final long serialVersionUID = 1L;
-
-        private final String reason;
-
-        private RemovalNotRecordedException(Throwable recordFailure, String reason) {
-            super("the deletion could not be recorded for the next start either (" + reason + ")", recordFailure);
-            this.reason = reason;
-        }
-
-        /**
-         * @param recordFailure what writing the record threw; kept as the cause
-         * @return the carrier for it
-         */
-        public static RemovalNotRecordedException of(Throwable recordFailure) {
-            java.util.Objects.requireNonNull(recordFailure, "recordFailure");
-            String message = recordFailure.getMessage();
-            String reason = recordFailure.getClass().getSimpleName() + (message == null ? "" : ": " + message);
-            return new RemovalNotRecordedException(recordFailure, reason);
-        }
-
-        /** @return why the deletion could not be recorded: the record failure's type and message */
-        public String getReason() {
-            return reason;
-        }
-    }
-
-    /**
-     * Attaches the undetermined entries to a failure on its way out, when there are any.
-     *
-     * @param failure the failure leaving the uninstall
-     * @param entries the absolute paths of the entries nothing could identify
-     * @param <T>     the failure's type
-     * @return {@code failure}
-     */
-    private static <T extends Throwable> T carrying(T failure, List<String> entries) {
-        if (!entries.isEmpty()) {
-            failure.addSuppressed(new UndeterminedEntriesException(entries));
-        }
-        return failure;
-    }
-
-    /**
-     * What an uninstall did, and what it could not determine.
-     *
-     * <p>The entries it could not classify are not failures -- an entry nothing can be read from
-     * must never stop an uninstall -- but they are not nothing either: if one of them is a copy of
-     * this module, it loads again at the next start. Reporting them is what lets the operator
-     * decide, which is not the same as guessing on their behalf.
-     */
-    @ApiStatus.Internal
-    public static final class UninstallReport {
-        private final boolean jarsDeleted;
-        private final List<String> undetermined;
-        private final List<String> deleted;
-
-        private UninstallReport(boolean jarsDeleted, List<String> undetermined, List<String> deleted) {
-            this.jarsDeleted = jarsDeleted;
-            this.undetermined = Collections.unmodifiableList(new ArrayList<>(undetermined));
-            this.deleted = Collections.unmodifiableList(new ArrayList<>(deleted));
-        }
-
-        /**
-         * @param jarsDeleted  whether every entry identified as this module's was deleted
-         * @param undetermined the absolute paths of the entries nothing could identify
-         * @return the report, with no files named as deleted
-         */
-        public static UninstallReport of(boolean jarsDeleted, List<String> undetermined) {
-            return new UninstallReport(jarsDeleted, undetermined, Collections.<String>emptyList());
-        }
-
-        /**
-         * @param jarsDeleted  whether every entry identified as this module's was deleted
-         * @param undetermined the absolute paths of the entries nothing could identify
-         * @param deleted      the absolute paths of the entries that were deleted
-         * @return the report
-         */
-        public static UninstallReport of(boolean jarsDeleted, List<String> undetermined, List<String> deleted) {
-            return new UninstallReport(jarsDeleted, undetermined, deleted);
-        }
-
-        /** @return whether every entry identified as this module's was deleted */
-        public boolean jarsDeleted() {
-            return jarsDeleted;
-        }
-
-        /** @return the absolute paths of the entries whose identity could not be determined */
-        public List<String> undeterminedEntries() {
-            return undetermined;
-        }
-
-        /**
-         * The files this uninstall deleted, by absolute path.
-         *
-         * <p>Named so the operator can see what was removed: every other outcome names paths, and
-         * a success that named none is what made a deletion outside the operator's request
-         * invisible (gate 1, IN-12 and BL-02).
-         *
-         * @return the deleted paths
-         */
-        public List<String> deletedFiles() {
-            return deleted;
-        }
-    }
-
-    /**
-     * Uninstalls a module: unloads every loaded instance of it and deletes its JARs.
-     *
-     * <p>Unloading goes through {@link PluginManager#unregister(UltiToolsPlugin)}, the framework's
-     * one full unload path (#503). Calling {@code plugin.unregisterSelf()} directly, as this method
-     * used to, skipped everything {@code unregister} does first -- cancelling the module's
-     * {@code @Scheduled} tasks, releasing its {@code @PlayerCache} beans, its tab-completion
-     * completers, its EventBus handlers and its conditional-bean records, then closing its context.
-     * A module "uninstalled" that way kept running its repeating tasks until the next restart.
-     *
-     * <p>What it reports is what happened on disk (#501). The old implementation ignored
-     * {@link File#delete()}'s result and returned {@code true} whether or not the JAR was removed,
-     * and it stopped at the first matching JAR, so a second JAR of the same module loaded it again
-     * on restart. Now every entry the modules folder holds is placed in exactly one
-     * {@link EntryState}, and what the method returns or throws says which of those it met.
-     *
-     * <p>As of 6.3.0 an entry is this module's also when its {@code plugin.yml} {@code main:} names
-     * the module's main class, the entry the module loader loads by (#516), and an uninstall that
-     * goes ahead also cancels any update of the module waiting for the next start
-     * ({@link #uninstallPluginReporting(String, List)}).
-     *
-     * @param name the module's runtime name -- which need not be what its JAR's {@code plugin.yml}
-     *     declares, since {@code UltiToolsPlugin(String pluginName, ...)} takes it as an argument
-     *     and reads no metadata
-     * @return {@code true} when every entry identified as this module's was deleted; {@code false}
-     *     when none was and no loaded module of that name was unloaded either -- the "check the
-     *     spelling" case
-     * @throws java.nio.file.AccessDeniedException when the modules folder exists but could not be
-     *     listed, so nothing can be concluded about what it holds
-     * @throws java.nio.file.FileSystemException when an entry identified as this module's could not
-     *     be deleted, naming every one still on disk: every {@code FileSystemException} in the failure,
-     *     including those attached as suppressed, names a module JAR still on disk. When the deletion
-     *     could not be recorded for the next start either, that failure travels attached as a
-     *     {@link RemovalNotRecordedException}, which is not a {@code FileSystemException}
-     * @throws java.nio.file.NoSuchFileException when a loaded module was unloaded but nothing in
-     *     the folder could be identified as its JAR, which is not a spelling mistake
-     * @throws IllegalStateException when the module's own unload threw. The module is still removed
-     *     from the loaded modules and its JARs are still deleted: {@code unregister} has closed its
-     *     context by then, and keeping the JAR would bring back on restart a module the operator
-     *     asked to remove. A JAR failure is attached as suppressed.
-     * @throws IOException if the modules folder cannot be read
-     */
-    public static boolean uninstallPlugin(String name) throws IOException {
-        return uninstallPluginReporting(name).jarsDeleted();
-    }
-
-    /**
-     * {@link #uninstallPlugin(String)}, also reporting the entries whose identity could not be
-     * determined -- the ones a caller has to tell the operator about, because one of them may be a
-     * copy of this module that loads again at the next start.
-     *
-     * @param name the module's runtime name
-     * @return what the uninstall did and what it could not determine
-     * @throws IOException exactly as {@link #uninstallPlugin(String)} documents
-     */
-    @ApiStatus.Internal
-    public static UninstallReport uninstallPluginReporting(String name) throws IOException {
-        return uninstallPluginReporting(name, new ArrayList<>());
-    }
-
-    /**
-     * {@link #uninstallPluginReporting(String)}, also collecting the versions of the module's
-     * updates it cancelled.
-     *
-     * <p>An uninstall that goes ahead -- whatever happens to its JARs afterwards, including a modules
-     * folder that cannot be listed -- cancels every update of the module still waiting for the next
-     * start and any download of one still running, so the next start does not install the module
-     * again (#505). It matches them on the identity it resolved before touching the folder: the
-     * identify-strings and runtime names of the instances it unloaded and their JARs, never only the
-     * name it was given (round-10 review). A refused uninstall changed nothing and cancels nothing.
-     *
-     * @param name             the module's runtime name, or a name a JAR of it declares
-     * @param cancelledUpdates collects the version of each staged update cancelled; filled on every
-     *                         outcome, including a thrown one, except a refusal
-     * @return what the uninstall did and what it could not determine
-     * @throws IOException exactly as {@link #uninstallPlugin(String)} documents
-     */
-    @ApiStatus.Internal
-    public static UninstallReport uninstallPluginReporting(String name, List<String> cancelledUpdates)
-            throws IOException {
-        return uninstallPluginReporting(name, DEFAULT_MODULE_CODE_SOURCE, cancelledUpdates);
-    }
-
-    /**
-     * {@link #uninstallPluginReporting(String)} with the code-source resolver to ask, which is how
-     * a test substitutes one without production code carrying a writable field (gate 1, IN-02).
-     *
-     * @param name       the module's runtime name, or a name a JAR of it declares
-     * @param codeSource how to ask a loaded module which JAR it came from
-     * @return what the uninstall did and what it could not determine
-     * @throws IOException exactly as {@link #uninstallPlugin(String)} documents
-     */
-    @ApiStatus.Internal
-    static UninstallReport uninstallPluginReporting(String name,
-                                                    java.util.function.Function<UltiToolsPlugin, File> codeSource)
-            throws IOException {
-        return uninstallPluginReporting(name, codeSource, new ArrayList<>());
-    }
-
-    /**
-     * {@link #uninstallPluginReporting(String, List)} with the code-source resolver to ask.
-     *
-     * @param name             the module's runtime name, or a name a JAR of it declares
-     * @param codeSource       how to ask a loaded module which JAR it came from
-     * @param cancelledUpdates collects the version of each staged update cancelled
-     * @return what the uninstall did and what it could not determine
-     * @throws IOException exactly as {@link #uninstallPlugin(String)} documents
-     */
-    static UninstallReport uninstallPluginReporting(String name,
-                                                    java.util.function.Function<UltiToolsPlugin, File> codeSource,
-                                                    List<String> cancelledUpdates) throws IOException {
-        if (name == null || name.trim().isEmpty()) {
-            throw new IllegalArgumentException("A module name is required to uninstall one");
-        }
-        PluginManager pluginManager = UltiTools.getInstance().getPluginManager();
-        ModuleIdentity identity = resolveIdentity(name, pluginManager, codeSource);
+    private static PendingResult requestUninstallLocked(String name, CommandSender sender,
+                                                        Function<UltiToolsPlugin, File> codeSource) {
+        UltiTools frame = UltiTools.getInstance();
+        ModuleIdentity identity = resolveIdentity(name, frame.getPluginManager(), codeSource);
         refuseIfAnotherModuleSharesTheJar(identity);
-        refuseIfAnUpdateIsHeldForTheOperator(identity);
-        Throwable unloadFailure = unloadEvery(identity, pluginManager);
-        boolean refused = false;
+        File folder = modulesFolder();
+        File[] entries;
         try {
-            return removeJarsAndReport(name, identity, unloadFailure);
-        } catch (UninstallRefusedException refusal) {
-            // The invariant at the delete fired: nothing was deleted, so nothing is cancelled either.
-            refused = true;
-            throw refusal;
-        } finally {
-            if (!refused) {
-                // Every other outcome, thrown or returned: the module is unloaded, and an update of it
-                // must not bring it back at the next start (round-10 review).
-                cancelUpdatesOf(identity, cancelledUpdates);
-            }
+            entries = ModuleFileTransactions.sortedByName(folder.listFiles());
+        } catch (SecurityException denied) {
+            return PendingResult.reply(UpmKeys.UNINSTALL_FOLDER_UNREADABLE, string("folder", folder.getAbsolutePath()));
         }
+        if (entries == null && probe(folder) != Presence.ABSENT) {
+            return PendingResult.reply(UpmKeys.UNINSTALL_FOLDER_UNREADABLE, string("folder", folder.getAbsolutePath()));
+        }
+        var candidates = matchRemovalCandidates(entries, identity);
+        List<File> files = candidates.files();
+        refuseToTouchAnotherModulesJar(identity, files);
+        identity.noteCandidates(files);
+        return queueResolvedRemoval(transactions(frame), identity, candidates, name, sender);
     }
 
-    /**
-     * The JAR half of the uninstall and its report, after the modules were unloaded.
-     *
-     * @param name          the operator's argument
-     * @param identity      the resolved identity
-     * @param unloadFailure what unloading threw, or {@code null}
-     * @return the report
-     * @throws IOException as documented on {@link #uninstallPlugin(String)}
-     */
-    private static UninstallReport removeJarsAndReport(String name, ModuleIdentity identity, Throwable unloadFailure)
-            throws IOException {
-        UninstallReport report;
-        try {
-            report = deleteModuleJars(identity);
-        } catch (IOException jarFailure) {
-            // The JAR failure already carries the undetermined entries; see deleteModuleJars.
-            if (unloadFailure != null) {
-                throw unloadFailed(name, unloadFailure, jarFailure);
+    private record RemovalCandidates(List<File> files, List<String> undetermined) { }
+
+    private static RemovalCandidates matchRemovalCandidates(File[] entries, ModuleIdentity identity) {
+        var files = new ArrayList<File>();
+        var undetermined = new ArrayList<String>();
+        if (entries != null) {
+            for (File entry : entries) {
+                switch (classify(entry, identity)) {
+                    case THIS_MODULES -> files.add(entry);
+                    case UNDETERMINED -> undetermined.add(entry.getAbsolutePath());
+                    default -> { /* Leave unrelated entries alone. */ }
+                }
             }
-            throw jarFailure;
         }
-        if (unloadFailure != null) {
-            throw carrying(unloadFailed(name, unloadFailure, null), report.undeterminedEntries());
-        }
-        return report;
+        return new RemovalCandidates(files, undetermined);
     }
 
-    /**
-     * Cancels the uninstalled module's staged updates and running update downloads, matched on the
-     * identity this uninstall resolved (round-10 review). Never throws: it runs on every exit of
-     * the uninstall, and a failure here must not replace the outcome being reported.
-     *
-     * @param identity         the resolved identity
-     * @param cancelledUpdates collects the versions cancelled
-     */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException") // must not replace the uninstall's own outcome
-    private static void cancelUpdatesOf(ModuleIdentity identity, List<String> cancelledUpdates) {
-        try {
-            cancelledUpdates.addAll(new ModuleFileTransactions(UltiTools.getInstance().getDataFolder())
-                    .cancelStagedUpdates(identity.removedModule()));
-        } catch (RuntimeException e) {
-            LOGGER.log(Level.WARNING, "Uninstalling module " + identity.requested
-                    + ": an update of it waiting for the next start could not be cancelled", e);
+    private static PendingResult queueResolvedRemoval(ModuleFileTransactions journal, ModuleIdentity identity,
+                                                      RemovalCandidates candidates, String name, CommandSender sender) {
+        List<File> files = candidates.files();
+        UltiToolsPlugin running = identity.loaded.isEmpty() ? null : identity.loaded.getFirst();
+        RemovalTarget target = removalTarget(running, files);
+        String key = target.key();
+        String module = target.module();
+        if (identity.recorded.bystanderIds.contains(normalizeIdentifyString(key))) {
+            key = null;
         }
+        return journal.queueRemoval(module == null || module.isBlank() ? name : module, key,
+                running == null ? null : running.getVersion(), identity.removedModule(), files, candidates.undetermined(),
+                sender, running != null);
+    }
+
+    private record RemovalTarget(String module, String key) { }
+
+    private static RemovalTarget removalTarget(UltiToolsPlugin running, List<File> files) {
+        if (running != null) {
+            return new RemovalTarget(running.getPluginName(), running.getIdentifyString());
+        }
+        if (files.isEmpty()) {
+            return new RemovalTarget(null, null);
+        }
+        File file = files.getFirst();
+        return new RemovalTarget(PluginYmlReader.readFromJarFile(file).getName(), readIdentifyString(file));
+    }
+
+    private static String readIdentifyString(File file) {
+        try (var jar = new java.util.jar.JarFile(file)) {
+            var descriptor = jar.getJarEntry("plugin.yml");
+            if (descriptor != null) {
+                try (var reader = new InputStreamReader(jar.getInputStream(descriptor), java.nio.charset.StandardCharsets.UTF_8)) {
+                    return YamlConfiguration.loadConfiguration(reader).getString("identify-string");
+                }
+            }
+        } catch (IOException | SecurityException unreadable) {
+            LOGGER.log(Level.FINE, "Could not read the module identifier from " + file.getName(), unreadable);
+        }
+        return null;
     }
 
     /**
@@ -1632,6 +1412,11 @@ public class PluginInstallUtils {
         if (byRuntimeName.isEmpty()) {
             refuseIfAmbiguous(requested, byDeclaredName);
         }
+        if (chosen.isEmpty()) {
+            String key = normalizeIdentifyString(requested);
+            chosen = others.stream().filter(module -> key.equals(normalizeIdentifyString(module.getIdentifyString()))).toList();
+            refuseIfAmbiguous(requested, chosen);
+        }
         loaded.addAll(chosen);
         others.removeAll(chosen);
     }
@@ -1648,10 +1433,10 @@ public class PluginInstallUtils {
             names.add(candidate.getPluginName());
         }
         if (names.size() > 1) {
-            throw new AmbiguousModuleNameException("Refusing to uninstall " + requested
-                    + ": it is not the runtime name of any loaded module, and the JARs of "
-                    + String.join(", ", names) + " all declare it. Name one of those instead;"
-                    + " nothing was changed.");
+            String matching = String.join(", ", names);
+            throw new UninstallRefusedException("Refusing to uninstall " + requested
+                    + ": it was declared by more than one module (" + matching + "); nothing was changed.",
+                    UpmKeys.UNINSTALL_REFUSED_AMBIGUOUS, string("module", requested), string("modules", matching));
         }
     }
 
@@ -1672,21 +1457,19 @@ public class PluginInstallUtils {
         private final Set<String> keys;
         private final Set<String> bystanderJars;
         private final Map<String, String> bystanderOf;
-        private final boolean resolvedFromLoadedModule;
         private final boolean someCodeSourceUnknown;
         /** What the module loader and the loaded instances recorded about the targets (#516, round 10). */
         private final Recorded recorded;
         /**
          * The file names of the entries the folder scan identified as this module's, collected as
-         * {@link #deleteModuleJars} finds them -- deleted, recorded for deletion, or not deletable.
+         * the directory scan identifies them for the pending removal.
          */
         private final List<String> removedJarNames = new ArrayList<>();
 
         @SuppressWarnings("PMD.ExcessiveParameterList") // one resolution's result, built in one place
         private ModuleIdentity(String requested, List<UltiToolsPlugin> loaded, Set<String> ownJars,
                                Set<String> keys, Recorded recorded, Set<String> bystanderJars,
-                               Map<String, String> bystanderOf, boolean resolvedFromLoadedModule,
-                               boolean someCodeSourceUnknown) {
+                               Map<String, String> bystanderOf, boolean someCodeSourceUnknown) {
             this.requested = requested;
             this.recorded = recorded;
             this.loaded = loaded;
@@ -1694,7 +1477,6 @@ public class PluginInstallUtils {
             this.keys = keys;
             this.bystanderJars = bystanderJars;
             this.bystanderOf = bystanderOf;
-            this.resolvedFromLoadedModule = resolvedFromLoadedModule;
             this.someCodeSourceUnknown = someCodeSourceUnknown;
         }
 
@@ -1703,7 +1485,7 @@ public class PluginInstallUtils {
          *
          * @param jars the entries
          */
-        private void noteRemoved(List<File> jars) {
+        private void noteCandidates(List<File> jars) {
             for (File jar : jars) {
                 removedJarNames.add(jar.getName());
             }
@@ -1724,7 +1506,11 @@ public class PluginInstallUtils {
             names.addAll(recorded.runtimeNames);
             List<String> jarNames = new ArrayList<>(recorded.jarNames);
             jarNames.addAll(removedJarNames);
-            return new ModuleFileTransactions.RemovedModule(recorded.identifyStrings, names, jarNames);
+            List<String> ids = new ArrayList<>(recorded.identifyStrings);
+            if (!recorded.bystanderIds.contains(normalizeIdentifyString(requested))) {
+                ids.add(requested);
+            }
+            return new ModuleFileTransactions.RemovedModule(ids, names, jarNames);
         }
     }
 
@@ -1745,13 +1531,15 @@ public class PluginInstallUtils {
         private final List<String> identifyStrings;
         /** The targets' runtime names, less any another loaded module also answers to. */
         private final Set<String> runtimeNames;
+        private final Set<String> bystanderIds;
 
         private Recorded(Set<String> mainClasses, Set<String> jarNames, List<String> identifyStrings,
-                         Set<String> runtimeNames) {
+                         Set<String> runtimeNames, Set<String> bystanderIds) {
             this.mainClasses = mainClasses;
             this.jarNames = jarNames;
             this.identifyStrings = identifyStrings;
             this.runtimeNames = runtimeNames;
+            this.bystanderIds = bystanderIds;
         }
     }
 
@@ -1776,7 +1564,7 @@ public class PluginInstallUtils {
      * @return the resolved identity
      */
     private static ModuleIdentity resolveIdentity(String requested, PluginManager pluginManager,
-                                                  java.util.function.Function<UltiToolsPlugin, File> codeSource) {
+                                                  Function<UltiToolsPlugin, File> codeSource) {
         List<UltiToolsPlugin> loaded = new ArrayList<>();
         List<UltiToolsPlugin> others = new ArrayList<>();
         Map<UltiToolsPlugin, File> jars = new java.util.LinkedHashMap<>();
@@ -1814,7 +1602,7 @@ public class PluginInstallUtils {
         // code source, and matching other entries on a name a running module answers to would take
         // that module's JAR (gate 1, BL-02).
         return new ModuleIdentity(requested, loaded, ownJars, keys, recordedOf(pluginManager, loaded, others, ownJars),
-                bystanderJars, bystanderOf, !loaded.isEmpty(), unknown.get());
+                bystanderJars, bystanderOf, unknown.get());
     }
 
     /**
@@ -1860,11 +1648,13 @@ public class PluginInstallUtils {
             addNormalized(identifyStrings, plugin.getIdentifyString());
             runtimeNames.add(plugin.getPluginName());
         }
+        Set<String> bystanderIds = new java.util.HashSet<>();
         for (UltiToolsPlugin plugin : others) {
-            identifyStrings.remove(normalizeIdentifyString(plugin.getIdentifyString()));
+            addNormalized(bystanderIds, plugin.getIdentifyString());
             runtimeNames.remove(plugin.getPluginName());
         }
-        return new Recorded(mainClasses, jarNames, new ArrayList<>(identifyStrings), runtimeNames);
+        identifyStrings.removeAll(bystanderIds);
+        return new Recorded(mainClasses, jarNames, new ArrayList<>(identifyStrings), runtimeNames, bystanderIds);
     }
 
     /** Adds {@code identifyString}, normalised, unless it is absent or blank. */
@@ -1915,7 +1705,7 @@ public class PluginInstallUtils {
      * @param someUnknown   set when some instance's code source could not be determined at all
      */
     private static void readLoadedModules(PluginManager pluginManager,
-                                          java.util.function.Function<UltiToolsPlugin, File> codeSource,
+                                          Function<UltiToolsPlugin, File> codeSource,
                                           List<UltiToolsPlugin> others, Map<UltiToolsPlugin, File> jars,
                                           Map<UltiToolsPlugin, String> declared,
                                           java.util.concurrent.atomic.AtomicBoolean someUnknown) {
@@ -1936,250 +1726,14 @@ public class PluginInstallUtils {
         }
     }
 
-    /**
-     * Unloads every matching module through the framework's full unload path, which also delists it.
-     *
-     * <p>A module that throws while unloading is collected rather than propagated: it is already
-     * unloaded and its context already closed, so the rest of the uninstall goes ahead and the
-     * failure is reported together with the JAR outcome. It leaves the plugin list either way,
-     * because a listed module whose context is closed would be reported as still loaded.
-     *
-     * @param identity      the resolved identity, whose loaded instances are unloaded
-     * @param pluginManager the manager that owns the plugin list
-     * @return the first unload failure with any later one attached, or {@code null}
-     */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException") // one module's failure must not stop the uninstall
-    private static Throwable unloadEvery(ModuleIdentity identity, PluginManager pluginManager) {
-        Throwable unloadFailure = null;
-        for (UltiToolsPlugin plugin : identity.loaded) {
-            try {
-                pluginManager.unregister(plugin);
-            } catch (VirtualMachineError fatal) {
-                // Its own clause, before the one below: collecting an OutOfMemoryError and going on
-                // to delete files is not a recovery, so it leaves untouched.
-                throw fatal;
-            } catch (Exception | Error e) {
-                // ThreadDeath is collected here too, deliberately, though its historical contract
-                // asks a catcher to rethrow it. Measured on the JDK this builds against (21.0.12):
-                // Thread.stop() throws UnsupportedOperationException, so the platform cannot deliver
-                // a ThreadDeath at all and "this thread is terminating" would be false. The stronger
-                // reason is the guarantee this command exists to make: if it were rethrown, a module
-                // could abort its own uninstall by throwing ThreadDeath from its unload hook, and a
-                // module must not be able to refuse its own removal.
-                // Everything else a module's unload throws is that module's failure, which this
-                // uninstall reports and carries on from -- unregisterSelf() collects and rethrows
-                // whatever its steps throw, a NoClassDefFoundError from half-loaded classes and an
-                // AssertionError from a module's own check alike (gate 1, IN-07 and its correction).
-                LOGGER.log(Level.SEVERE, "Module " + identity.requested + " threw while unloading for uninstall; "
-                        + "it has been removed from the loaded modules", e);
-                unloadFailure = firstOf(unloadFailure, e);
-            }
-            // No delisting here: unregister() removes the module from the plugin list in its own
-            // finally block (#507), whether or not the unload threw, and getPluginList() is an
-            // unmodifiable snapshot that no caller can remove from.
-        }
-        return unloadFailure;
-    }
-
-    /**
-     * The first failure, with any later one attached to it.
-     *
-     * <p>Combining two failures has more ways to fail than it looks. {@code addSuppressed} rejects
-     * a throwable suppressing itself, which a module reusing a static sentinel produces from two
-     * instances -- and that {@code IllegalArgumentException} would escape past every handler,
-     * abandoning the uninstall with the modules delisted and their JARs still on disk. It also
-     * rejects {@code null}. Attaching the same object twice is not an error but says nothing, so it
-     * is skipped too.
-     *
-     * @param first the failure collected so far, or {@code null}
-     * @param next  the failure to attach
-     * @return the failure to carry on with
-     */
-    // Reference comparison is the point, not a mistake: addSuppressed rejects the same object,
-    // and two distinct failures that happen to be equal must both be attached, so equals() here
-    // would discard the second one.
-    @SuppressWarnings("PMD.CompareObjectsWithEquals")
-    private static Throwable firstOf(Throwable first, Throwable next) {
-        if (next == null) {
-            return first;
-        }
-        if (first == null) {
-            return next;
-        }
-        if (first == next || alreadyAttached(first, next)) {
-            return first;
-        }
-        first.addSuppressed(next);
-        return first;
-    }
-
-    /** Whether {@code candidate} is already among {@code failure}'s suppressed throwables. */
-    // Reference comparison for the same reason as in firstOf: the question is whether this very
-    // object is already attached, not whether an equal one is.
-    @SuppressWarnings("PMD.CompareObjectsWithEquals")
-    private static boolean alreadyAttached(Throwable failure, Throwable candidate) {
-        for (Throwable suppressed : failure.getSuppressed()) {
-            if (suppressed == candidate) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * The JAR half of {@link #uninstallPlugin(String)}: deletes every entry identified as this
-     * module's -- not only the first one listed, since a second JAR loads the module again on
-     * restart -- and reports the entries nothing could be read from.
-     *
-     * @param identity the resolved identity: which instances were loaded, which JARs they came
-     *                 from, which keys other entries are matched against, and which JARs belong to
-     *                 other loaded modules
-     * @return what was deleted and what could not be identified
-     * @throws IOException as documented on {@link #uninstallPlugin(String)}
-     */
-    private static UninstallReport deleteModuleJars(ModuleIdentity identity) throws IOException {
-        File folder = modulesFolder();
-        File[] listFiles;
-        try {
-            // In file-name order (#476), so the report names the entries in the same order every time.
-            listFiles = ModuleFileTransactions.sortedByName(folder.listFiles());
-        } catch (SecurityException denied) {
-            // A policy that denies reading the folder throws rather than answering null, and the
-            // module has already been unloaded by now: this is state D, not an abort.
-            LOGGER.log(Level.SEVERE, "Uninstalling module " + identity.requested + ": the modules folder "
-                    + folder.getAbsolutePath() + " could not be listed", denied);
-            java.nio.file.AccessDeniedException failure = modulesFolderUnlistable(folder);
-            failure.initCause(denied);
-            throw failure;
-        }
-        if (listFiles == null) {
-            if (probe(folder) != Presence.ABSENT) {
-                // State D. Something is there, or the question could not be answered -- either way
-                // "no JAR of this module is here" is a claim nothing supports, and the module's JAR
-                // may be sitting in it ready to load again.
-                LOGGER.severe("Uninstalling module " + identity.requested + ": the modules folder "
-                        + folder.getAbsolutePath() + " could not be listed");
-                throw modulesFolderUnlistable(folder);
-            }
-            return new UninstallReport(noJarFound(folder, identity, Collections.<String>emptyList()),
-                    Collections.<String>emptyList(), Collections.<String>emptyList());
-        }
-        List<File> matchingJars = new ArrayList<>();
-        List<File> undetermined = new ArrayList<>();
-        for (File file : listFiles) {
-            EntryState state = classify(file, identity);
-            if (state == EntryState.THIS_MODULES) {
-                matchingJars.add(file);
-            } else if (state == EntryState.UNDETERMINED) {
-                undetermined.add(file);
-            }
-        }
-        List<String> undeterminedPaths = absolutePathsOf(undetermined);
-        if (!undetermined.isEmpty()) {
-            LOGGER.warning("Uninstalling module " + identity.requested + ": " + undetermined.size() + " entr(ies) in "
-                    + folder.getAbsolutePath() + " could not be identified, so whether any of them is a copy of"
-                    + " this module is unknown: " + String.join(", ", undeterminedPaths));
-        }
-        if (matchingJars.isEmpty()) {
-            // State C outlives this answer: "nothing here could be identified as this module's" is
-            // true, and so is "these entries said nothing", and one of them may be the module's own
-            // JAR. Both facts travel together rather than the first discarding the second.
-            return new UninstallReport(noJarFound(folder, identity, undeterminedPaths),
-                    undeterminedPaths, Collections.<String>emptyList());
-        }
-        refuseToTouchAnotherModulesJar(identity, matchingJars);
-        identity.noteRemoved(matchingJars);
-        List<String> deleted = absolutePathsOf(matchingJars);
-        try {
-            deleteAllOrThrow(matchingJars);
-        } catch (java.nio.file.FileSystemException deleteFailure) {
-            throw carrying(deferOrFail(identity, matchingJars, deleteFailure), undeterminedPaths);
-        }
-        return new UninstallReport(true, undeterminedPaths, deleted);
-    }
-
-    /**
-     * A JAR that could not be deleted now is recorded so the next start deletes it before any
-     * module loads (#518). On Windows the shared module class loader keeps every module JAR open
-     * while the server runs, so "delete it by hand" is an instruction the operator cannot follow;
-     * the record is what makes the uninstall complete. Only when the record itself cannot be
-     * written does the original failure leave as it was, with the record failure attached inside a
-     * {@link RemovalNotRecordedException}: every {@code FileSystemException} in the failure still
-     * names a module JAR still on disk, never a record or temporary file under {@code .ultikits}.
-     *
-     * @param identity      the resolved identity
-     * @param jars          the JARs the uninstall tried to delete
-     * @param deleteFailure what the deletion threw
-     * @return the failure to report: {@link RemovalDeferredException} when the deletion was recorded;
-     *     otherwise {@code deleteFailure}, with a {@link RemovalNotRecordedException} attached when
-     *     the record could not be written
-     */
-    @SuppressWarnings("PMD.AvoidCatchingGenericException") // a record that cannot be written leaves the original failure
-    private static java.nio.file.FileSystemException deferOrFail(ModuleIdentity identity, List<File> jars,
-                                                                 java.nio.file.FileSystemException deleteFailure) {
-        List<File> remaining = new ArrayList<>();
-        for (File jar : jars) {
-            if (probe(jar) != Presence.ABSENT) {
-                remaining.add(jar);
-            }
-        }
-        if (remaining.isEmpty()) {
-            return deleteFailure;
-        }
-        Throwable cause = deleteFailure.getCause() == null ? deleteFailure : deleteFailure.getCause();
-        String reason = cause.getClass().getSimpleName()
-                + (cause.getMessage() == null ? "" : ": " + cause.getMessage());
-        try {
-            new ModuleFileTransactions(UltiTools.getInstance().getDataFolder())
-                    .recordDeferredRemoval(identity.requested, remaining);
-        } catch (IOException | RuntimeException recordFailure) {
-            LOGGER.log(Level.WARNING, "Uninstalling module " + identity.requested
-                    + ": the deletion could not be recorded for the next start either", recordFailure);
-            deleteFailure.addSuppressed(RemovalNotRecordedException.of(recordFailure));
-            return deleteFailure;
-        }
-        LOGGER.warning("Uninstalling module " + identity.requested + ": " + absolutePathsOf(remaining)
-                + " could not be deleted now (" + reason + "); recorded, and deleted at the next start"
-                + " before modules load");
-        RemovalDeferredException deferred = RemovalDeferredException.of(absolutePathsOf(remaining), reason);
-        deferred.initCause(deleteFailure);
-        return deferred;
-    }
-
-    /**
-     * Refuses before anything is unloaded when a JAR this uninstall would act on is also the JAR
-     * another running module was loaded from.
-     *
-     * <p>Two module classes can be packaged in one archive and registered separately, so one
-     * physical JAR can be two loaded modules' code source. Deleting it would take a module the
-     * operator did not name, and unloading the target first would change the loaded state for an
-     * uninstall whose outcome is already known to be undefined -- so nothing happens at all. The
-     * invariant at the delete stays as well, for whatever future path reaches one by another route.
-     *
-     * @param identity the resolved identity
-     */
-    /**
-     * Refuses, before anything is unloaded, while an update of the module is held for the operator:
-     * its record names a file the transaction could not identify, and the uninstall's cancellation
-     * would otherwise have to delete that record's folder, files included (foreign-file rule).
-     */
-    private static void refuseIfAnUpdateIsHeldForTheOperator(ModuleIdentity identity) {
-        List<String> held = new ModuleFileTransactions(UltiTools.getInstance().getDataFolder())
-                .heldForOperator(identity.removedModule());
-        if (!held.isEmpty()) {
-            throw new UninstallRefusedException("Refusing to uninstall " + identity.requested
-                    + ": an update of it is on hold for the operator (" + String.join(", ", held)
-                    + "); resolve it as the start-up log says, then delete that record and the folder of the"
-                    + " same name. Nothing was unloaded or deleted");
-        }
-    }
-
     private static void refuseIfAnotherModuleSharesTheJar(ModuleIdentity identity) {
         for (String jar : identity.ownJars) {
             if (identity.bystanderJars.contains(jar)) {
                 throw new UninstallRefusedException("Refusing to uninstall " + identity.requested + ": "
                         + jar + " is also the JAR module " + identity.bystanderOf.get(jar)
-                        + " is loaded from, so nothing was unloaded or deleted");
+                        + " is loaded from; nothing was changed.", UpmKeys.UNINSTALL_REFUSED_SHARED_JAR,
+                        string("module", identity.requested), string("file", jar),
+                        string("other", text(identity.bystanderOf.get(jar))));
             }
         }
     }
@@ -2202,7 +1756,9 @@ public class PluginInstallUtils {
             if (identity.bystanderJars.contains(path)) {
                 throw new UninstallRefusedException("Refusing to uninstall " + identity.requested + ": "
                         + file.getAbsolutePath() + " is the JAR module " + identity.bystanderOf.get(path)
-                        + " is loaded from, and nothing was deleted");
+                        + " is loaded from; nothing was changed.", UpmKeys.UNINSTALL_REFUSED_SHARED_JAR,
+                        string("module", identity.requested), string("file", file.getAbsolutePath()),
+                        string("other", text(identity.bystanderOf.get(path))));
             }
         }
     }
@@ -2217,13 +1773,6 @@ public class PluginInstallUtils {
      */
     private static File modulesFolder() {
         return ModuleFileTransactions.modulesFolder(UltiTools.getInstance().getDataFolder());
-    }
-
-    /** The state-D failure: the folder is there, and what it holds is unknown. */
-    private static java.nio.file.AccessDeniedException modulesFolderUnlistable(File folder) {
-        return new java.nio.file.AccessDeniedException(folder.getAbsolutePath(), null,
-                "the modules folder exists but could not be listed, so nothing can be concluded"
-                        + " about the JARs it holds");
     }
 
     /**
@@ -2285,88 +1834,5 @@ public class PluginInstallUtils {
     private static EntryState byDeclaredMainClass(ModuleIdentity identity) {
         return identity.someCodeSourceUnknown ? EntryState.UNDETERMINED : EntryState.THIS_MODULES;
     }
-
-    /** The absolute paths of {@code files}, in the order given. */
-    private static List<String> absolutePathsOf(List<File> files) {
-        List<String> paths = new ArrayList<>();
-        for (File file : files) {
-            paths.add(file.getAbsolutePath());
-        }
-        return paths;
-    }
-
-    /**
-     * Deletes every file, and reports the ones that are still there.
-     *
-     * @param files the JARs to delete
-     * @throws java.nio.file.FileSystemException naming the first JAR that survived, with any other
-     *     attached as suppressed -- each one of them loads the module again on restart
-     */
-    private static void deleteAllOrThrow(List<File> files) throws java.nio.file.FileSystemException {
-        java.nio.file.FileSystemException failure = null;
-        for (File file : files) {
-            try {
-                // A file already gone is the outcome asked for, not a failure: reporting it would
-                // name a JAR that is no longer on disk.
-                java.nio.file.Files.deleteIfExists(file.toPath());
-            } catch (IOException | SecurityException e) {
-                // SecurityException too: a policy that allows reading a module JAR and denies
-                // deleting it throws an unchecked exception, which would otherwise escape past the
-                // rest of this loop and leave the operator with no report of the JAR still there.
-                java.nio.file.FileSystemException fileFailure =
-                        new java.nio.file.FileSystemException(file.getAbsolutePath(), null, e.getMessage());
-                fileFailure.initCause(e);
-                if (failure == null) {
-                    failure = fileFailure;
-                } else {
-                    failure.addSuppressed(fileFailure);
-                }
-            }
-        }
-        if (failure != null) {
-            throw failure;
-        }
-    }
-
-    /**
-     * What "nothing here could be identified as this module's" means, which depends on whether one
-     * was loaded.
-     *
-     * @param folder       the modules folder
-     * @param identity     the resolved identity
-     * @param undetermined the entries nothing could identify, attached to the failure
-     * @return {@code false}, the "no such module" answer, when nothing was unloaded either
-     * @throws java.nio.file.NoSuchFileException when a module was unloaded and its JAR is missing,
-     *     with one suppressed entry per undetermined file
-     */
-    private static boolean noJarFound(File folder, ModuleIdentity identity, List<String> undetermined)
-            throws java.nio.file.NoSuchFileException {
-        if (identity.resolvedFromLoadedModule) {
-            // The module was loaded from somewhere, so "check the spelling" is the wrong answer:
-            // the operator needs to know the module is unloaded and no JAR of it was identified.
-            throw carrying(new java.nio.file.NoSuchFileException(folder.getAbsolutePath(), null,
-                    "no module JAR identified as " + identity.requested), undetermined);
-        }
-        return false;
-    }
-
-    /**
-     * The failure raised when a module's own unload threw, after the uninstall went ahead anyway.
-     *
-     * @param name          the module's runtime name
-     * @param unloadFailure what its unload threw
-     * @param jarFailure    the JAR outcome to attach, or {@code null} when the JARs were deleted
-     * @return the exception to throw
-     */
-    private static ModuleUnloadFailedException unloadFailed(String name, Throwable unloadFailure,
-                                                           IOException jarFailure) {
-        ModuleUnloadFailedException failure = new ModuleUnloadFailedException(
-                "Module " + name + " was removed from the loaded modules, but its unload threw", unloadFailure);
-        if (jarFailure != null) {
-            failure.addSuppressed(jarFailure);
-        }
-        return failure;
-    }
-
 
 }

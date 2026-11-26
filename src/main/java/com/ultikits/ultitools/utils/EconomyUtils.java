@@ -467,7 +467,7 @@ public final class EconomyUtils {
      * <p>
      * [Rule 1 fix, Codex P2, PR #463]: {@code pluginManager.getPluginList()} is
      * {@code PluginManager}'s live, unsynchronized {@code ArrayList} (returned directly by its
-     * {@code @Getter}) — {@code PluginInstallUtils#uninstallPlugin} mutates that same list via
+     * {@code @Getter}) — {@code PluginManager#unregister} mutates that same list via
      * {@code .remove(...)}, reachable from a normal {@code /upm uninstall} command. A module
      * calling this facade from an async command or {@code @Scheduled(async = true)} task can race
      * that mutation and see {@link ConcurrentModificationException} instead of a fallback value.

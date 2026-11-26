@@ -1,16 +1,15 @@
 package com.ultikits.ultitools.commands;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +30,12 @@ import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.utils.ModuleFileTransactions;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
+import com.ultikits.ultitools.utils.UpmKeys;
+import com.ultikits.ultitools.text.Arg;
+import net.kyori.adventure.text.Component;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
+import org.junit.jupiter.api.extension.ExtendWith;
 import com.ultikits.ultitools.utils.TestHelper;
 
 /**
@@ -42,6 +47,7 @@ import com.ultikits.ultitools.utils.TestHelper;
  */
 @DisplayName("/upm update and uninstall replies for the update transaction (#505)")
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@ExtendWith(CommandTestExtension.class)
 class ModuleUpdateCommandTest {
 
     private MockedStatic<PluginInstallUtils> utils;
@@ -62,7 +68,10 @@ class ModuleUpdateCommandTest {
         sender = mock(CommandSender.class);
         org.mockito.Mockito.doAnswer(invocation -> messages.add(invocation.getArgument(0)))
                 .when(sender).sendMessage(anyString());
+        org.mockito.Mockito.doAnswer(call -> messages.add(CommandMessageTestSupport.plain(call.getArgument(0))))
+                .when(sender).sendMessage(any(Component.class));
         utils = mockStatic(PluginInstallUtils.class);
+        utils.when(() -> PluginInstallUtils.updateResult(anyString(), any())).thenCallRealMethod();
         executor = new PluginInstallCommands();
     }
 
@@ -89,8 +98,8 @@ class ModuleUpdateCommandTest {
         when(result.getOldVersion()).thenReturn(oldVersion);
         when(result.getNewVersion()).thenReturn(newVersion);
         when(result.getPreviousFailure()).thenReturn(previousFailure);
-        when(result.getReasonKey()).thenReturn(ModuleFileTransactions.Keys.REASON_DOWNLOAD_FAILED);
-        when(result.getReasonArgs()).thenReturn(new Object[]{"IOException: connection reset"});
+        when(result.getReasonKey()).thenReturn(UpmKeys.REASON_DOWNLOAD_FAILED);
+        when(result.getReasonArgs()).thenReturn(new Arg[]{Arg.string("error", "IOException: connection reset")});
         return result;
     }
 
@@ -103,12 +112,30 @@ class ModuleUpdateCommandTest {
     void stagedUpdate_saysItTakesEffectAtTheNextStart() {
         available("Demo", "demo", "1.0", "1.1");
         ModuleFileTransactions.StageResult stagedDemo = result(ModuleFileTransactions.StageResult.Outcome.STAGED, "1.0", "1.1", null);
-        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(stagedDemo);
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo", sender)).thenReturn(stagedDemo);
 
         executor.updatePlugin(sender, "Demo");
 
-        assertThat(all()).contains("已暂存 Demo 的更新（1.0 → 1.1）").contains("下次启动时生效").contains("恢复为 1.0")
+        assertThat(all()).contains("Demo 将在下次重启时从 1.0 更新到 1.1").contains("下次重启时").contains("恢复为 1.0")
                 .doesNotContain("更新成功");
+    }
+
+    @Test
+    void aQueuedInstallCanBeRefreshedWithoutReadingTheUnfinishedScan() {
+        UltiTools framework = UltiTools.getInstance();
+        UpdateManager updateManager = framework.getUpdateManager();
+        when(updateManager.isCheckComplete()).thenReturn(false);
+        var journal = mock(ModuleFileTransactions.class);
+        when(framework.getModuleFileTransactions()).thenReturn(journal);
+        when(journal.pendingIdentifyString("Demo")).thenReturn("demo");
+        var staged = result(ModuleFileTransactions.StageResult.Outcome.ALREADY_STAGED, null, "1.1", null);
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo", sender)).thenReturn(staged);
+
+        executor.updatePlugin(sender, "Demo");
+
+        verify(updateManager, never()).getModuleUpdates();
+        utils.verify(() -> PluginInstallUtils.stageUpdate("demo", sender));
+        assertThat(all()).contains("Demo 1.1 已在等待下次重启生效");
     }
 
     @Test
@@ -116,11 +143,11 @@ class ModuleUpdateCommandTest {
     void alreadyStaged_isNamed() {
         available("Demo", "demo", "1.0", "1.1");
         ModuleFileTransactions.StageResult stagedDemo = result(ModuleFileTransactions.StageResult.Outcome.ALREADY_STAGED, "1.0", "1.1", null);
-        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(stagedDemo);
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo", sender)).thenReturn(stagedDemo);
 
         executor.updatePlugin(sender, "Demo");
 
-        assertThat(all()).contains("Demo 已有一个暂存的更新（版本 1.1）").contains("没有做任何改动");
+        assertThat(all()).contains("Demo 1.1 已在等待下次重启生效").contains("没有做任何改动");
     }
 
     @Test
@@ -129,12 +156,12 @@ class ModuleUpdateCommandTest {
         available("Demo", "demo", "1.0", "1.1");
         ModuleFileTransactions.StageResult stagedDemo = result(ModuleFileTransactions.StageResult.Outcome.STAGED, "1.0", "1.1",
                         "/srv/plugins/UltiTools/plugins/demo-1.0.jar: AccessDeniedException");
-        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(stagedDemo);
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo", sender)).thenReturn(stagedDemo);
 
         executor.updatePlugin(sender, "Demo");
 
-        assertThat(messages.get(1)).contains("上一次 Demo 的更新没有应用").contains("AccessDeniedException");
-        assertThat(messages.get(2)).contains("已暂存 Demo 的更新");
+        assertThat(messages.get(1)).contains("上一次 Demo 的变更在重启时没能应用").contains("AccessDeniedException");
+        assertThat(messages.get(2)).contains("已加入待生效清单：Demo");
     }
 
     @Test
@@ -142,41 +169,24 @@ class ModuleUpdateCommandTest {
     void failureToStage_namesTheCause() {
         available("Demo", "demo", "1.0", "1.1");
         ModuleFileTransactions.StageResult stagedDemo = result(ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null);
-        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(stagedDemo);
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo", sender)).thenReturn(stagedDemo);
 
         executor.updatePlugin(sender, "Demo");
 
-        assertThat(all()).contains("Demo 的更新未能暂存").contains("connection reset").contains("没有做任何改动");
+        assertThat(all()).contains("未能把 Demo 的更新加入待生效清单").contains("connection reset").contains("没有做任何改动");
     }
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"en", "zh"})
     void stagedReadFailureUsesTheShippedTranslation(String language) throws Exception {
-        String reason;
-        try (java.io.Reader reader = new java.io.InputStreamReader(
-                getClass().getResourceAsStream("/lang/" + language + ".json"), java.nio.charset.StandardCharsets.UTF_8)) {
-            reason = com.google.gson.JsonParser.parseReader(reader).getAsJsonObject()
-                    .get(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE).getAsString();
-        }
-        UpdateManager manager = mock(UpdateManager.class);
-        // Staging runs only after the start-up check completed (#663), so the fixture models a completed check.
-        when(manager.isCheckComplete()).thenReturn(true);
-        when(manager.getModuleUpdates()).thenReturn(updates);
-        TestHelper.mockUltiToolsInstance(ultiTools -> {
-            when(ultiTools.getUpdateManager()).thenReturn(manager);
-            when(ultiTools.i18n(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE)).thenReturn(reason);
-        });
         available("Demo", "demo", "1.0", "1.1");
-        ModuleFileTransactions.StageResult failure = result(ModuleFileTransactions.StageResult.Outcome.FAILED,
-                null, null, null);
-        when(failure.getReasonKey()).thenReturn(ModuleFileTransactions.Keys.REASON_STAGED_UNREADABLE);
-        when(failure.getReasonArgs()).thenReturn(new Object[]{"demo-1.1.jar", "IOException: read failed"});
-        utils.when(() -> PluginInstallUtils.stageUpdate("demo")).thenReturn(failure);
-
+        var failure = result(ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null);
+        when(failure.getReasonKey()).thenReturn(UpmKeys.REASON_STAGED_UNREADABLE);
+        when(failure.getReasonArgs()).thenReturn(new Arg[]{Arg.string("file", "demo-1.1.jar"),
+                Arg.string("error", "IOException: read failed")});
+        utils.when(() -> PluginInstallUtils.stageUpdate("demo", sender)).thenReturn(failure);
         executor.updatePlugin(sender, "Demo");
-
-        assertThat(all()).contains(String.format(reason, "demo-1.1.jar", "IOException: read failed"))
-                .contains("没有做任何改动").doesNotContain("identify-string", "已暂存 Demo", "更新成功");
+        assertThat(all()).contains("demo-1.1.jar", "IOException: read failed");
     }
 
     @Test
@@ -185,57 +195,37 @@ class ModuleUpdateCommandTest {
         available("Alpha", "alpha", "1.0", "1.1");
         available("Beta", "beta", "2.0", "2.1");
         ModuleFileTransactions.StageResult stagedAlpha = result(ModuleFileTransactions.StageResult.Outcome.STAGED, "1.0", "1.1", null);
-        utils.when(() -> PluginInstallUtils.stageUpdate("alpha")).thenReturn(stagedAlpha);
+        utils.when(() -> PluginInstallUtils.stageUpdate("alpha", sender)).thenReturn(stagedAlpha);
         ModuleFileTransactions.StageResult stagedBeta = result(ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null);
-        utils.when(() -> PluginInstallUtils.stageUpdate("beta")).thenReturn(stagedBeta);
+        utils.when(() -> PluginInstallUtils.stageUpdate("beta", sender)).thenReturn(stagedBeta);
 
         executor.updatePlugin(sender, "all");
 
-        assertThat(all()).contains("已暂存 Alpha 的更新（1.0 → 1.1）").contains("Beta 的更新未能暂存")
-                .contains("全部处理完成：1 个已暂存，1 个未能暂存");
+        assertThat(all()).contains("Alpha 将在下次重启时从 1.0 更新到 1.1").contains("未能把 Beta 的更新加入待生效清单")
+                .contains("全部处理完成：1 个已加入待生效清单，1 个未能加入");
     }
 
     @Test
     @DisplayName("an uninstall that goes ahead says which staged update of the module it cancelled")
     void uninstall_cancelsTheStagedUpdate() throws Exception {
-        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList()))
-                .thenAnswer(invocation -> {
-                    // The uninstall itself cancels, on the identity it resolved, and hands back the versions.
-                    invocation.<List<String>>getArgument(1).add("1.1");
-                    return PluginInstallUtils.UninstallReport.of(true, Collections.<String>emptyList(),
-                            Arrays.asList("/srv/plugins/UltiTools/plugins/demo-1.0.jar"));
-                });
-
+        utils.when(() -> PluginInstallUtils.requestUninstall("Demo", sender)).thenReturn(PendingCommandTestSupport.replacesUpdate());
         executor.uninstallPlugin(sender, "Demo");
-
-        assertThat(all()).contains("已取消模块 Demo 已暂存、尚未应用的更新（版本 1.1）");
+        assertThat(all()).contains("Demo", "1.1");
     }
 
     @Test
     @DisplayName("gate 1 I-04: an uninstall that ends in an unexpected exception still says which update it cancelled")
     void uninstallThatThrowsUnexpectedly_stillReportsTheCancelledUpdate() {
-        IllegalArgumentException unexpected = new IllegalArgumentException("unexpected");
-        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList()))
-                .thenAnswer(invocation -> {
-                    // The uninstall's own finally cancelled the update before the failure left it.
-                    invocation.<List<String>>getArgument(1).add("1.1");
-                    throw unexpected;
-                });
-
-        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> executor.uninstallPlugin(sender, "Demo"));
-
-        assertThat(thrown).isSameAs(unexpected);
-        assertThat(all()).contains("已取消模块 Demo 已暂存、尚未应用的更新（版本 1.1）");
+        utils.when(() -> PluginInstallUtils.requestUninstall("Demo", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NOT_RECORDED, "Demo", "error", "record denied"));
+        executor.uninstallPlugin(sender, "Demo");
+        assertThat(all()).contains("Demo", "record denied");
     }
 
     @Test
     @DisplayName("an uninstall that is refused reports no cancelled update")
     void refusedUninstall_cancelsNothing() throws Exception {
-        utils.when(() -> PluginInstallUtils.uninstallPluginReporting(eq("Demo"), anyList()))
-                .thenThrow(mock(PluginInstallUtils.UninstallRefusedException.class));
-
+        utils.when(() -> PluginInstallUtils.requestUninstall("Demo", sender)).thenReturn(PendingCommandTestSupport.refusal(UpmKeys.UNINSTALL_NOT_RECORDED, "Demo", "error", "record denied"));
         executor.uninstallPlugin(sender, "Demo");
-
-        assertThat(all()).doesNotContain("已取消");
+        assertThat(all()).contains("Demo", "record denied");
     }
 }

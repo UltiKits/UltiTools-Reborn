@@ -359,9 +359,9 @@ class CatalogueContractConformanceTest {
         serve(MODULE_ROUTE, 200, "fixtures/moduleGet/response/valid/anonymous.json");
         String fixture = "fixtures/versionGet/response/valid/license-required.json";
         serve(VERSION_ROUTE, 200, fixture);
-        PluginInstallUtils.InstallResult legacy = PluginInstallUtils.installReporting(MODULE, VERSION);
-        assertThat(legacy.isInstalled()).isFalse();
-        assertThat(legacy.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE);
+        PluginInstallUtils.PendingResult legacy = PluginInstallUtils.installReporting(MODULE, VERSION);
+        assertThat(legacy.queued()).isFalse();
+        assertThat(legacy.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_VERSION_INCOMPATIBLE);
         assertThat(anyDownloadRequested()).isFalse();
 
         // Derive a current-level policy response explicitly; never edit the frozen protocol fixture.
@@ -369,9 +369,9 @@ class CatalogueContractConformanceTest {
         current.getAsJsonObject("data").addProperty("apiLevel", 700);
         assertThat(schemaAccepts("schemas/versionGet.response.200.schema.json", current)).isTrue();
         stub.serveVendored(VERSION_ROUTE, 200, current.toString());
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting(MODULE, VERSION);
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_LICENCE_REQUIRED);
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting(MODULE, VERSION);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_LICENCE_REQUIRED);
         assertThat(anyDownloadRequested()).isFalse();
     }
 
@@ -725,8 +725,8 @@ class CatalogueContractConformanceTest {
             default:
                 throw new AssertionError("unexpected handling for " + fixture);
         }
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting(MODULE, VERSION);
-        assertThat(result.isInstalled()).isFalse();
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting(MODULE, VERSION);
+        assertThat(result.queued()).isFalse();
         assertThat(anyDownloadRequested()).as("no download requested for " + fixture).isFalse();
     }
 

@@ -460,7 +460,7 @@ class ModuleUpdateRecoveryTest {
             }
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_LEFTOVER_BACKUP);
+            assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_LEFTOVER_BACKUP);
             assertThat(new File(backups, "demo-1.0.jar")).exists();
         }
 
@@ -651,7 +651,7 @@ class ModuleUpdateRecoveryTest {
             ModuleFileTransactions.StageResult result = stage(transactions());
 
             assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.FAILED);
-            assertThat(result.getReasonKey()).isEqualTo(ModuleFileTransactions.Keys.REASON_LEFTOVER_BACKUP);
+            assertThat(result.getReasonKey()).isEqualTo(UpmKeys.REASON_LEFTOVER_BACKUP);
             assertThat(treeOf(transactions)).anyMatch(p -> p.endsWith("/backup/demo-1.0.jar"))
                     .noneMatch(p -> p.endsWith(".json"));
         }

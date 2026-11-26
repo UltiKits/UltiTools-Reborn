@@ -1,14 +1,15 @@
 package com.ultikits.ultitools.commands;
 
-import java.io.IOException;
-import java.nio.file.FileSystemException;
-import java.nio.file.NoSuchFileException;
+import static com.ultikits.ultitools.text.Arg.number;
+import static com.ultikits.ultitools.text.Arg.string;
+
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -19,6 +20,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.abstracts.command.BaseCommandExecutor;
+import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.annotations.command.CmdExecutor;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
 import com.ultikits.ultitools.annotations.command.CmdParam;
@@ -30,7 +32,14 @@ import com.ultikits.ultitools.entities.UpdateInfo;
 import com.ultikits.ultitools.manager.ModuleApiLevels;
 import com.ultikits.ultitools.manager.UpdateManager;
 import com.ultikits.ultitools.utils.MessageUtils;
-import com.ultikits.ultitools.utils.ModuleFileTransactions;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Text;
+import com.ultikits.ultitools.utils.ModuleContent;
+import com.ultikits.ultitools.utils.ModuleFileTransactions.StartOutcome;
+import com.ultikits.ultitools.utils.PendingChanges;
+import com.ultikits.ultitools.utils.PendingChanges.PendingChange;
+import com.ultikits.ultitools.utils.UpmKeys;
 import com.ultikits.ultitools.utils.PluginInstallUtils;
 import com.ultikits.ultitools.utils.VersionLookup;
 
@@ -164,10 +173,14 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * @param message the message to send
      */
     static void sendStringMessage(CommandSender sender, String message) {
+        replyOnServerThread(() -> sender.sendMessage(message));
+    }
+
+    private static void replyOnServerThread(Runnable reply) {
         if (Bukkit.isPrimaryThread()) {
-            sender.sendMessage(message);
+            reply.run();
         } else {
-            Bukkit.getScheduler().runTask(UltiTools.getInstance(), () -> sender.sendMessage(message));
+            Bukkit.getScheduler().runTask(UltiTools.getInstance(), reply);
         }
     }
 
@@ -180,28 +193,13 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     @CmdMapping(format = "install <plugin> <version>")
     @RunAsync
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin, @CmdParam("version") String version) {
-        sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, version));
+        sendResult(sender, PluginInstallUtils.installReporting(plugin, version, sender));
     }
 
     @CmdMapping(format = "install <plugin>")
     @RunAsync
     public void installPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
-        sendInstallResult(sender, PluginInstallUtils.installReporting(plugin, null));
-    }
-
-    /**
-     * Tells the operator what an install did: the success line, the reason when the module's API
-     * level was why it was not installed (plan 18-40), or the bare failure line otherwise.
-     */
-    private static void sendInstallResult(CommandSender sender, PluginInstallUtils.InstallResult result) {
-        if (result.isInstalled()) {
-            sendStringMessage(sender, ChatColor.GREEN + UltiTools.getInstance().i18n("安装成功！请重启服务器！请务必删除旧版本模块！"));
-        } else if (result.getReasonKey() != null) {
-            sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(result.getReasonKey()),
-                    result.getReasonArgs()));
-        } else {
-            sendStringMessage(sender, ChatColor.RED + UltiTools.getInstance().i18n("安装失败！"));
-        }
+        sendResult(sender, PluginInstallUtils.installReporting(plugin, null, sender));
     }
 
     @CmdMapping(format = "versions <plugin>")
@@ -249,287 +247,169 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     }
 
     // Deliberately not @RunAsync, though it opens one archive per entry of the modules folder:
-    // PluginManager#unregister must run on the main thread, and the synchronous path is what carries
-    // the entries that could not be identified out of every exit, including the failing ones. With
-    // a handful of modules the scan costs a fraction of a tick (gate 1, IN-12).
+    // A removal request only does local file I/O and hashing, so it stays on the calling thread.
     @CmdMapping(format = "uninstall <plugin>")
     public void uninstallPlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String plugin) {
-        // The uninstall itself cancels any update of the module still waiting for the next start, on
-        // every outcome but a refusal, matched on the identity it resolved (#505, round-10 review);
-        // this collects the versions so the reply can say so.
-        List<String> cancelledUpdates = new ArrayList<>();
-        try {
-            PluginInstallUtils.UninstallReport report = PluginInstallUtils.uninstallPluginReporting(plugin,
-                    cancelledUpdates);
-            if (report.jarsDeleted()) {
-                // uninstallPlugin returns true only after every JAR identified as the module's is
-                // deleted (#501), so there is nothing left for the operator to remove by hand. The
-                // files are named: every other outcome names paths, and a success that named none
-                // is what made a deletion outside the operator's request invisible (gate 1, IN-12).
-                sender.sendMessage(ChatColor.GREEN + String.format(
-                        UltiTools.getInstance().i18n("卸载完成：已删除识别为该模块的 JAR 文件：%s"),
-                        report.deletedFiles().isEmpty()
-                                ? UltiTools.getInstance().i18n("（没有需要删除的文件）")
-                                : String.join(", ", report.deletedFiles())));
-            } else {
-                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载失败！请检查是否拼写正确！"));
-            }
-            sendUndeterminedEntries(sender, report);
-        } catch (java.nio.file.AccessDeniedException e) {
-            sendUnlistableFolder(sender, e.getFile());
-        } catch (PluginInstallUtils.UninstallRefusedException e) {
-            // The uninstall refused because its outcome would be undefined - two possible targets,
-            // or a JAR another running module shares. It changed nothing, and says which.
-            sender.sendMessage(ChatColor.RED + e.getMessage());
-        } catch (PluginInstallUtils.ModuleUnloadFailedException e) {
-            // The module's own unload threw. It has still been removed from the loaded modules and
-            // its jars still deleted where possible: report both, so the operator knows whether it
-            // will come back on restart.
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("卸载出错！模块已从已加载列表移除，但其卸载过程抛出了异常，详见控制台。"));
-            sendJarOutcomeAfterUnloadError(sender, e);
-        } catch (NoSuchFileException e) {
-            // The module was found by this exact name and unloaded, but no jar carries it -- a
-            // spelling hint would be false here (#501).
-            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), e.getFile()));
-            sendUnreadableEntriesOf(sender, e);
-        } catch (PluginInstallUtils.RemovalDeferredException e) {
-            // The JARs could not be deleted now and were recorded for the next start (#518).
-            sendDeferredRemoval(sender, e);
-            sendUnreadableEntriesOf(sender, e);
-        } catch (FileSystemException e) {
-            sendUndeletedJars(sender, e);
-            sendUnreadableEntriesOf(sender, e);
-        } catch (IOException e) {
-            sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
-            sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
-        } finally {
-            // In a finally, like the cancellation itself: an unexpected exception from the uninstall
-            // leaves with the update already cancelled, and the operator is still told (gate 1, I-04).
-            for (String version : cancelledUpdates) {
-                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
-                        "已取消模块 %s 已暂存、尚未应用的更新（版本 %s）。"), plugin, version));
+        sendResult(sender, PluginInstallUtils.requestUninstall(plugin, sender));
+    }
+
+    @CmdMapping(format = "pending")
+    public void pending(@CmdSender CommandSender sender) {
+        var transactions = UltiTools.getInstance().getModuleFileTransactions();
+        if (transactions != null) {
+            List<StartOutcome> outcomes = transactions.startOutcomes();
+            if (!outcomes.isEmpty()) {
+                send(sender, UpmKeys.PENDING_LAST_START_HEADER);
+                outcomes.forEach(outcome -> sendStartOutcome(sender, outcome));
             }
         }
-    }
-
-    /**
-     * The JARs the uninstall could not delete now -- held open by the running server, as Windows
-     * does with every loaded module JAR, or in a folder that is not writable -- and has recorded for
-     * the next start, which deletes them before any module loads (#518). Not "delete them by hand":
-     * on Windows the running server prevents exactly that.
-     */
-    private static void sendDeferredRemoval(CommandSender sender, PluginInstallUtils.RemovalDeferredException deferred) {
-        sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
-                "以下模块 JAR 暂时无法删除（被占用或不可写：%s），已记录：下次启动会在加载模块之前删除它们，仍无法删除时会在启动日志中报告：%s"),
-                deferred.getReason(), String.join(", ", deferred.deferredFiles())));
-    }
-
-    /** The modules folder, as the uninstall replies name it -- the one the loader reads (#517). */
-    private static String modulesFolderPath() {
-        return ModuleFileTransactions.modulesFolder(UltiTools.getInstance().getDataFolder()).getAbsolutePath();
-    }
-
-    /**
-     * The modules folder is there and its contents are unknown, so nothing may be claimed about
-     * what it still holds -- including whether a JAR of this module is among it.
-     */
-    private static void sendUnlistableFolder(CommandSender sender, String folder) {
-        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("模块目录 %s 无法读取，因此无法确认其中是否还有该模块的 JAR 文件。"), folder));
-    }
-
-    /**
-     * Names the entries a no-JAR-found failure carries with it: state C survives that answer, and
-     * one of those entries may be the module's own JAR.
-     */
-    private static void sendUnreadableEntriesOf(CommandSender sender, Throwable failure) {
-        List<String> files = new ArrayList<>();
-        collectUndetermined(failure, files);
-        if (files.isEmpty()) {
+        var snapshot = PluginInstallUtils.pendingChanges().snapshot();
+        if (snapshot.entries().isEmpty()) {
+            send(sender, UpmKeys.PENDING_EMPTY);
             return;
         }
-        sender.sendMessage(ChatColor.YELLOW + String.format(
-                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法确认身份，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
-                files.size(), String.join(", ", files)));
-    }
-
-    /**
-     * Says what the uninstall could not determine: entries it could not read at all. They are not
-     * called copies of the module, because nothing established that they are -- what the operator
-     * needs is the count and what follows from it if one of them turns out to be one.
-     */
-    private static void sendUndeterminedEntries(CommandSender sender, PluginInstallUtils.UninstallReport report) {
-        if (report.undeterminedEntries().isEmpty()) {
-            return;
+        send(sender, UpmKeys.PENDING_HEADER);
+        int index = 1;
+        for (PendingChange change : snapshot.entries()) {
+            sendPendingEntry(sender, change, index++);
         }
-        sender.sendMessage(ChatColor.YELLOW + String.format(
-                UltiTools.getInstance().i18n("模块目录中有 %d 个文件无法确认身份，无法判断其中是否有该模块的副本；如果有，重启后该模块会再次加载：%s"),
-                report.undeterminedEntries().size(), String.join(", ", report.undeterminedEntries())));
-    }
-
-    /**
-     * Reports the jar outcome {@link PluginInstallUtils#uninstallPlugin} attached to its
-     * unload-error exception: none attached means every matching jar was deleted.
-     */
-    private static void sendJarOutcomeAfterUnloadError(CommandSender sender,
-                                                       PluginInstallUtils.ModuleUnloadFailedException unloadError) {
-        sendUnreadableEntriesOf(sender, unloadError);
-        for (Throwable jarFailure : unloadError.getSuppressed()) {
-            if (jarFailure instanceof PluginInstallUtils.UndeterminedEntriesException) {
-                // Already reported above, and it is not a JAR outcome.
-                continue;
-            }
-            if (jarFailure instanceof java.nio.file.AccessDeniedException) {
-                // State D reached through a failed unload: a directory is not a JAR, and saying it
-                // will load the module again would be nonsense.
-                sendUnlistableFolder(sender, ((FileSystemException) jarFailure).getFile());
-                return;
-            }
-            if (jarFailure instanceof NoSuchFileException) {
-                // The undetermined entries this failure carries were reported once above, by the
-                // walk over the whole chain.
-                sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n("模块已卸载，但在 %s 中没有识别出属于它的 JAR 文件。"), ((NoSuchFileException) jarFailure).getFile()));
-                return;
-            }
-            if (jarFailure instanceof PluginInstallUtils.RemovalDeferredException) {
-                sendDeferredRemoval(sender, (PluginInstallUtils.RemovalDeferredException) jarFailure);
-                return;
-            }
-            if (jarFailure instanceof FileSystemException) {
-                sendUndeletedJars(sender, (FileSystemException) jarFailure);
-                return;
-            }
-            if (jarFailure instanceof IOException) {
-                sender.sendMessage(ChatColor.RED + UltiTools.getInstance().i18n("删除失败！文件访问错误！请手动删除！"));
-                sender.sendMessage(ChatColor.GREEN + String.format(UltiTools.getInstance().i18n("文件位置：%s"), modulesFolderPath()));
-                return;
-            }
+        if (snapshot.truncated() > 0) {
+            send(sender, UpmKeys.PENDING_TRUNCATED, number("count", snapshot.truncated()));
         }
-        sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("识别为该模块的 JAR 文件均已删除。"));
+        send(sender, UpmKeys.PENDING_FOOTER);
     }
 
-    /** The undetermined entries a failure carries. */
-    private static List<String> undeterminedOf(Throwable failure) {
-        List<String> files = new ArrayList<>();
-        collectUndetermined(failure, files);
-        return files;
-    }
-
-    /** Collects the undetermined entries a failure carries, wherever in its suppressed chain they sit. */
-    private static void collectUndetermined(Throwable failure, List<String> files) {
-        collectUndetermined(failure, files, Collections.newSetFromMap(new IdentityHashMap<>()));
-    }
-
-    /**
-     * {@link #collectUndetermined(Throwable, List)}, remembering what it has already walked.
-     *
-     * <p>`addSuppressed` refuses a throwable suppressing itself but not a longer loop, and a walk
-     * that meets one never returns. Nothing here builds such a chain today; the uninstall's replies
-     * are not the place to find out that something else did.
-     *
-     * @param failure the failure to walk
-     * @param files   the paths collected so far
-     * @param seen    the throwables already visited, by identity
-     */
-    private static void collectUndetermined(Throwable failure, List<String> files, Set<Throwable> seen) {
-        if (!seen.add(failure)) {
-            return;
-        }
-        if (failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
-            files.addAll(((PluginInstallUtils.UndeterminedEntriesException) failure).entries());
-        }
-        for (Throwable suppressed : failure.getSuppressed()) {
-            collectUndetermined(suppressed, files, seen);
+    @CmdMapping(format = "revoke <module>")
+    public void revoke(@CmdSender CommandSender sender, @CmdParam(value = "module", suggest = "revocableModules") String module) {
+        var result = PluginInstallUtils.pendingChanges().revokeByModule(module);
+        switch (result.outcome()) {
+            case REVOKED -> sendRevoked(sender, result.before());
+            case NOT_REVOCABLE -> sendNotRevocable(sender, result.before());
+            case NOT_FOUND -> send(sender, UpmKeys.REVOKE_NOT_FOUND, string("module", module));
+            case FAILED, CHANGED -> send(sender, UpmKeys.REVOKE_FAILED, string("module", module), arg("error", result.error()));
+            default -> throw new IllegalStateException("Unhandled revoke outcome: " + result.outcome());
         }
     }
 
-    /**
-     * Names every jar the uninstall could not delete. Each one loads the module again at the next
-     * start, so an instruction that names only the first is one the operator cannot act on (#501).
-     *
-     * <p>When the deletion could not be recorded for the next start either, that is said on a line of
-     * its own, with its reason and no instruction to delete anything: the record failure travels as a
-     * {@link PluginInstallUtils.RemovalNotRecordedException}, not a {@code FileSystemException}, so
-     * the file it names -- a transaction record or temporary file under the server root's
-     * {@code .ultikits} folder -- is never listed among the module JARs to delete.
-     */
-    private static void sendUndeletedJars(CommandSender sender, FileSystemException failure) {
-        List<String> files = new ArrayList<>();
-        collectNamedFiles(failure, files);
-        // The undetermined entries travel on the same failure and are reported separately: they
-        // are not JARs this uninstall failed to delete.
-        files.removeAll(undeterminedOf(failure));
-        sender.sendMessage(ChatColor.RED + String.format(UltiTools.getInstance().i18n("卸载失败！以下模块 JAR 文件无法删除，重启后模块会再次加载，请手动删除：%s"),
-                files.isEmpty()
-                        ? modulesFolderPath()
-                        : String.join(", ", files)));
-        PluginInstallUtils.RemovalNotRecordedException notRecorded = notRecordedIn(failure,
-                Collections.newSetFromMap(new IdentityHashMap<>()));
-        if (notRecorded != null) {
-            sender.sendMessage(ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
-                    "这次删除也未能记录到下次启动（%s），因此下次启动不会删除它们。"), notRecorded.getReason()));
+    private static void sendNotRevocable(CommandSender sender, PendingChange item) {
+        Arg module = string("module", item.module());
+        switch (item.state()) {
+            case FAILED -> send(sender, UpmKeys.REVOKE_NOT_REVOCABLE_FAILED, module, arg("failure", item.failure()));
+            case NEEDS_OPERATOR -> send(sender, UpmKeys.REVOKE_NOT_REVOCABLE_NEEDS_OPERATOR, module,
+                    arg("failure", item.failure()), recordFile(item));
+            case IN_PROGRESS -> send(sender, UpmKeys.REVOKE_NOT_REVOCABLE_IN_PROGRESS, module);
+            default -> throw new IllegalStateException("Unhandled non-revocable state: " + item.state());
         }
     }
 
-    /**
-     * The record failure a failure carries, wherever in its suppressed chain it sits; {@code null}
-     * when there is none. Remembers what it has walked, for the same reason
-     * {@link #collectUndetermined(Throwable, List, Set)} does.
-     *
-     * @param failure the failure to walk
-     * @param seen    the throwables already visited, by identity
-     * @return the carrier, or {@code null}
-     */
-    private static PluginInstallUtils.RemovalNotRecordedException notRecordedIn(Throwable failure,
-                                                                              Set<Throwable> seen) {
-        if (!seen.add(failure)) {
-            return null;
+    public List<String> revocableModules() {
+        return PluginInstallUtils.pendingChanges().list().stream().filter(PendingChange::revocable)
+                .map(PendingChange::module).distinct().toList();
+    }
+
+    private static boolean sendResult(CommandSender sender, PluginInstallUtils.PendingResult result) {
+        for (var reply : result.replies()) {
+            send(sender, reply.key(), reply.args().toArray(Arg[]::new));
         }
-        if (failure instanceof PluginInstallUtils.RemovalNotRecordedException) {
-            return (PluginInstallUtils.RemovalNotRecordedException) failure;
+        if (!result.content().isEmpty()) {
+            sendWarnings(sender, result.warningModule(), result.content());
+            send(sender, UpmKeys.PENDING_WARNING_REVOKE_HINT, string("module", result.warningModule()));
         }
-        for (Throwable suppressed : failure.getSuppressed()) {
-            PluginInstallUtils.RemovalNotRecordedException found = notRecordedIn(suppressed, seen);
-            if (found != null) {
-                return found;
+        return result.queued();
+    }
+
+    private static void sendWarnings(CommandSender sender, String name, ModuleContent content) {
+        Arg module = string("module", name);
+        for (var contentKind : content.kinds()) {
+            switch (contentKind.kind()) {
+                case "enchantment" -> send(sender, UpmKeys.PENDING_WARNING_ENCHANTMENT, module);
+                case "datapack" -> send(sender, UpmKeys.PENDING_WARNING_DATAPACK, module);
+                case "tag" -> send(sender, UpmKeys.PENDING_WARNING_TAG, module);
+                case "unknown" -> send(sender, UpmKeys.PENDING_WARNING_UNKNOWN);
+                default -> send(sender, UpmKeys.PENDING_WARNING_OTHER, module, string("kind", contentKind.kind()));
             }
         }
-        return null;
     }
 
-    /**
-     * Collects the file named by {@code failure} and by every {@code FileSystemException} attached
-     * to it, at any depth -- a file the operator is not told about is one they leave behind. A
-     * record failure is not one of them: it travels as a
-     * {@link PluginInstallUtils.RemovalNotRecordedException}, which this walk skips by type.
-     *
-     * @param failure the failure to walk
-     * @param files   the names collected so far, in the order they were found
-     */
-    private static void collectNamedFiles(FileSystemException failure, List<String> files) {
-        collectNamedFiles(failure, files, Collections.newSetFromMap(new IdentityHashMap<>()));
+    private static void sendPendingEntry(CommandSender sender, PendingChange item, int index) {
+        Arg number = number("index", index);
+        Arg module = string("module", item.module());
+        Arg from = arg("from", item.fromVersion());
+        Arg to = arg("to", item.toVersion());
+        switch (item.kind()) {
+            case INSTALL -> send(sender, UpmKeys.PENDING_ENTRY_INSTALL, number, module, to);
+            case UPDATE -> send(sender, UpmKeys.PENDING_ENTRY_UPDATE, number, module, from, to);
+            case UNINSTALL -> send(sender, UpmKeys.PENDING_ENTRY_UNINSTALL, number, module, from,
+                    string("files", String.join(", ", item.files())));
+            default -> throw new IllegalStateException("Unhandled pending change kind: " + item.kind());
+        }
+        if (item.requestedAt() != null) {
+            String time = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT).withZone(ZoneId.systemDefault())
+                    .format(Instant.ofEpochMilli(item.requestedAt()));
+            send(sender, UpmKeys.PENDING_ENTRY_REQUESTED, Arg.text("who", requesterText(item.requestedBy())), string("time", time));
+        }
+        switch (item.state()) {
+            case DOWNLOADING -> send(sender, UpmKeys.PENDING_STATE_DOWNLOADING);
+            case FAILED -> send(sender, UpmKeys.PENDING_STATE_FAILED, arg("failure", item.failure()), module);
+            case NEEDS_OPERATOR -> send(sender, UpmKeys.PENDING_STATE_NEEDS_OPERATOR,
+                    arg("failure", item.failure()), recordFile(item));
+            case IN_PROGRESS -> send(sender, UpmKeys.PENDING_STATE_IN_PROGRESS);
+            case PENDING -> { /* The entry already says what is pending. */ }
+            default -> throw new IllegalStateException("Unhandled pending state: " + item.state());
+        }
+        sendWarnings(sender, item.module(), item.content());
     }
 
-    /**
-     * {@link #collectNamedFiles(FileSystemException, List)}, remembering what it has already walked,
-     * for the same reason {@link #collectUndetermined(Throwable, List, Set)} does.
-     *
-     * @param failure the failure to walk
-     * @param files   the paths collected so far
-     * @param seen    the throwables already visited, by identity
-     */
-    private static void collectNamedFiles(FileSystemException failure, List<String> files,
-                                          Set<Throwable> seen) {
-        if (!seen.add(failure) || failure instanceof PluginInstallUtils.UndeterminedEntriesException) {
-            return;
-        }
-        if (failure.getFile() != null && !files.contains(failure.getFile())) {
-            files.add(failure.getFile());
-        }
-        for (Throwable suppressed : failure.getSuppressed()) {
-            if (suppressed instanceof FileSystemException) {
-                collectNamedFiles((FileSystemException) suppressed, files, seen);
+    private static Text requesterText(PendingChanges.Requester requester) {
+        String kind = requester == null ? "" : requester.kind();
+        return switch (kind == null ? "" : kind) {
+            case "console" -> Text.of(UpmKeys.PENDING_REQUESTER_CONSOLE);
+            case "player" -> Text.of(UpmKeys.PENDING_REQUESTER_PLAYER, arg("name", requester.name()));
+            case "remote" -> Text.of(UpmKeys.PENDING_REQUESTER_REMOTE, arg("name", requester.name()));
+            default -> Text.of(UpmKeys.PENDING_REQUESTER_UNKNOWN);
+        };
+    }
+
+    private static void sendStartOutcome(CommandSender sender, StartOutcome outcome) {
+        MessageKey key = switch (outcome.result()) {
+            case APPLIED -> switch (outcome.kind()) {
+                case INSTALL -> UpmKeys.PENDING_LAST_START_APPLIED_INSTALL;
+                case UPDATE -> UpmKeys.PENDING_LAST_START_APPLIED_UPDATE;
+                case UNINSTALL -> UpmKeys.PENDING_LAST_START_APPLIED_UNINSTALL;
+            };
+            case ROLLED_BACK -> outcome.kind() == PendingChanges.Kind.INSTALL
+                    ? UpmKeys.PENDING_LAST_START_ROLLED_BACK_INSTALL : UpmKeys.PENDING_LAST_START_ROLLED_BACK_UPDATE;
+            case NOT_APPLIED -> UpmKeys.PENDING_LAST_START_NOT_APPLIED;
+            case NEEDS_OPERATOR -> UpmKeys.PENDING_LAST_START_NEEDS_OPERATOR;
+        };
+        send(sender, key, string("module", outcome.module()), arg("from", outcome.fromVersion()), arg("to", outcome.toVersion()));
+    }
+
+    private static void sendRevoked(CommandSender sender, PendingChange before) {
+        Arg module = string("module", before.module());
+        if (before.state() == PendingChanges.State.DOWNLOADING) {
+            send(sender, UpmKeys.REVOKE_DONE_DOWNLOADING, module);
+        } else {
+            switch (before.kind()) {
+                case INSTALL -> send(sender, UpmKeys.REVOKE_DONE_INSTALL, module, arg("to", before.toVersion()));
+                case UPDATE -> send(sender, UpmKeys.REVOKE_DONE_UPDATE, module, arg("from", before.fromVersion()),
+                        arg("to", before.toVersion()));
+                case UNINSTALL -> send(sender, UpmKeys.REVOKE_DONE_UNINSTALL, module);
+                default -> throw new IllegalStateException("Unhandled revoked change kind: " + before.kind());
             }
         }
+    }
+
+    private static Arg recordFile(PendingChange item) {
+        return arg("file", item.recordFile() == null ? null : item.recordFile().getAbsolutePath());
+    }
+
+    private static Arg arg(String tag, String value) {
+        return string(tag, value == null ? "?" : value);
+    }
+
+    private static void send(CommandSender sender, MessageKey key, Arg... args) {
+        replyOnServerThread(() -> CommandRuntime.messages().send(sender, key, args));
     }
 
     @CmdMapping(format = "check")
@@ -615,16 +495,26 @@ public class PluginInstallCommands extends BaseCommandExecutor {
     @RunAsync
     public void updatePlugin(@CmdSender CommandSender sender, @CmdParam("plugin") String pluginName) {
         UpdateManager updateManager = UltiTools.getInstance().getUpdateManager();
-        if (sendPendingIfAny(sender, updateManager)) {
-            return;
-        }
         if ("all".equalsIgnoreCase(pluginName)) {
-            updateAllPlugins(sender);
+            if (!sendPendingIfAny(sender, updateManager)) {
+                updateAllPlugins(sender);
+            }
             return;
         }
-        UpdateInfo info = updateManager.getModuleUpdates().get(pluginName);
-        if (info == null) {
-            if (updateManager.getUnconfirmed().contains(pluginName)) {
+        // A queued change can be refreshed without relying on the unfinished startup scan.
+        var journal = UltiTools.getInstance().getModuleFileTransactions();
+        String identify = journal == null ? null : journal.pendingIdentifyString(pluginName);
+        if (identify == null && sendPendingIfAny(sender, updateManager)) {
+            return;
+        }
+        if (identify == null && updateManager != null) {
+            UpdateInfo info = updateManager.getModuleUpdates().get(pluginName);
+            if (info != null) {
+                identify = info.getIdentifyString();
+            }
+        }
+        if (identify == null) {
+            if (updateManager != null && updateManager.getUnconfirmed().contains(pluginName)) {
                 sendIncompleteIfAny(sender, Collections.singletonList(pluginName));
             } else {
                 sendStringMessage(sender, ChatColor.RED + UltiTools.getInstance().i18n("没有可用的更新。"));
@@ -633,56 +523,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         }
         sendStringMessage(sender, ChatColor.YELLOW + String.format(
             UltiTools.getInstance().i18n("正在更新 %s..."), pluginName));
-        sendStageResult(sender, pluginName, PluginInstallUtils.stageUpdate(info.getIdentifyString()));
-    }
-
-    /**
-     * Tells the operator what staging an update did (#505): staged to take effect at the next start
-     * -- never "updated", which is decided only by what that start observes -- or why nothing was
-     * staged.
-     *
-     * @param sender     who asked
-     * @param pluginName the module, as the operator named it
-     * @param result     what staging did
-     * @return whether the update was staged
-     */
-    private static boolean sendStageResult(CommandSender sender, String pluginName,
-                                           ModuleFileTransactions.StageResult result) {
-        if (result.getPreviousFailure() != null) {
-            // A start could not apply the previous update of this module; the operator hears about
-            // it here as well as in that start's log, before anything else.
-            sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(
-                    "上一次 %s 的更新没有应用：%s"), pluginName, result.getPreviousFailure()));
-        }
-        switch (result.getOutcome()) {
-            case STAGED:
-                sendStringMessage(sender, ChatColor.GREEN + String.format(UltiTools.getInstance().i18n(
-                        "已暂存 %s 的更新（%s → %s）。更新将在下次启动时生效：只有新版本确实加载后才会保留，否则恢复为 %s。"),
-                        pluginName, result.getOldVersion(), result.getNewVersion(), result.getOldVersion()));
-                return true;
-            case ALREADY_STAGED:
-                sendStringMessage(sender, ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
-                        "%s 已有一个暂存的更新（版本 %s），将在下次启动时生效；没有做任何改动。"),
-                        pluginName, result.getNewVersion()));
-                return false;
-            case BUSY:
-                if (result.getNewVersion() == null) {
-                    // Another /upm command is downloading an update of this module right now.
-                    sendStringMessage(sender, ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
-                            "%s 的另一个更新正在进行中，请稍后再试；没有做任何改动。"), pluginName));
-                } else {
-                    sendStringMessage(sender, ChatColor.YELLOW + String.format(UltiTools.getInstance().i18n(
-                            "%s 的上一次更新（版本 %s）还没有处理完，请先重启服务器；没有做任何改动。"),
-                            pluginName, result.getNewVersion()));
-                }
-                return false;
-            default:
-                break;
-        }
-        String reason = String.format(UltiTools.getInstance().i18n(result.getReasonKey()), result.getReasonArgs());
-        sendStringMessage(sender, ChatColor.RED + String.format(UltiTools.getInstance().i18n(
-                "%s 的更新未能暂存：%s。没有做任何改动。"), pluginName, reason));
-        return false;
+        sendResult(sender, PluginInstallUtils.updateResult(pluginName, PluginInstallUtils.stageUpdate(identify, sender)));
     }
 
     private void updateAllPlugins(CommandSender sender) {
@@ -698,15 +539,14 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         for (UpdateInfo info : updateManager.getModuleUpdates().values()) {
             sendStringMessage(sender, ChatColor.YELLOW + String.format(
                 UltiTools.getInstance().i18n("正在更新 %s..."), info.getPluginName()));
-            if (sendStageResult(sender, info.getPluginName(), PluginInstallUtils.stageUpdate(info.getIdentifyString()))) {
+            if (sendResult(sender, PluginInstallUtils.updateResult(info.getPluginName(),
+                    PluginInstallUtils.stageUpdate(info.getIdentifyString(), sender)))) {
                 staged++;
             } else {
                 notStaged++;
             }
         }
-        sendStringMessage(sender, ChatColor.GREEN + String.format(
-            UltiTools.getInstance().i18n("全部处理完成：%d 个已暂存，%d 个未能暂存。已暂存的更新将在下次启动时生效。"),
-            staged, notStaged));
+        send(sender, UpmKeys.UPDATE_ALL_DONE, number("staged", staged), number("not_staged", notStaged));
         sendIncompleteIfAny(sender, unconfirmedModules(updateManager));
     }
 
@@ -806,10 +646,10 @@ public class PluginInstallCommands extends BaseCommandExecutor {
      * Resolves the runtime name to use for the {@code /upm uninstall} click command in {@link
      * #listPlugins(CommandSender, String)}'s player branch: the LOADED module's own {@code
      * getPluginName()}, not the catalogue entry's display name (gate-2 Codex round 1). {@link
-     * PluginInstallUtils#uninstallPlugin} matches only against the runtime name -- for exactly
+     * PluginInstallUtils#requestUninstall} matches only against the runtime name -- for exactly
      * the display-name-mismatch case {@link #isSameModule} exists to recognise as installed,
      * using the catalogue's display name here would build an uninstall command that silently
-     * fails (no unregister, no file delete, a generic failure message).
+     * fails without recording a change.
      *
      * @param installedPlugins every currently-loaded module
      * @param catalogueEntry   the catalogue entry being rendered
@@ -859,5 +699,7 @@ public class PluginInstallCommands extends BaseCommandExecutor {
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm check - 查看可用更新"));
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm update [插件] - 更新插件"));
         sender.sendMessage(ChatColor.GREEN + UltiTools.getInstance().i18n("/upm update all - 更新所有插件"));
+        send(sender, UpmKeys.HELP_PENDING);
+        send(sender, UpmKeys.HELP_REVOKE);
     }
 }

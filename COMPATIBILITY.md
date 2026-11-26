@@ -951,6 +951,47 @@ successfully with an empty module set.
   its transitive dependencies (for example through Vault). Such incidental visibility is not a supported
   dependency declaration and must not be relied on.
 
+## Module changes wait for a restart (as of 7.0.0)
+
+`/upm install`, `/upm update` and `/upm uninstall` record changes for the next start instead of changing running modules. Use `/upm pending` to see them and the results of this start, or `/upm revoke <module>` to undo one entry before restarting. Viewing and revoking through UltiCloud will be available with the follow-up panel integration.
+
+- A module has one pending entry. Installing a different version of a running module queues an update.
+- Installing the exact running version is a no-op, or cancels a pending update or uninstall.
+- Installing or updating to a different version replaces the pending install or update; requesting the same pending version changes nothing.
+- Uninstalling a module that is only waiting to be installed cancels that install without queuing a removal.
+- Uninstalling replaces any pending update and cancels a download in progress, even when an uninstall is already queued. A repeated uninstall with no download to cancel leaves the existing entry unchanged.
+- An update does not override a pending uninstall. Revoke the uninstall first, or use `install` to replace it with the specified version.
+
+A new install checks the JAR's module identity and version before queuing. Unlike 6.x, 7.0 refuses a new install before downloading if its target filename already exists in the modules directory. Move or delete that file and retry. An update can still replace the running module's own recorded JAR. If a conflicting file appears after queuing, startup leaves it alone and records that the install was not applied; later starts do not repeat the failed install. A failed entry cannot be revoked. A new request for that module reports the earlier failure before attempting the new change.
+
+Uninstall cannot disable a module immediately. If a module needs to stop urgently, restart the server after queuing its uninstall. UltiTools does not provide a restart button. A new install that does not load, including when its bootstrap hook throws, is removed again and reported in the start log. An installation whose transaction record cannot be saved is reverted before loading if the JAR can be moved; otherwise startup reports that the rollback could not finish. When an uninstall detects a different file at restart, it leaves that file alone and drops the deletion for it. The module can still load; run `/upm uninstall` again if it should still be removed. Operators are reminded once per server run on joining; if a change is added or replaced, they can receive a new reminder at their next join, but nothing is pushed to operators already online.
+
+Uninstall warns without asking for a second confirmation if a module added custom content:
+
+- **Enchantments:** Items remain, but a missing custom enchantment is permanently stripped once the item's chunk loads and saves. Other plugins can get `IllegalStateException` when reading affected items saved as raw bytes while the enchantment is absent; this does not crash the server.
+- **Data packs:** The recipes and advancements supplied by those packs disappear.
+- **Tags only:** The item categories added by the module stop working.
+- **Unknown content:** If the record could not be read, check what the module added before uninstalling.
+
+If the content is still needed, revoke the uninstall before restarting. Transaction records are replaced atomically but are not synced to disk with `fsync`; a power loss or system crash can lose the most recent queued request. After restarting, check `/upm pending`. Install and update require the modules and transaction directories to be on the same file system; an unavailable atomic rename leaves the modules unchanged and the start log names both directories. On Windows, an open JAR that cannot be moved during an install rollback is removed at a subsequent start. Uninstall does not queue JAR links that resolve outside the modules directory; move the JAR into the modules directory or remove the link with the server stopped. Downgrade to 6.x is unsupported: 6.x does not understand `INSTALL` transaction records and leaves them unapplied. For test fixtures only, the JVM property `ultitools.catalogue.url` accepts a loopback catalogue URL. The internal `PluginInstallUtils.uninstallPlugin*` methods and their immediate-unload exceptions are replaced by `requestUninstall`; `PluginManager.unregister` still performs the framework's lifecycle cleanup.
+
+| 6.x response | 7.0 response |
+| --- | --- |
+| Installed; restart and manually delete the old module | `upm.install.queued`, or `upm.install.as_update` if running; do not delete the old JAR manually |
+| Seven install refusals | Same wording under `upm.install.refused.*`; a known staging failure now explains its reason |
+| A new install could overwrite a same-name file | `upm.install.refused.target_exists`; move or delete the file first |
+| Uninstalled; identified JARs were deleted | `upm.uninstall.queued`; the module keeps running until restart |
+| The unload hook threw after the module was removed | No immediate unload, so the response no longer occurs |
+| The loaded module was unloaded but no JAR was found | `upm.uninstall.no_jar`; nothing is queued |
+| The JARs could not be deleted now and were deferred | All uninstalls are deferred; `upm.uninstall.queued` |
+| Could not delete JARs; delete them manually | `upm.uninstall.not_recorded` if the request could not be saved |
+| A staged update was cancelled by uninstall | `upm.uninstall.also_cancelled_update` |
+| The update was staged for the next restart | `upm.update.staged`, with a revoke hint |
+| There is already a staged update | `upm.pending.unchanged` for the same version; `upm.update.replaced` for a different version |
+| New in 7.0 | `/upm pending`, `/upm revoke`, operator reminders and custom-content warnings |
+
+**中文补充：** 安装、更新、卸载先记入待生效清单，运行中的模块不变。用 `/upm pending` 查看，用 `/upm revoke <模块>` 逐项撤销。同一模块只保留一项；安装当前版本会取消待更新或待卸载，卸载尚未生效的安装会抵消安装，卸载也会替换待更新，并取消同一模块仍在进行的下载，即使已有卸载记录。失败项不能撤销，下次请求该模块时会报告。7.0 新装不再像 6.x 那样覆盖同名文件；请移走或删除该文件后重试。卸载不再当场停用，急需停止请重启。新装暂存时核对身份与版本；加载失败（包括引导钩子抛异常）会还原并记录。记录写不进时，启动会尝试在加载前还原；无法还原则会明确警告。卸载时文件身份不符就放弃该文件的删除；模块仍可加载，需要时重新执行卸载命令。每位 OP 本次运行首次上线提示，新增或替换后下次上线可再提示。卸载前若仍需要自定义附魔、数据包或标签，请撤销；附魔会在物品区块加载保存后丢失，数据包配方和进度消失，标签分类失效。事务记录没有调用 `fsync`，断电或系统崩溃可能丢失最近排队的请求，重启后请用 `/upm pending` 核对。目录需在同一文件系统；Windows 上被占用的 JAR 可能要下次启动移除；不支持降级到 6.x。
+
 ## Paper and Java baseline (as of 7.0.0-SNAPSHOT)
 
 The baseline is **Paper 26.3 build 258 with Java 25**. The build pins

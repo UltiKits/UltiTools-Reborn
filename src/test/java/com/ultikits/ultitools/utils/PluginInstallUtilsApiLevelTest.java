@@ -1,19 +1,21 @@
 package com.ultikits.ultitools.utils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
@@ -27,10 +29,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
 import com.ultikits.ultitools.manager.ModuleApiLevels;
+import com.ultikits.ultitools.manager.PluginManager;
+import com.ultikits.ultitools.text.Arg;
 import com.ultikits.ultitools.stub.StubCatalogue;
 
 /**
@@ -174,10 +182,11 @@ class PluginInstallUtilsApiLevelTest {
 
     @Test
     @DisplayName("a JAR declaring api-version 700 installs; only the versions request carries apiLevel and minApiLevel")
-    void compatibleModule_installsAndOnlyTheVersionsRequestCarriesTheLevel() {
+    void compatibleModule_installsAndOnlyTheVersionsRequestCarriesTheLevel() throws IOException {
         assertThat(PluginInstallUtils.installLatestPlugin("demo")).isTrue();
 
-        assertThat(modulesFolderNames()).containsExactly("demo-1.1.0.jar");
+        assertThat(modulesFolderNames()).isEmpty();
+        assertThat(PendingTestValues.stagedJar(modules, "demo-1.1.0.jar")).exists();
         List<StubCatalogue.Request> versions = versionRequests();
         assertThat(versions).isNotEmpty();
         for (StubCatalogue.Request request : versions) {
@@ -199,11 +208,11 @@ class PluginInstallUtilsApiLevelTest {
     void olderModule_isRefusedAndNothingIsLeft() throws IOException {
         catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "620"));
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", null);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "620", 700, 700, 700);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_JAR_LEVEL_REFUSED);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("demo", "1.1.0", "620", 700, 700, 700);
         assertThat(downloadedAnything()).isTrue();
         assertThat(modulesFolderNames()).isEmpty();
         assertThat(PluginInstallUtils.installLatestPlugin("demo")).isFalse();
@@ -215,23 +224,24 @@ class PluginInstallUtilsApiLevelTest {
     void newerModule_isRefused() {
         catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "710"));
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", null);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "710", 700, 700, 700);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_JAR_LEVEL_REFUSED);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("demo", "1.1.0", "710", 700, 700, 700);
         assertThat(modulesFolderNames()).isEmpty();
     }
 
     @Test
     @DisplayName("the upper bound is the framework's own level: on a framework at 710 a 710 module installs and the versions request carries apiLevel=710")
-    void frameworkLevelIsTheUpperBound() {
+    void frameworkLevelIsTheUpperBound() throws IOException {
         frameworkAt(710);
         catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "710"));
 
-        assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
+        assertThat(PluginInstallUtils.installReporting("demo", null).queued()).isTrue();
 
-        assertThat(modulesFolderNames()).containsExactly("demo-1.1.0.jar");
+        assertThat(modulesFolderNames()).isEmpty();
+        assertThat(PendingTestValues.stagedJar(modules, "demo-1.1.0.jar")).exists();
         for (StubCatalogue.Request request : versionRequests()) {
             assertThat(queryOf(request)).as(request.toString())
                     .containsEntry("apiLevel", "710")
@@ -244,11 +254,11 @@ class PluginInstallUtilsApiLevelTest {
     void moduleWithoutApiVersion_isRefused() {
         catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", null));
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", null);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_NO_LEVEL);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", 700, 700, 700);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_JAR_NO_LEVEL);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("demo", "1.1.0", 700, 700, 700);
         assertThat(modulesFolderNames()).isEmpty();
     }
 
@@ -257,11 +267,11 @@ class PluginInstallUtilsApiLevelTest {
     void moduleWithBukkitStyleApiVersion_isRefused() {
         catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "'1.19'"));
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", null);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "1.19", 700, 700, 700);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_JAR_LEVEL_REFUSED);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("demo", "1.1.0", "1.19", 700, 700, 700);
         assertThat(modulesFolderNames()).isEmpty();
     }
 
@@ -270,49 +280,129 @@ class PluginInstallUtilsApiLevelTest {
     void noCompatibleVersion_isRefusedWithoutDownload() {
         catalogue.mode(StubCatalogue.Mode.NO_COMPATIBLE_VERSION);
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo", null);
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo", null);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_NO_COMPATIBLE_VERSION);
-        assertThat(result.getReasonArgs()).containsExactly("demo", 700, 700, 700);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_NO_COMPATIBLE_VERSION);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("demo", 700, 700, 700);
         assertThat(downloadedAnything()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
     }
 
     @Test
-    @DisplayName("a stale .part file of the same name is replaced, and an accepted install leaves no .part file")
-    void stalePartFile_isReplaced() throws IOException {
+    @DisplayName("a stale .part in the modules directory is untouched and the new staging uses a separate folder")
+    void stalePartFile_isUntouched() throws IOException {
         Files.write(inModules("demo-1.1.0.jar.part").toPath(), "stale".getBytes(StandardCharsets.UTF_8));
 
-        assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
+        assertThat(PluginInstallUtils.installReporting("demo", null).queued()).isTrue();
 
-        assertThat(modulesFolderNames()).containsExactly("demo-1.1.0.jar");
-        assertThat(bytesInModules("demo-1.1.0.jar")).isEqualTo(catalogue.jar());
+        assertThat(modulesFolderNames()).containsExactly("demo-1.1.0.jar.part");
+        assertThat(bytesInModules("demo-1.1.0.jar.part")).isEqualTo("stale".getBytes(StandardCharsets.UTF_8));
+        File staged = PendingTestValues.stagedJar(modules, "demo-1.1.0.jar");
+        assertThat(staged.getParentFile().list()).containsExactly(staged.getName());
+        assertThat(Files.readAllBytes(staged.toPath())).isEqualTo(catalogue.jar());
     }
 
     @Test
-    @DisplayName("an accepted install over an existing file of the final name replaces it, as the download always did")
-    void existingFinalName_isOverwritten() throws IOException {
-        try (OutputStream out = Files.newOutputStream(inModules("demo-1.1.0.jar").toPath())) {
-            out.write("old".getBytes(StandardCharsets.UTF_8));
+    @DisplayName("a same-name file refuses a new install without downloading or touching that file")
+    void existingFinalName_isNotOverwritten() throws IOException {
+        String name = "demo-1.1.0.jar";
+        byte[] original = "old".getBytes(StandardCharsets.UTF_8);
+        Files.write(inModules(name).toPath(), original);
+
+        var result = PluginInstallUtils.installReporting("demo", null);
+
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies()).singleElement().satisfies(reply -> {
+            assertThat(reply.key().path()).isEqualTo("upm.install.refused.target_exists");
+            assertThat(reply.args()).containsExactly(Arg.string("file", name));
+        });
+        assertThat(downloadedAnything()).isFalse();
+        assertThat(modulesFolderNames()).containsExactly(name);
+        assertThat(bytesInModules(name)).isEqualTo(original);
+        assertThat(PluginInstallUtils.pendingChanges().list()).isEmpty();
+        assertThat(ModuleUpdateFixtures.treeOf(ModuleFileTransactions.transactionsFolder(modules.getParentFile()))).isEmpty();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "1.1.0,other,wrong_identity",
+        "1.0.0,demo,wrong_version"
+    })
+    void aNewInstallRejectsAValidDownloadWhoseDescriptorDisagreesWithTheCatalogue(
+            String version, String identity, String reason) throws IOException {
+        catalogue.jar(StubCatalogue.moduleJar("Demo", version, identity, "700"));
+
+        var result = PluginInstallUtils.installReporting("demo", StubCatalogue.VERSION);
+
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies()).singleElement().satisfies(reply -> {
+            assertThat(reply.key().path()).isEqualTo("upm.install.not_staged");
+            assertThat(reply.args().getLast()).isInstanceOfSatisfying(Arg.Localized.class,
+                    arg -> assertThat(arg.value().toString()).contains("upm.reason." + reason));
+        });
+        assertThat(downloadedAnything()).isTrue();
+        assertThat(modulesFolderNames()).isEmpty();
+        assertThat(PluginInstallUtils.pendingChanges().list()).isEmpty();
+        assertThat(ModuleUpdateFixtures.treeOf(ModuleFileTransactions.transactionsFolder(modules.getParentFile()))).isEmpty();
+    }
+
+    @Test
+    void aDeniedInstallNamesTheReasonInTheOperatorsLanguage() throws IOException {
+        var manager = mock(PluginManager.class);
+        when(UltiTools.getInstance().getPluginManager()).thenReturn(manager);
+        when(manager.getPluginList()).thenThrow(new SecurityException("fixture access failure"));
+
+        var result = PluginInstallUtils.installReporting("demo", StubCatalogue.VERSION);
+
+        assertThat(result.queued()).isFalse();
+        try (var text = new CommandMessageTestSupport("en")) {
+            assertThat(result.replies()).singleElement().satisfies(reply -> {
+                assertThat(reply.key().path()).isEqualTo("upm.install.not_staged");
+                var args = reply.args().toArray(Arg[]::new);
+                assertThat(CommandMessageTestSupport.plain(text.messages().render(reply.key(), Locale.CHINESE, args)))
+                        .contains("访问", "fixture access failure");
+                assertThat(CommandMessageTestSupport.plain(text.messages().render(reply.key(), Locale.ENGLISH, args)))
+                        .contains("access", "fixture access failure");
+            });
         }
+        assertThat(downloadedAnything()).isFalse();
+    }
 
-        assertThat(PluginInstallUtils.installReporting("demo", null).isInstalled()).isTrue();
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void aCancelledDownloadNamesTheCancellationAndAnUnknownFailureKeepsTheFallback(boolean cancelled) {
+        var transactions = mock(ModuleFileTransactions.class);
+        when(UltiTools.getInstance().getModuleFileTransactions()).thenReturn(transactions);
+        var result = cancelled ? ModuleFileTransactions.StageResult.failed(null, UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING)
+                : ModuleFileTransactions.StageResult.of(ModuleFileTransactions.StageResult.Outcome.FAILED, null, null, null, null);
+        when(transactions.stageChange(eq("demo"), eq(StubCatalogue.VERSION), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(result);
 
-        assertThat(modulesFolderNames()).containsExactly("demo-1.1.0.jar");
-        assertThat(bytesInModules("demo-1.1.0.jar")).isEqualTo(catalogue.jar());
+        var install = PluginInstallUtils.installReporting("demo", StubCatalogue.VERSION);
+
+        assertThat(install.queued()).isFalse();
+        assertThat(install.replies()).singleElement().satisfies(reply -> {
+            if (cancelled) {
+                assertThat(reply.key().path()).isEqualTo("upm.install.not_staged");
+                assertThat(reply.args().getLast()).isInstanceOfSatisfying(Arg.Localized.class,
+                        arg -> assertThat(arg.value().toString()).contains(UpmKeys.REASON_CANCELLED_WHILE_DOWNLOADING.path()));
+            } else {
+                assertThat(reply.key()).isEqualTo(UpmKeys.INSTALL_FAILED);
+            }
+        });
     }
 
     @Test
     @DisplayName("/upm install demo 2.0.0, whose metadata names an apiLevel above the framework's: refused as 'this version cannot be"
             + " installed', nothing downloaded")
     void namedVersionAboveTheLevel_isRefusedWithoutDownload() {
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo",
                 StubCatalogue.LICENSED_VERSION);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "2.0.0", 700, 700, 700);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_VERSION_INCOMPATIBLE);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("demo", "2.0.0", 700, 700, 700);
         assertThat(PluginInstallUtils.installPlugin("demo", "2.0.0")).isFalse();
         assertThat(downloadedAnything()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
@@ -324,11 +414,11 @@ class PluginInstallUtilsApiLevelTest {
     void stubLicensedVersion_staysAboveA710Framework() {
         frameworkAt(710);
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo",
                 StubCatalogue.LICENSED_VERSION);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_VERSION_INCOMPATIBLE);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_VERSION_INCOMPATIBLE);
         assertThat(downloadedAnything()).isFalse();
     }
 
@@ -337,15 +427,15 @@ class PluginInstallUtilsApiLevelTest {
     void licensedVersion_isRefusedWithoutDownloading() {
         frameworkAt(StubCatalogue.LICENSED_API_LEVEL);
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo",
                 StubCatalogue.LICENSED_VERSION);
 
-        assertThat(result.isInstalled()).isFalse();
+        assertThat(result.queued()).isFalse();
         assertThat(downloadedAnything()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
         // The catalogue text of plan 22-22; the mocked framework has no language loaded, so the key itself is shown.
         assertThat(messages()).containsExactly(String.format(
-                PluginInstallUtils.InstallResult.Keys.REASON_LICENCE_REQUIRED, "demo", StubCatalogue.LICENSED_VERSION));
+                "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。", "demo", StubCatalogue.LICENSED_VERSION));
     }
 
     @Test
@@ -353,12 +443,12 @@ class PluginInstallUtilsApiLevelTest {
     void namedVersionFromUnfilteredCatalogue_isRefusedAfterDownload() {
         catalogue.jar(StubCatalogue.moduleJar("Demo", StubCatalogue.VERSION, "demo", "620"));
 
-        PluginInstallUtils.InstallResult result = PluginInstallUtils.installReporting("demo",
+        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo",
                 StubCatalogue.VERSION);
 
-        assertThat(result.isInstalled()).isFalse();
-        assertThat(result.getReasonKey()).isEqualTo(PluginInstallUtils.InstallResult.Keys.REASON_JAR_LEVEL_REFUSED);
-        assertThat(result.getReasonArgs()).containsExactly("demo", "1.1.0", "620", 700, 700, 700);
+        assertThat(result.queued()).isFalse();
+        assertThat(result.replies().getLast().key()).isEqualTo(UpmKeys.INSTALL_REFUSED_JAR_LEVEL_REFUSED);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("demo", "1.1.0", "620", 700, 700, 700);
         assertThat(downloadedAnything()).isTrue();
         assertThat(modulesFolderNames()).isEmpty();
     }

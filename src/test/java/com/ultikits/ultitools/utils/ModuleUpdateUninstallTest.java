@@ -10,8 +10,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -23,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.google.gson.JsonNull;
+import com.google.gson.JsonParser;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 
 /**
@@ -71,20 +73,21 @@ class ModuleUpdateUninstallTest {
     void uninstallByAnotherName_cancelsThroughTheRemovedJar() throws IOException {
         stage();
 
-        List<String> cancelled = new ModuleFileTransactions(dataFolder)
-                .cancelStagedUpdates(new ModuleFileTransactions.RemovedModule(Collections.<String>emptyList(),
-                        Collections.singletonList("UltiTools-Demo"), Collections.singletonList(oldJar.getName())));
+        var journal = new ModuleFileTransactions(dataFolder);
+        var result = PendingTestValues.queueRemoval(journal, "UltiTools-Demo", null, oldJar);
 
-        assertThat(cancelled).containsExactly("1.1");
-        assertThat(treeOf(transactions)).isEmpty();
+        assertThat(result.queued()).isTrue();
+        assertThat(PendingTestValues.keys(result)).containsExactly(UpmKeys.UNINSTALL_QUEUED, UpmKeys.UNINSTALL_ALSO_CANCELLED_UPDATE);
+        assertThat(PendingTestValues.values(result.replies().getLast().args())).containsExactly("UltiTools-Demo", "1.1");
+        assertThat(treeOf(transactions)).singleElement().asString().startsWith("remove-").endsWith(".json");
+        assertThat(oldJar).exists();
     }
 
     @Test
     @DisplayName("an update whose old JAR is recorded for deletion is abandoned even when that deletion fails again")
     void pendingRemovalOfTheOldJar_abandonsTheUpdate() throws IOException {
         stage();
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("UltiTools-Demo",
-                Collections.singletonList(oldJar));
+        PendingTestValues.legacyRemoval(dataFolder, "UltiTools-Demo", oldJar);
         ModuleFileTransactions start = new ModuleFileTransactions(modules, transactions,
                 new ModuleFileTransactions.FileOps() {
                     @Override
@@ -101,175 +104,131 @@ class ModuleUpdateUninstallTest {
         start.applyBeforeLoad();
 
         assertThat(namesIn(modules)).containsExactly("demo-1.0.jar");
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVAL_FAILED,
+        assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_FAILED.translationKey(),
                 ModuleFileTransactions.Keys.UPDATE_ABANDONED);
         assertThat(treeOf(transactions)).hasSize(1).allMatch(p -> p.startsWith("remove-"));
     }
 
-    @Test
-    @DisplayName("an install that writes the recorded file name again cancels its recorded deletion")
-    void installOverAPendingRemoval_keepsTheNewInstall() throws IOException {
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("Demo", Collections.singletonList(oldJar));
+    private void cancelRemovalByKeepingTheRunningVersion() {
+        var journal = new ModuleFileTransactions(dataFolder);
+        var result = journal.stageChange("demo", "1.0", "Demo", null, () -> List.of(loadedOld), ignored -> oldJar,
+                catalogue("demo", "1.0"), (link, name, folder) -> {
+                    throw new AssertionError("the running version needs no download");
+                }, null);
+        assertThat(result.getOutcome()).isEqualTo(ModuleFileTransactions.StageResult.Outcome.CANCELLED_UNINSTALL_SAME);
+    }
 
-        new ModuleFileTransactions(dataFolder).forgetDeferredRemoval(oldJar.getName());
-        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
+    @Test
+    @DisplayName("installing the running version cancels the pending removal without touching the JAR")
+    void installOverAPendingRemoval_keepsTheRunningVersion() throws IOException {
+        byte[] original = Files.readAllBytes(oldJar.toPath());
+        PendingTestValues.legacyRemoval(dataFolder, "Demo", oldJar);
+
+        cancelRemovalByKeepingTheRunningVersion();
+        var start = new ModuleFileTransactions(dataFolder);
         start.applyBeforeLoad();
 
-        assertThat(oldJar).exists();
+        assertThat(Files.readAllBytes(oldJar.toPath())).isEqualTo(original);
         assertThat(start.pendingReports()).isEmpty();
         assertThat(treeOf(transactions)).isEmpty();
     }
 
-    /** Collects what {@code ModuleFileTransactions} logs while {@code action} runs. */
-    private static List<java.util.logging.LogRecord> logged(ThrowingAction action) throws IOException {
-        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(ModuleFileTransactions.class.getName());
-        List<java.util.logging.LogRecord> records = new java.util.ArrayList<>();
-        java.util.logging.Handler handler = new java.util.logging.Handler() {
-            @Override
-            public void publish(java.util.logging.LogRecord record) {
-                records.add(record);
-            }
-
-            @Override
-            public void flush() {
-                // nothing buffered
-            }
-
-            @Override
-            public void close() {
-                // nothing held
-            }
-        };
-        logger.addHandler(handler);
-        try {
-            action.run();
-        } finally {
-            logger.removeHandler(handler);
-        }
-        return records;
-    }
-
-    /** An action that may throw an I/O error. */
-    @FunctionalInterface
-    private interface ThrowingAction {
-        void run() throws IOException;
-    }
-
-    private static List<java.util.logging.LogRecord> warningsNaming(List<java.util.logging.LogRecord> records, File file) {
-        return records.stream().filter(r -> r.getLevel() == java.util.logging.Level.WARNING
-                && r.getMessage().contains(file.getAbsolutePath())).collect(Collectors.toList());
-    }
-
     @Test
-    @DisplayName("an install clears its recorded deletion past a malformed record, warning once and naming it (Codex round 5)")
+    @DisplayName("an install can cancel a matching removal past an unrelated malformed record, reported at start")
     void installPastAMalformedRecord_clearsTheMatchingRemoval() throws IOException {
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("Demo", Collections.singletonList(oldJar));
-        // Sorts before every "remove-..." and "update-..." record, so it is read first.
+        var cleared = PendingTestValues.legacyRemoval(dataFolder, "Demo", oldJar);
         File malformed = new File(transactions, "a-malformed.json");
-        java.nio.file.Files.write(malformed.toPath(), "{ not json".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.writeString(malformed.toPath(), "{ not json");
 
-        List<java.util.logging.LogRecord> records = logged(
-                () -> new ModuleFileTransactions(dataFolder).forgetDeferredRemoval(oldJar.getName()));
-        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
-        start.applyBeforeLoad();
-
-        assertThat(warningsNaming(records, malformed)).hasSize(1);
-        assertThat(oldJar).exists();
-        assertThat(keys(start)).doesNotContain(ModuleFileTransactions.Keys.REMOVED);
-        assertThat(treeOf(transactions)).noneMatch(p -> p.startsWith("remove-"));
+        cancelRemovalByKeepingTheRunningVersion();
+        assertThat(cleared).doesNotExist();
+        assertUnusableRecordIsKeptAtStart(malformed, ModuleFileTransactions.Keys.RECORD_UNREADABLE);
     }
 
-    /** Rewrites the removal record of {@code moduleName} so its list of removals holds a null entry. */
     private File withNullRemoval(String moduleName) throws IOException {
-        File[] before = transactions.listFiles((dir, name) -> name.startsWith("remove-") && name.endsWith(".json"));
-        java.util.Set<File> known = new java.util.HashSet<>(Arrays.asList(before == null ? new File[0] : before));
-        File extra = moduleJar(new File(modules, moduleName.toLowerCase(java.util.Locale.ROOT) + "-x.jar"),
-                moduleName, "1.0", moduleName.toLowerCase(java.util.Locale.ROOT));
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval(moduleName, Collections.singletonList(extra));
-        File[] after = transactions.listFiles((dir, name) -> name.startsWith("remove-") && name.endsWith(".json"));
-        File record = Arrays.stream(after).filter(f -> !known.contains(f)).findFirst()
-                .orElseGet(() -> after[0]);
-        com.google.gson.JsonObject json;
-        try (java.io.Reader reader = java.nio.file.Files.newBufferedReader(record.toPath())) {
-            json = new com.google.gson.Gson().fromJson(reader, com.google.gson.JsonObject.class);
-        }
-        json.getAsJsonArray("removals").add(com.google.gson.JsonNull.INSTANCE);
-        java.nio.file.Files.write(record.toPath(), json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        File file = moduleJar(new File(modules, moduleName + "-x.jar"), moduleName, "1.0", moduleName);
+        File record = PendingTestValues.legacyRemoval(dataFolder, moduleName, file);
+        var json = JsonParser.parseString(Files.readString(record.toPath())).getAsJsonObject();
+        json.getAsJsonArray("removals").add(JsonNull.INSTANCE);
+        Files.writeString(record.toPath(), json.toString());
         return record;
     }
 
     @Test
-    @DisplayName("an install clears its recorded deletion past a removal record with a null entry, warning once (Codex round 18)")
+    @DisplayName("an install cancels the matching removal without touching an unrelated invalid removal")
     void installPastARecordWithANullRemoval_clearsTheMatchingRemoval() throws IOException {
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("Demo", Collections.singletonList(oldJar));
+        var cleared = PendingTestValues.legacyRemoval(dataFolder, "Demo", oldJar);
         File invalid = withNullRemoval("Other");
 
-        List<java.util.logging.LogRecord> records = logged(
-                () -> new ModuleFileTransactions(dataFolder).forgetDeferredRemoval(oldJar.getName()));
-        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
-        start.applyBeforeLoad();
-
-        assertThat(warningsNaming(records, invalid)).hasSize(1);
-        assertThat(oldJar).as("Demo's recorded deletion was cleared by the install").exists();
+        cancelRemovalByKeepingTheRunningVersion();
+        assertThat(cleared).doesNotExist();
+        assertUnusableRecordIsKeptAtStart(invalid, ModuleFileTransactions.Keys.RECORD_REFUSED);
+        assertThat(new File(modules, "Other-x.jar")).exists();
     }
 
     @Test
-    @DisplayName("an uninstall records its deletion over its own earlier record with a null entry, which it replaces (Codex round 18)")
-    void recordingOverARecordWithANullRemoval_writesTheNewRecord() throws IOException {
-        File invalid = withNullRemoval("Demo");
-
-        List<java.util.logging.LogRecord> records = logged(() -> new ModuleFileTransactions(dataFolder)
-                .recordDeferredRemoval("Demo", Collections.singletonList(oldJar)));
-        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
-        start.applyBeforeLoad();
-
-        assertThat(warningsNaming(records, invalid)).hasSize(1);
-        assertThat(oldJar).doesNotExist();
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVED);
+    @DisplayName("uninstall refuses instead of overwriting its earlier invalid journal")
+    void recordingOverARecordWithANullRemoval_isRefused() throws IOException {
+        assertNewUninstallRefusesToReplace(withNullRemoval("Demo"), ModuleFileTransactions.Keys.RECORD_REFUSED);
     }
 
     @Test
-    @DisplayName("an uninstall records its deletion over an unreadable earlier record of the same module, warning once")
-    void recordingOverAMalformedRecord_writesTheNewRecord() throws IOException {
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("Demo", Collections.singletonList(oldJar));
-        File[] existing = transactions.listFiles((dir, name) -> name.startsWith("remove-") && name.endsWith(".json"));
-        assertThat(existing).hasSize(1);
-        java.nio.file.Files.write(existing[0].toPath(), "{ not json".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    @DisplayName("uninstall refuses instead of overwriting its earlier unreadable journal")
+    void recordingOverAMalformedRecord_isRefused() throws IOException {
+        File record = PendingTestValues.legacyRemoval(dataFolder, "Demo", oldJar);
+        Files.writeString(record.toPath(), "{ not json");
 
-        List<java.util.logging.LogRecord> records = logged(() -> new ModuleFileTransactions(dataFolder)
-                .recordDeferredRemoval("Demo", Collections.singletonList(oldJar)));
-        ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
+        assertNewUninstallRefusesToReplace(record, ModuleFileTransactions.Keys.RECORD_UNREADABLE);
+    }
+
+    private void assertNewUninstallRefusesToReplace(File record, String startKey) throws IOException {
+        byte[] original = Files.readAllBytes(record.toPath());
+        var result = PendingTestValues.queueRemoval(new ModuleFileTransactions(dataFolder), "Demo", null, oldJar);
+
+        assertThat(result.queued()).isFalse();
+        assertThat(PendingTestValues.keys(result)).containsExactly(UpmKeys.UNINSTALL_NOT_RECORDED);
+        assertThat(Files.readAllBytes(record.toPath())).isEqualTo(original);
+        assertUnusableRecordIsKeptAtStart(record, startKey);
+    }
+
+    private void assertUnusableRecordIsKeptAtStart(File badRecord, String key) throws IOException {
+        byte[] original = Files.readAllBytes(badRecord.toPath());
+        var start = new ModuleFileTransactions(dataFolder);
         start.applyBeforeLoad();
 
-        assertThat(warningsNaming(records, existing[0])).hasSize(1);
-        assertThat(oldJar).doesNotExist();
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVED);
+        assertThat(start.pendingReports()).singleElement().satisfies(report -> {
+            assertThat(report.getKey()).isEqualTo(key);
+            assertThat(report.getArgs()).contains(badRecord.getAbsolutePath());
+        });
+        assertThat(Files.readAllBytes(badRecord.toPath())).isEqualTo(original);
+        assertThat(oldJar).exists();
+        assertThat(treeOf(transactions)).containsExactly(badRecord.getName());
     }
 
     @Test
     @DisplayName("a JAR copied back after the uninstall (same bytes, another timestamp) is not deleted")
     void copiedBackJar_isNotDeleted() throws IOException {
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("Demo", Collections.singletonList(oldJar));
+        PendingTestValues.legacyRemoval(dataFolder, "Demo", oldJar);
         assertThat(oldJar.setLastModified(oldJar.lastModified() + 60_000L)).isTrue();
 
         ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
         start.applyBeforeLoad();
 
         assertThat(oldJar).exists();
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVAL_SKIPPED);
+        assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_SKIPPED.translationKey());
     }
 
     @Test
     @DisplayName("recorded deletions run before updates, whatever their record names sort as")
     void removalsRunBeforeUpdates() throws IOException {
         stage();
-        new ModuleFileTransactions(dataFolder).recordDeferredRemoval("Demo", Arrays.asList(oldJar));
+        PendingTestValues.legacyRemoval(dataFolder, "Demo", oldJar);
 
         ModuleFileTransactions start = new ModuleFileTransactions(dataFolder);
         start.applyBeforeLoad();
 
         assertThat(namesIn(modules)).isEmpty();
-        assertThat(keys(start)).containsExactly(ModuleFileTransactions.Keys.REMOVED,
+        assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_REMOVED.translationKey(),
                 ModuleFileTransactions.Keys.UPDATE_ABANDONED);
     }
 }
