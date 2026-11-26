@@ -1,5 +1,6 @@
 package com.ultikits.ultitools.utils;
 
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -422,20 +423,23 @@ class PluginInstallUtilsApiLevelTest {
         assertThat(downloadedAnything()).isFalse();
     }
 
-    @Test
-    @DisplayName("a version whose download is license_required is 'not available', refused before any download, with one catalogue line")
-    void licensedVersion_isRefusedWithoutDownloading() {
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    @DisplayName("a license_required download is refused before any download and logs one translated reason")
+    void licensedVersion_isRefusedWithoutDownloading(String language) throws Exception {
         frameworkAt(StubCatalogue.LICENSED_API_LEVEL);
 
-        PluginInstallUtils.PendingResult result = PluginInstallUtils.installReporting("demo",
-                StubCatalogue.LICENSED_VERSION);
+        try (var text = new CommandMessageTestSupport(language);
+             var override = FrameworkMessages.overrideForTests(text.messages(), Locale.forLanguageTag(language))) {
+            assertThat(PluginInstallUtils.installReporting("demo", StubCatalogue.LICENSED_VERSION).queued()).isFalse();
+        }
 
-        assertThat(result.queued()).isFalse();
         assertThat(downloadedAnything()).isFalse();
         assertThat(modulesFolderNames()).isEmpty();
-        // The catalogue text of plan 22-22; the mocked framework has no language loaded, so the key itself is shown.
-        assertThat(messages()).containsExactly(String.format(
-                "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。", "demo", StubCatalogue.LICENSED_VERSION));
+        String expected = "en".equals(language)
+                ? "Cannot install demo %s: this version requires a licence and is not offered for public download. Nothing was written to the modules folder."
+                : "无法安装 demo %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。";
+        assertThat(messages()).containsExactly(expected.formatted(StubCatalogue.LICENSED_VERSION));
     }
 
     @Test

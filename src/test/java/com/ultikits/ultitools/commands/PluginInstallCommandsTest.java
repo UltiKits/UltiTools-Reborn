@@ -1,5 +1,13 @@
 package com.ultikits.ultitools.commands;
 
+import org.mockito.Mockito;
+import org.mockito.AdditionalAnswers;
+import org.bukkit.configuration.file.YamlConfiguration;
+import com.ultikits.ultitools.utils.TestHelper;
+import com.ultikits.ultitools.utils.MockBukkitHelper;
+import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.scheduler.BukkitScheduler;
+import org.bukkit.Bukkit;
 import com.ultikits.ultitools.abstracts.command.CommandTestExtension;
 import com.ultikits.ultitools.abstracts.command.CommandRuntime;
 import com.ultikits.ultitools.scheduling.TaskHandle;
@@ -26,6 +34,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.bukkit.ChatColor;
@@ -71,20 +80,20 @@ class PluginInstallCommandsTest {
     private PluginManager mockPluginManager;
     private MockedStatic<PluginInstallUtils> mockedUtils;
     private MockedStatic<UltiTools> mockedUltiTools;
-    private MockedStatic<org.bukkit.Bukkit> mockedBukkit;
+    private MockedStatic<Bukkit> mockedBukkit;
     private boolean mockingAvailable = false;
 
     @BeforeEach
     void setUp() {
-        com.ultikits.ultitools.utils.MockBukkitHelper.ensureCleanState();
+        MockBukkitHelper.ensureCleanState();
         server = MockBukkit.mock();
         MockBukkit.createMockPlugin();
-        com.ultikits.ultitools.utils.TestHelper.mockUltiToolsInstance();
+        TestHelper.mockUltiToolsInstance();
         UltiTools instance = UltiTools.getInstance();
         
         mockedUltiTools = mockStatic(UltiTools.class);
         mockedUltiTools.when(UltiTools::getInstance).thenReturn(instance);
-        org.bukkit.configuration.file.YamlConfiguration config = new org.bukkit.configuration.file.YamlConfiguration();
+        YamlConfiguration config = new YamlConfiguration();
         config.set("api-url", "http://localhost");
         mockedUltiTools.when(UltiTools::getEnv).thenReturn(config);
         
@@ -136,16 +145,16 @@ class PluginInstallCommandsTest {
         }
         // Output-only tests keep thread-local static stubs on this thread. Real worker execution
         // and main-thread delivery are covered by CatalogueClientPagingTest.
-        org.bukkit.scheduler.BukkitScheduler scheduler = mock(org.bukkit.scheduler.BukkitScheduler.class,
-                org.mockito.AdditionalAnswers.delegatesTo(server.getScheduler()));
-        org.mockito.Mockito.doAnswer(invocation -> {
+        BukkitScheduler scheduler = mock(BukkitScheduler.class,
+                AdditionalAnswers.delegatesTo(server.getScheduler()));
+        Mockito.doAnswer(invocation -> {
             invocation.<Runnable>getArgument(1).run();
-            return mock(org.bukkit.scheduler.BukkitTask.class);
+            return mock(BukkitTask.class);
         }).when(scheduler).runTaskAsynchronously(any(org.bukkit.plugin.Plugin.class), any(Runnable.class));
-        mockedBukkit = mockStatic(org.bukkit.Bukkit.class, org.mockito.Mockito.CALLS_REAL_METHODS);
-        mockedBukkit.when(org.bukkit.Bukkit::getScheduler).thenReturn(scheduler);
+        mockedBukkit = mockStatic(Bukkit.class, Mockito.CALLS_REAL_METHODS);
+        mockedBukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
         TaskContext async = CommandRuntime.scheduler().async();
-        org.mockito.Mockito.doAnswer(invocation -> {
+        Mockito.doAnswer(invocation -> {
             invocation.getArgument(0, Runnable.class).run();
             return mock(TaskHandle.class);
         }).when(async).run(any(Runnable.class));
@@ -169,7 +178,7 @@ class PluginInstallCommandsTest {
             }
         }
         try {
-            com.ultikits.ultitools.utils.MockBukkitHelper.safeUnmock();
+            MockBukkitHelper.safeUnmock();
         } catch (Exception ignored) {
         }
     }
@@ -177,6 +186,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should show help message with all commands")
     void testHelp() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
         
         boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"help"});
@@ -203,6 +213,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should list plugins with page 1 for player with installed and uninstalled plugins")
     void testListPluginsPage1() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
         
         // Create mock installed plugin
@@ -247,6 +258,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should list plugins without page parameter")
     void testListPluginsDefaultPage() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
         
         PluginEntity plugin1 = new PluginEntity();
@@ -279,6 +291,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should show installed plugin in list")
     void testListInstalledPlugin() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
         
         UltiToolsPlugin installedPlugin = mock(UltiToolsPlugin.class);
@@ -388,6 +401,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should list plugin versions")
     void testListVersions() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
         
         List<String> versions = Arrays.asList("1.0.0", "1.1.0", "2.0.0");
@@ -411,6 +425,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should handle null version list")
     void testListVersionsNull() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
         
         try {
@@ -518,14 +533,6 @@ class PluginInstallCommandsTest {
     }
 
 
-    private List<String> drainMessages() {
-        List<String> messages = new ArrayList<>();
-        String msg;
-        while ((msg = player.nextMessage()) != null) {
-            messages.add(msg);
-        }
-        return messages;
-    }
 
     @Test
     @DisplayName("Should work with console sender for list")
@@ -619,6 +626,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should handle empty plugin list gracefully")
     void testEmptyPluginList() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
         
         // Mock empty plugin list
@@ -665,6 +673,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should handle /upm check with no updates")
     void testCheckNoUpdates() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
 
         UpdateManager mockUpdateManager = mock(UpdateManager.class);
@@ -683,6 +692,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should handle /upm check with framework update")
     void testCheckFrameworkUpdate() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
 
         UpdateManager mockUpdateManager = mock(UpdateManager.class);
@@ -713,6 +723,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should handle /upm check with module updates")
     void testCheckModuleUpdates() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
 
         UpdateManager mockUpdateManager = mock(UpdateManager.class);
@@ -850,6 +861,7 @@ class PluginInstallCommandsTest {
     @Test
     @DisplayName("Should show check and update in help")
     void testHelpContainsCheckAndUpdate() {
+        player.setLocale(Locale.SIMPLIFIED_CHINESE);
         if (executor == null) return;
 
         boolean result = CommandTestSupport.dispatch(executor, player, mockCommand, "upm", new String[]{"help"});
@@ -1159,8 +1171,8 @@ class PluginInstallCommandsTest {
                     .as("each button must carry the command it advertises; without it a click does nothing")
                     .containsExactly("/upm uninstall UltiTools-Economy", "/upm install com.ultikits.mail");
             assertThat(componentMessages)
-                    .as("the whole list is one component; a legacy-text fallback splits it per line")
-                    .isEqualTo(1);
+                    .as("the list sends each row as a separate component")
+                    .isEqualTo(11);
         }
 
         private void collectRunCommands(Component node, List<String> out) {
@@ -1193,11 +1205,7 @@ class PluginInstallCommandsTest {
                 english = new com.google.gson.Gson().fromJson(reader,
                         new com.google.gson.reflect.TypeToken<Map<String, String>>() { }.getType());
             }
-            // Read the instance first: a static-mock call inside when(...) leaves the stubbing unfinished.
-            UltiTools instance = UltiTools.getInstance();
-            org.mockito.Mockito.doAnswer(invocation -> english.getOrDefault(invocation.getArgument(0),
-                    "<missing en.json entry: " + invocation.getArgument(0) + ">"))
-                    .when(instance).i18n(anyString());
+            player.setLocale(Locale.US);
         }
 
         private String englishOf(String key, Object... args) {
@@ -1266,7 +1274,7 @@ class PluginInstallCommandsTest {
             mockedUltiTools.when(UltiTools::getPluginVersion).thenReturn(700);
             mockedUtils.when(() -> PluginInstallUtils.getPluginVersions("demo")).thenReturn(Collections.emptyList());
 
-            assertThat(reply("versions", "demo")).isEqualTo(org.bukkit.ChatColor.RED + englishOf(
+            assertThat(reply("versions", "demo")).isEqualTo(ChatColor.RED + englishOf(
                     "%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。",
                     "demo", 700, 700, 700));
             assertThat(player.nextMessage()).isNull();
@@ -1276,7 +1284,7 @@ class PluginInstallCommandsTest {
         @DisplayName("a real versions HTTP 404 produces exactly one red module-not-found line")
         void versionsHttp404_namesTheMissingModule() throws IOException {
             withVersionsResponse(404, "{\"error\":{\"code\":\"not_found\"}}", () -> {
-                assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(org.bukkit.ChatColor.RED
+                assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(ChatColor.RED
                         + "Module does-not-exist-on-ulticloud was not found on UltiCloud.");
                 assertThat(player.nextMessage()).isNull();
                 assertThat(PluginInstallUtils.getPluginVersions("does-not-exist-on-ulticloud")).isEmpty();
@@ -1287,7 +1295,7 @@ class PluginInstallCommandsTest {
         @DisplayName("a real successful empty versions response keeps the no-compatible-version line")
         void versionsHttp200Empty_keepsTheRange() throws IOException {
             withVersionsResponse(200, "{\"data\":{\"items\":[],\"total\":0,\"page\":1,\"pageSize\":5}}", () -> {
-                assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(org.bukkit.ChatColor.RED
+                assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(ChatColor.RED
                         + englishOf("%s 没有可以安装在本服务器上的版本。本 UltiTools-API 的 API 级别是 %d，只安装声明 api-version %d 到 %d 的模块。",
                                 "does-not-exist-on-ulticloud", 701, 700, 701));
                 assertThat(player.nextMessage()).isNull();
@@ -1299,7 +1307,7 @@ class PluginInstallCommandsTest {
         @DisplayName("a real versions HTTP failure keeps the fetch-failure line and the public null result")
         void versionsHttp500_keepsTheFailure() throws IOException {
             withVersionsResponse(500, "{\"error\":{\"code\":\"internal_error\"}}", () -> {
-                assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(org.bukkit.ChatColor.RED
+                assertThat(reply("versions", "does-not-exist-on-ulticloud")).isEqualTo(ChatColor.RED
                         + "Could not fetch the version list!");
                 assertThat(player.nextMessage()).isNull();
                 assertThat(PluginInstallUtils.getPluginVersions("does-not-exist-on-ulticloud")).isNull();

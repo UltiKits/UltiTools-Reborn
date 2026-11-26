@@ -35,8 +35,6 @@ import com.google.gson.JsonParser;
  * <ol>
  *   <li>the direct first argument of an {@code i18n(...)}, {@code localize(...)} or
  *       {@code FrameworkText.text/format(...)} call, with the key present in {@code en.json};</li>
- *   <li>one of the two legacy UPM diagnostics in {@link #KEYS_VIA_VARIABLE}, matched by declaration
- *       site and present in both catalogues;</li>
  *   <li>a named exemption in {@link #EXEMPTIONS}, each with its reason and its exact literal count,
  *       so a new literal in an exempt file still fails;</li>
  *   <li>the whole initializer of a {@code static final String} declared in a nested class named
@@ -92,20 +90,6 @@ class FrameworkTextCatalogueInvariantTest {
                     "the resource-folder name returned by getResourceFolderName(), kept at its pre-6.3.0 "
                             + "value so an existing install keeps its folder; an identifier, never shown "
                             + "(the display name getName() is English)"));
-
-    /** These two diagnostics still use FrameworkText.format until their log migration. */
-    private static final List<VariableKey> KEYS_VIA_VARIABLE = List.of(
-            new VariableKey("com/ultikits/ultitools/utils/PluginInstallUtils.java", "PluginInstallUtils",
-                    "REASON_INTEGRITY_FAILED", "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。"),
-            new VariableKey("com/ultikits/ultitools/utils/PluginInstallUtils.java", "PluginInstallUtils",
-                    "REASON_LICENCE_REQUIRED", "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。"));
-
-    private record VariableKey(String file, String type, String site, String value) {
-        boolean matches(JavaLiteralScanner.Literal literal) {
-            return !literal.characterLiteral && file.equals(literal.file) && type.equals(literal.enclosingType)
-                    && site.equals(literal.site) && value.equals(literal.value);
-        }
-    }
 
     /**
      * A named exemption: every CJK literal of {@code file} that is not a translated catalogue key is
@@ -177,7 +161,7 @@ class FrameworkTextCatalogueInvariantTest {
         Map<String, String> misused = holderMisuses(sources, holderConstants);
         List<String> violations = new ArrayList<>();
         for (JavaLiteralScanner.Literal literal : literals) {
-            if (isTranslated(literal) || isVariableKeySite(literal) || exemptionFor(literal) != null) {
+            if (isTranslated(literal) || exemptionFor(literal) != null) {
                 continue;
             }
             if (!isHolderConstant(literal)) {
@@ -281,10 +265,6 @@ class FrameworkTextCatalogueInvariantTest {
                 && "com/ultikits/ultitools/manager/DataStoreManager.java".equals(literal.file)));
     }
 
-    private static boolean isVariableKeySite(JavaLiteralScanner.Literal literal) {
-        return KEYS_VIA_VARIABLE.stream().anyMatch(key -> key.matches(literal));
-    }
-
     private static boolean isHelperCall(JavaLiteralScanner.Literal literal) {
         return HELPER.equals(literal.receiver)
                 && ("text".equals(literal.callName) || "format".equals(literal.callName));
@@ -303,12 +283,10 @@ class FrameworkTextCatalogueInvariantTest {
     @DisplayName("no Chinese literal in src/main/java bypasses the catalogue")
     void noChineseLiteralBypassesTheCatalogue() throws IOException {
         List<JavaLiteralScanner.Literal> literals = cjkLiterals();
-        // Control: the scan sees literals that are translated today, so a zero below is not a blind scan.
-        // The count shrinks with every migration to the catalogue, so the control asserts presence, not
-        // a snapshot size. The change that removes the last legacy call must replace it with a fixture.
+        // The /upm migration removed the last literal translator call; T3 removes the API itself.
         assertThat(literals.stream().filter(FrameworkTextCatalogueInvariantTest::isTranslated).count())
-                .as("control: the scan finds literals that are direct arguments of a translator call")
-                .isPositive();
+                .as("no literal translator calls remain in main sources")
+                .isZero();
 
         List<String> violations = findViolations(mainSources(), catalogue("en"), catalogue("zh"));
         assertThat(violations)
@@ -331,57 +309,19 @@ class FrameworkTextCatalogueInvariantTest {
     }
 
     @Test
-    @DisplayName("keys reached through a variable exist in the source and in both catalogues")
-    void variableKeysExistInBothCatalogues() throws IOException {
-        List<JavaLiteralScanner.Literal> literals = cjkLiterals();
-        JsonObject en = catalogue("en");
-        JsonObject zh = catalogue("zh");
-        for (VariableKey key : KEYS_VIA_VARIABLE) {
-            assertThat(literals.stream().filter(key::matches).count())
-                    .as("exactly one authorized declaration site remains for %s", key.site()).isEqualTo(1);
-            assertThat(en.has(key.value())).as("en.json has %s", key.site()).isTrue();
-            assertThat(zh.has(key.value())).as("zh.json has %s", key.site()).isTrue();
-        }
-    }
-
-    @Test
-    @DisplayName("every translated literal is an en.json key; helper keys are in both catalogues")
-    void translatedKeysAreInTheCatalogues() throws IOException {
-        JsonObject en = catalogue("en");
-        JsonObject zh = catalogue("zh");
-        List<String> missingEn = new ArrayList<>();
-        List<String> missingZh = new ArrayList<>();
-        for (JavaLiteralScanner.Literal literal : cjkLiterals()) {
-            if (!isTranslated(literal)) {
-                continue;
-            }
-            if (!en.has(literal.value)) {
-                missingEn.add(literal.toString());
-            }
-            if (isHelperCall(literal) && !zh.has(literal.value)) {
-                missingZh.add(literal.toString());
-            }
-        }
-        assertThat(missingEn).as("translated literals with no en.json entry").isEmpty();
-        assertThat(missingZh).as("helper keys with no zh.json entry").isEmpty();
-    }
-
-    @Test
-    @DisplayName("a helper format key and its English value carry the same placeholders, in the same order")
-    void helperFormatKeysKeepTheirPlaceholders() throws IOException {
-        Pattern spec = Pattern.compile("%(?:\\d+\\$)?[-#+ 0,(]*\\d*(?:\\.\\d+)?[a-zA-Z]");
-        JsonObject en = catalogue("en");
-        List<String> mismatched = new ArrayList<>();
-        for (JavaLiteralScanner.Literal literal : cjkLiterals()) {
-            if (!isHelperCall(literal) || !"format".equals(literal.callName) || !en.has(literal.value)) {
-                continue;
-            }
-            String english = en.get(literal.value).getAsString();
-            if (!placeholders(spec, literal.value).equals(placeholders(spec, english))) {
-                mismatched.add(literal.value + " -> " + english);
-            }
-        }
-        assertThat(mismatched).isEmpty();
+    void literalTranslatorControlUsesFixtureSource() {
+        List<JavaLiteralScanner.Literal> literals = cjkLiterals(Map.of("Fixture.java", """
+                class Fixture {
+                    void example(String x) {
+                        UltiTools.getInstance().i18n("夹具翻译");
+                        FrameworkText.format("夹具格式：%s", x);
+                    }
+                }
+                """));
+        assertThat(literals).extracting(literal -> literal.value).containsExactly("夹具翻译", "夹具格式：%s");
+        assertThat(literals).allMatch(FrameworkTextCatalogueInvariantTest::isTranslated);
+        assertThat(literals).filteredOn(FrameworkTextCatalogueInvariantTest::isHelperCall)
+                .extracting(literal -> literal.value).containsExactly("夹具格式：%s");
     }
 
     /** Legacy keys predate source-text format specifiers; never rename those public lookup keys. */
@@ -578,13 +518,17 @@ class FrameworkTextCatalogueInvariantTest {
     }
 
     @Test
-    void variableKeyExemptionsAreBoundToTheirDeclarationSite() {
-        for (VariableKey key : KEYS_VIA_VARIABLE) {
-            String literal = key.value().replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
-            assertThat(plainViolations("String raw = \"" + literal + "\";")).hasSize(1);
-            String otherSite = "class " + key.type() + " { private static final String OTHER = \"" + literal + "\"; }";
-            assertThat(findViolations(Map.of(key.file(), otherSite), new JsonObject(), new JsonObject())).hasSize(1);
-        }
+    void formerVariableKeysCanNoLongerBypassTheCatalogue() {
+        String oldDeclaration = """
+                class PluginInstallUtils {
+                    private static final String REASON_INTEGRITY_FAILED =
+                            "已拒绝安装 %s %s：文件没有通过云端目录的完整性校验（SHA-256 或大小与目录不符，或目录没有给出可用的校验值）。模块目录没有任何改动。";
+                    private static final String REASON_LICENCE_REQUIRED =
+                            "无法安装 %s %s：该版本需要许可证，不提供公开下载。模块目录没有任何改动。";
+                }
+                """;
+        assertThat(findViolations(Map.of("com/ultikits/ultitools/utils/PluginInstallUtils.java", oldDeclaration),
+                new JsonObject(), new JsonObject())).hasSize(2);
         assertThat(plainViolations("player.sendMessage(\"上一页\");")).hasSize(1);
     }
 

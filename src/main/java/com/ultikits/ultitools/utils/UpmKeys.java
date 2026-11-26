@@ -7,10 +7,44 @@ import com.ultikits.ultitools.text.MessageKey;
 /** Framework-owned /upm and pending-change messages; both bundled catalogues define every key. */
 @ApiStatus.Internal
 public final class UpmKeys {
+    public static final MessageKey CHECK_DOWNLOAD =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.check.download");
+    public static final MessageKey CHECK_FAILED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.check.failed");
+    public static final MessageKey CHECK_FRAMEWORK =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.check.framework");
+    public static final MessageKey CHECK_HEADER =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.check.header");
+    public static final MessageKey CHECK_INCOMPLETE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.check.incomplete");
+    public static final MessageKey CHECK_MODULE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.check.module");
+    public static final MessageKey CHECK_NONE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.check.none");
+    public static final MessageKey CHECK_RUNNING =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.check.running");
+    public static final MessageKey HELP_CHECK =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.check");
+    public static final MessageKey HELP_INSTALL =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.install");
+    public static final MessageKey HELP_INSTALL_VERSION =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.install_version");
+    public static final MessageKey HELP_LIST =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.list");
     public static final MessageKey HELP_PENDING =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.pending");
     public static final MessageKey HELP_REVOKE =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.revoke");
+    public static final MessageKey HELP_TITLE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.title");
+    public static final MessageKey HELP_UNINSTALL =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.uninstall");
+    public static final MessageKey HELP_UPDATE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.update");
+    public static final MessageKey HELP_UPDATE_ALL =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.update_all");
+    public static final MessageKey HELP_VERSIONS =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.help.versions");
     public static final MessageKey INSTALL_ALREADY_CURRENT =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.already_current");
     public static final MessageKey INSTALL_AS_UPDATE =
@@ -47,6 +81,28 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.refused.version_incompatible");
     public static final MessageKey INSTALL_REPLACED_INSTALL =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.install.replaced_install");
+    public static final MessageKey LIST_ENTRY_INSTALL_BUTTON =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.entry.install_button");
+    public static final MessageKey LIST_ENTRY_INSTALL_COMMAND =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.entry.install_command");
+    public static final MessageKey LIST_ENTRY_INSTALL_HOVER =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.entry.install_hover");
+    public static final MessageKey LIST_ENTRY_INTRO =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.entry.intro");
+    public static final MessageKey LIST_ENTRY_NAME =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.entry.name");
+    public static final MessageKey LIST_ENTRY_STATUS_INSTALLED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.entry.status.installed");
+    public static final MessageKey LIST_ENTRY_STATUS_NOT_INSTALLED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.entry.status.not_installed");
+    public static final MessageKey LIST_ENTRY_UNINSTALL_BUTTON =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.entry.uninstall_button");
+    public static final MessageKey LIST_ENTRY_UNINSTALL_HOVER =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.entry.uninstall_hover");
+    public static final MessageKey LIST_HEADER =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.header");
+    public static final MessageKey LIST_PAGE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.list.page");
     public static final MessageKey PENDING_BUSY =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.pending.busy");
     public static final MessageKey PENDING_EMPTY =
@@ -213,6 +269,16 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.install.target_exists");
     public static final MessageKey START_INSTALL_UNCONFIRMED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.install.unconfirmed");
+    public static final MessageKey START_RECORDS_UNLISTABLE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.records.unlistable");
+    public static final MessageKey START_RECORD_REFUSED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.record.refused");
+    public static final MessageKey START_RECORD_TRANSACTION_ERROR =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.record.transaction_error");
+    public static final MessageKey START_RECORD_UNREADABLE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.record.unreadable");
+    public static final MessageKey START_RECORD_WRITE_FAILED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.record.write_failed");
     public static final MessageKey START_REMOVAL_FAILED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.removal.failed");
     public static final MessageKey START_REMOVAL_REMOVED =
@@ -221,6 +287,38 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.removal.skipped");
     public static final MessageKey START_REMOVAL_UNREADABLE =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.removal.unreadable");
+    public static final MessageKey START_UPDATE_ABANDONED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.abandoned");
+    public static final MessageKey START_UPDATE_APPLY_CROSS_FILE_SYSTEM =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.apply_cross_file_system");
+    public static final MessageKey START_UPDATE_APPLY_FAILED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.apply_failed");
+    public static final MessageKey START_UPDATE_APPLY_FAILED_UNRESTORED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.apply_failed_unrestored");
+    public static final MessageKey START_UPDATE_CLEANUP_DEFERRED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.cleanup_deferred");
+    public static final MessageKey START_UPDATE_COMMITTED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.committed");
+    public static final MessageKey START_UPDATE_NEEDS_OPERATOR =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.needs_operator");
+    public static final MessageKey START_UPDATE_ORPHAN_BACKUP =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.orphan_backup");
+    public static final MessageKey START_UPDATE_RESTORE_FAILED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.restore_failed");
+    public static final MessageKey START_UPDATE_ROLLBACK_DEFERRED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.rollback_deferred");
+    public static final MessageKey START_UPDATE_ROLLBACK_FAILED_BEFORE_LOAD =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.rollback_failed_before_load");
+    public static final MessageKey START_UPDATE_ROLLBACK_FINISHED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.rollback_finished");
+    public static final MessageKey START_UPDATE_ROLLBACK_NO_BACKUP =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.rollback_no_backup");
+    public static final MessageKey START_UPDATE_ROLLED_BACK =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.rolled_back");
+    public static final MessageKey START_UPDATE_STAGED_JAR_MISMATCH =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.staged_jar_mismatch");
+    public static final MessageKey START_UPDATE_UNCONFIRMED_ROLLED_BACK =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.start.update.unconfirmed_rolled_back");
     public static final MessageKey UNINSTALL_ALREADY_QUEUED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.uninstall.already_queued");
     public static final MessageKey UNINSTALL_ALSO_CANCELLED_UPDATE =
@@ -247,6 +345,8 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.uninstall.undetermined");
     public static final MessageKey UPDATE_ALL_DONE =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.update.all_done");
+    public static final MessageKey UPDATE_NONE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.update.none");
     public static final MessageKey UPDATE_NOT_STAGED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.update.not_staged");
     public static final MessageKey UPDATE_PENDING_UNINSTALL =
@@ -255,6 +355,20 @@ public final class UpmKeys {
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.update.replaced");
     public static final MessageKey UPDATE_STAGED =
             MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.update.staged");
+    public static final MessageKey UPDATE_UPDATING =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.update.updating");
+    public static final MessageKey VERSIONS_ENTRY =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.versions.entry");
+    public static final MessageKey VERSIONS_FAILED =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.versions.failed");
+    public static final MessageKey VERSIONS_HEADER =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.versions.header");
+    public static final MessageKey VERSIONS_INSTALL_COMMAND =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.versions.install_command");
+    public static final MessageKey VERSIONS_NONE_INSTALLABLE =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.versions.none_installable");
+    public static final MessageKey VERSIONS_NOT_FOUND =
+            MessageKey.of(MessageKey.FRAMEWORK_NAMESPACE, "upm.versions.not_found");
 
     private UpmKeys() {
         // Key constants only.

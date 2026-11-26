@@ -1,5 +1,7 @@
 package com.ultikits.ultitools.utils;
 
+import static com.ultikits.ultitools.utils.UpmReportAssertions.namedArguments;
+
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.catalogue;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.downloading;
 import static com.ultikits.ultitools.utils.ModuleUpdateFixtures.loadedModule;
@@ -105,7 +107,7 @@ class ModuleUpdateUninstallTest {
 
         assertThat(namesIn(modules)).containsExactly("demo-1.0.jar");
         assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_FAILED.translationKey(),
-                ModuleFileTransactions.Keys.UPDATE_ABANDONED);
+                UpmKeys.START_UPDATE_ABANDONED.translationKey());
         assertThat(treeOf(transactions)).hasSize(1).allMatch(p -> p.startsWith("remove-"));
     }
 
@@ -142,7 +144,7 @@ class ModuleUpdateUninstallTest {
 
         cancelRemovalByKeepingTheRunningVersion();
         assertThat(cleared).doesNotExist();
-        assertUnusableRecordIsKeptAtStart(malformed, ModuleFileTransactions.Keys.RECORD_UNREADABLE);
+        assertUnusableRecordIsKeptAtStart(malformed, UpmKeys.START_RECORD_UNREADABLE.translationKey());
     }
 
     private File withNullRemoval(String moduleName) throws IOException {
@@ -162,14 +164,16 @@ class ModuleUpdateUninstallTest {
 
         cancelRemovalByKeepingTheRunningVersion();
         assertThat(cleared).doesNotExist();
-        assertUnusableRecordIsKeptAtStart(invalid, ModuleFileTransactions.Keys.RECORD_REFUSED);
+        assertUnusableRecordIsKeptAtStart(invalid, UpmKeys.START_RECORD_REFUSED.translationKey());
         assertThat(new File(modules, "Other-x.jar")).exists();
     }
 
     @Test
     @DisplayName("uninstall refuses instead of overwriting its earlier invalid journal")
     void recordingOverARecordWithANullRemoval_isRefused() throws IOException {
-        assertNewUninstallRefusesToReplace(withNullRemoval("Demo"), ModuleFileTransactions.Keys.RECORD_REFUSED);
+        File record = withNullRemoval("Demo");
+        assertThat(attemptToReplaceRemovalRecord(record).queued()).isFalse();
+        assertUnusableRecordIsKeptAtStart(record, UpmKeys.START_RECORD_REFUSED.translationKey());
     }
 
     @Test
@@ -178,17 +182,17 @@ class ModuleUpdateUninstallTest {
         File record = PendingTestValues.legacyRemoval(dataFolder, "Demo", oldJar);
         Files.writeString(record.toPath(), "{ not json");
 
-        assertNewUninstallRefusesToReplace(record, ModuleFileTransactions.Keys.RECORD_UNREADABLE);
+        assertThat(attemptToReplaceRemovalRecord(record).queued()).isFalse();
+        assertUnusableRecordIsKeptAtStart(record, UpmKeys.START_RECORD_UNREADABLE.translationKey());
     }
 
-    private void assertNewUninstallRefusesToReplace(File record, String startKey) throws IOException {
+    private PluginInstallUtils.PendingResult attemptToReplaceRemovalRecord(File record) throws IOException {
         byte[] original = Files.readAllBytes(record.toPath());
         var result = PendingTestValues.queueRemoval(new ModuleFileTransactions(dataFolder), "Demo", null, oldJar);
 
-        assertThat(result.queued()).isFalse();
         assertThat(PendingTestValues.keys(result)).containsExactly(UpmKeys.UNINSTALL_NOT_RECORDED);
         assertThat(Files.readAllBytes(record.toPath())).isEqualTo(original);
-        assertUnusableRecordIsKeptAtStart(record, startKey);
+        return result;
     }
 
     private void assertUnusableRecordIsKeptAtStart(File badRecord, String key) throws IOException {
@@ -198,7 +202,7 @@ class ModuleUpdateUninstallTest {
 
         assertThat(start.pendingReports()).singleElement().satisfies(report -> {
             assertThat(report.getKey()).isEqualTo(key);
-            assertThat(report.getArgs()).contains(badRecord.getAbsolutePath());
+            assertThat(namedArguments(report)).contains("file=" + badRecord.getAbsolutePath());
         });
         assertThat(Files.readAllBytes(badRecord.toPath())).isEqualTo(original);
         assertThat(oldJar).exists();
@@ -229,6 +233,6 @@ class ModuleUpdateUninstallTest {
 
         assertThat(namesIn(modules)).isEmpty();
         assertThat(keys(start)).containsExactly(UpmKeys.START_REMOVAL_REMOVED.translationKey(),
-                ModuleFileTransactions.Keys.UPDATE_ABANDONED);
+                UpmKeys.START_UPDATE_ABANDONED.translationKey());
     }
 }
