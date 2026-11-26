@@ -42,7 +42,7 @@ class UltiToolsStartupMessagesTest {
         var store = mock(DataStore.class);
         when(store.getStoreType()).thenReturn("json");
         Field field = UltiTools.class.getDeclaredField("dataStore");
-        field.setAccessible(true); // NOPMD - test-only reflective access
+        field.setAccessible(true);
         field.set(plugin, store);
         List<String> lines = new ArrayList<>();
         Logger logger = Logger.getAnonymousLogger();
@@ -92,7 +92,7 @@ class UltiToolsStartupMessagesTest {
         FrameworkScheduling.install(scheduler);
         try (var bukkit = mockStatic(Bukkit.class)) {
             var method = UltiTools.class.getDeclaredMethod("releaseEarlyLogCapture", boolean.class);
-            method.setAccessible(true); // NOPMD - test-only reflective access
+            method.setAccessible(true);
             method.invoke(mock(UltiTools.class), true);
             var delay = ArgumentCaptor.forClass(Duration.class);
             verify(global).runLater(delay.capture(), any(Runnable.class));
@@ -105,7 +105,7 @@ class UltiToolsStartupMessagesTest {
 
     private static void invoke(UltiTools plugin, String name) throws Exception {
         var method = UltiTools.class.getDeclaredMethod(name);
-        method.setAccessible(true); // NOPMD - test-only reflective access
+        method.setAccessible(true);
         method.invoke(plugin);
     }
 }

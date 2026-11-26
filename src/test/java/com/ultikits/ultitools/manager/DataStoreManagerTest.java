@@ -870,6 +870,7 @@ class DataStoreManagerTest {
 
         @Test
         @DisplayName("目录渲染异常时框架仍然使用已降级的 JSON 存储")
+        @SuppressWarnings("PMD.AvoidAccessibilityAlteration")
         void throwingTranslationDoesNotPreventStorageDowngrade() throws Exception {
             var failure = new IllegalStateException("test storage renderer failed");
             var messages = mock(Messages.class, ignored -> { throw failure; });
@@ -883,7 +884,7 @@ class DataStoreManagerTest {
             when(json.getStoreType()).thenReturn("json");
             DataStoreManager.register(json);
             var init = UltiTools.class.getDeclaredMethod("initDataStore");
-            init.setAccessible(true); // NOPMD - test-only reflective access
+            init.setAccessible(true);
 
             try (var scope = FrameworkMessages.overrideForTests(messages, Locale.ENGLISH)) {
                 assertDoesNotThrow(() -> init.invoke(plugin));
