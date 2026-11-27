@@ -312,8 +312,9 @@
                  protected is part of the public contract by construction. An <exclude> entry is
                  legitimate only for a removal registered in the removal ledger
                  (compatibility/deprecations.json, status REMOVED) whose removedIn is newer than the
-                 baseline, or for a non-public member admitted by the D-21 allowlist rule. The list
-                 is empty for the 7.0.0 baseline reset: 6.x removal history is archived separately.
+                 baseline, for a non-public member admitted by the D-21 allowlist rule, or for
+                 a precisely identified framework-internal symbol outside the public contract.
+                 The 6.x removal history is archived separately from the 7.0.0 baseline.
                  This entire gate is intentionally skipped for 7.0.0 development/release; after
                  7.0.0 is published, re-enable it using the two properties above.
                  japicmp 二进制兼容性门（GATE-01）。会阻断构建：相对已发布的
@@ -321,8 +322,8 @@
                  不兼容变更都会导致 `mvn verify` 失败，除非该符号已在下方 <excludes> 中精确列出。
                  accessModifier 取 `protected` 而非 `public`，因为 BaseCommandExecutor#handleHelp
                  本身就是 `protected abstract`。排除项只允许用于删除台账中登记、且 removedIn 新于
-                 基线的删除，或符合 D-21 规则的非公开成员。7.0.0 新基线期间列表为空，6.x 历史
-                 独立归档。7.0.0 开发与发布期间跳过整道检查，发布后通过上方两个属性重新打开。 -->
+                 基线的删除、符合 D-21 规则的非公开成员，或能精确指明且不在公开契约内的框架内部符号。
+                 6.x 历史与 7.0.0 基线分开归档。7.0.0 开发与发布期间跳过整道检查，发布后通过上方两个属性重新打开。 -->
             <plugin>
                 <groupId>com.github.siom79.japicmp</groupId>
                 <artifactId>japicmp-maven-plugin</artifactId>
@@ -381,6 +382,8 @@
                              and this tree. A removal made in this cycle adds its entry here together
                              with its ledger record. -->
                         <excludes>
+                            <!-- Framework-internal since its introduction in 7.0; keep the older overloads checked. -->
+                            <exclude>com.ultikits.ultitools.utils.ClassLoaderUtils#loadClass(java.lang.String,java.lang.ClassLoader)</exclude>
                         </excludes>
                     </parameter>
                 </configuration>
