@@ -10,18 +10,17 @@
 
 <div align="center"><strong>The Modern Paper Plugin Framework</strong></div>
 
-<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Integrates with Bukkit plugins running on a supported Paper server. The 7.0.0-SNAPSHOT baseline is Paper 26.3 (build 258) on Java 25. Each framework version targets one latest Paper version; older servers are not promised compatibility.</p>
+<p align="center">Build Minecraft plugins the way you'd build a Spring Boot app — annotations, dependency injection, ORM, and scheduled tasks. Integrates with Bukkit plugins running on a supported Paper server. This branch documents the unreleased 7.0 line: Paper 26.3 (build 258) on Java 25. Each framework version targets one latest Paper version; older servers are not promised compatibility.</p>
 
 <br>
 
 <div align="center">
 <img alt="GitHub License" src="https://img.shields.io/github/license/ultikits/ultitools-reborn?style=flat-square"/>
 <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/UltiKits/UltiTools-Reborn?style=flat-square"/>
-<img alt="Maven Central" src="https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API?style=flat-square"/>
+<img alt="Latest published version on Maven Central" src="https://img.shields.io/maven-central/v/com.ultikits/UltiTools-API?style=flat-square"/>
 <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/UltiKits/UltiTools-Reborn?style=flat-square"/>
 <img alt="Paper Version" src="https://img.shields.io/badge/Paper-26.3%20build%20258-blue?style=flat-square"/>
 <img alt="Server Java Version" src="https://img.shields.io/badge/Server%20Java-25-orange?style=flat-square"/>
-<img alt="Spigot Rating" src="https://img.shields.io/spiget/rating/85214?label=SpigotMC&amp;style=flat-square"/>
 <img alt="bStats Players" src="https://img.shields.io/bstats/players/8652?style=flat-square"/>
 <img alt="bStats Servers" src="https://img.shields.io/bstats/servers/8652?style=flat-square"/>
 </div>
@@ -43,13 +42,13 @@
 
 ## Why UltiTools?
 
-Writing Minecraft plugins often means pages of boilerplate — registering commands manually, wiring up listeners, building raw SQL, scheduling BukkitRunnables everywhere. UltiTools-API eliminates all of that.
+Writing Minecraft plugins often means pages of boilerplate — registering commands manually, wiring up listeners, building raw SQL, scheduling BukkitRunnables everywhere. UltiTools-API handles that infrastructure for you.
 
 **What you get:**
 
 | Feature | Traditional Bukkit | With UltiTools-API |
 |---------|-------------------|-------------------|
-| Commands | `onCommand()` switch/case | `@CmdMapping(format = "pay <player> <amount>")` |
+| Commands | `onCommand()` switch/case | Annotated `@CmdMapping` methods compiled into Paper’s Brigadier command tree |
 | Listeners | Manual registration in `onEnable()` | `@EventListener` auto-discovered |
 | Dependency injection | Static singletons everywhere | `@Autowired` like Spring |
 | Data storage | Raw JDBC or custom file I/O | `@Table` + `@Column` ORM, works with MySQL/SQLite/JSON |
@@ -79,11 +78,12 @@ one-shot task may finish. This guarantee applies to the module-owned scheduler, 
 
 ### Requirements
 
+- **Version**: [6.5.0](https://github.com/UltiKits/UltiTools-Reborn/releases/tag/v6.5.0) is the latest stable release. `7.0.0-SNAPSHOT` is the development version on this branch; 7.0.0 has not been released. For 6.x server requirements, use the [6.x compatibility guide](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md).
 - **Server**: Paper 26.3 (build 258), the baseline for 7.0.0-SNAPSHOT. Each framework version targets one latest Paper version, not a range of older servers. Plain Spigot is not supported.
 - **Server Java**: Java 25.
 - **Building the framework**: JDK 25, compiling with `--release 25` (Java 25 bytecode, class major 69). The framework plugin declares `api-version: '26.3'`.
-- **Modules**: use module builds compatible with the framework under test. Historical 6.x support for older servers does not extend the 7.0 baseline; see [the support matrix](COMPATIBILITY.md#support-matrix) and [the historical 6.4.0 compatibility notes](COMPATIBILITY.md#supporting-servers-below-121-as-of-v640).
-- **UltiTools Plugin**: Install on your server
+- **Modules**: use builds compiled for UltiTools-API 7.0 and the target Paper version. A native module declares an integer `api-version: 700` in its `plugin.yml`, not the framework plugin’s Paper API version `26.3`. Rebuild 6.x modules; changing the declaration alone will not make a 6.x JAR work. See the [support matrix](COMPATIBILITY.md#support-matrix).
+- **UltiTools plugin**: install the framework JAR in the server’s `plugins/` directory. Install native modules under `plugins/UltiTools/plugins/` and restart the server.
 
 ### Languages and message catalogues (as of 7.0)
 
@@ -134,25 +134,28 @@ selects `zh` (an unmatched safe name selects `en`) without reading the old custo
 
 ### Add the Dependency
 
+The examples below target 7.0. Build and install the framework from this branch with JDK 25 before using `7.0.0-SNAPSHOT` as a local dependency. For the released `6.5.0` artifact on Maven Central, use the [6.x branch’s API examples](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/README.md) instead.
+
 **Maven**
 ```xml
 <dependency>
     <groupId>com.ultikits</groupId>
     <artifactId>UltiTools-API</artifactId>
-    <version>6.3.0</version>
+    <version>7.0.0-SNAPSHOT</version>
     <scope>provided</scope>
 </dependency>
 ```
 
 **Gradle**
 ```groovy
-compileOnly 'com.ultikits:UltiTools-API:6.3.0'
+// Add mavenLocal() to repositories when using a locally installed snapshot.
+compileOnly 'com.ultikits:UltiTools-API:7.0.0-SNAPSHOT'
 ```
 
-> The scope matters. UltiTools-API is a shaded JAR published with a dependency-free POM, and the
-> UltiTools plugin already provides it at runtime. Compile against it, but do not bundle it —
-> with a shade/shadow build, `compile`/`implementation` scope can bundle the framework into your
-> own JAR. As of 7.0, use Paper's native `Material`, `Sound` and `Enchantment` APIs.
+> Compile against UltiTools-API with `provided` or `compileOnly`, and declare the matching
+> `paper-api` dependency separately for Paper types. The UltiTools plugin provides the framework
+> at runtime; `compile`/`implementation` can cause a shade/shadow build to bundle a second copy.
+> Use Paper’s native `Material`, `Sound` and `Enchantment` APIs.
 > The framework no longer supplies XSeries or `XVersionUtils`. A module keeping XSeries must
 > shade and relocate it itself; Paper `libraries:` is not available to UltiTools modules.
 
@@ -170,28 +173,16 @@ player.sendActionBar(Component.text("Ready"));
 
 Building an UltiTools module is the best way to develop with UltiTools-API. Modules are lightweight plugins managed by the UltiTools framework, giving you everything you'd get from a standalone plugin plus:
 
-- **One-click updates** — Server admins can update your module directly from the UltiTools panel, no manual JAR swapping
 - **Built-in marketplace** — Publish to [UltiCloud](https://panel.ultikits.com) and let users discover, install, and manage your module from a central catalog
 - **Managed module lifecycle** — Install and update modules through UPM; changes take effect at the next server start
-- **Shared infrastructure** — Database connections, config management, and i18n are handled by the framework; your module stays small and focused
+- **Shared infrastructure** — Database connections, config management, and per-recipient message rendering are handled by the framework; your module stays small and focused
 - **Inter-module communication** — Publish and subscribe to events across modules with the built-in EventBus
 
-**Quickest start — scaffold with the CLI:**
-
-```bash
-npm install -g @ultikits/cli
-ultikits create
-# Answer the prompts, then:
-cd MyModule && mvn compile
-```
-
-This generates a complete, compilable project with `pom.xml`, main class, `plugin.yml`, language files, and tests directory. See the [CLI documentation](https://dev.ultikits.com/guide/advanced/ultikits-cli) for details.
-
-**Or set up manually** — create `plugin.yml`:
+Create the module’s `src/main/resources/plugin.yml` (its JAR-root descriptor):
 
 ```yaml
 name: MyPlugin
-version: '${project.version}'
+version: 1.0.0
 main: com.example.myplugin.MyPlugin
 api-version: 700
 authors: [ YourName ]
@@ -209,15 +200,15 @@ public class MyPlugin extends UltiToolsPlugin {
 }
 ```
 
-Add `@CmdExecutor` on command classes, `@EventListener` on listener classes, and `@Service` on services. The framework discovers and wires everything automatically.
+Add `@CmdExecutor` on command classes, `@EventListener` on listener classes, and `@Service` on services. The framework discovers and wires these components under your module’s declared scan roots.
 
 For detailed guides, see the [Developer Documentation](https://dev.ultikits.com/guide/introduction).
 
 ### Option B: Use from an Existing Bukkit Plugin on Paper
 
-Already have a Bukkit plugin running on supported Paper? You can integrate UltiTools-API without rewriting it as a module. You get DI, ORM, literal scheduled tasks and EventBus with a single connection call.
+Already have a Bukkit plugin running on supported Paper? You can integrate UltiTools-API without rewriting it as a module. The connection gives you dependency injection, annotated commands and listeners, ORM, literal scheduled tasks, and EventBus without making your plugin a native module.
 
-Add `depend: [UltiTools]` to your `plugin.yml` and call `UltiToolsAPI.connect(this)`:
+For a Bukkit-style plugin, add `depend: [UltiTools]` to your own `plugin.yml` and call `UltiToolsAPI.connect(this)` during enable:
 
 ```java
 public class MyBukkitPlugin extends JavaPlugin {
@@ -237,13 +228,13 @@ public class MyBukkitPlugin extends JavaPlugin {
 
 After `connect()`, annotated components in your plugin's package are auto-discovered and managed by the UltiTools IoC container, while your plugin remains a standard Bukkit plugin on Paper. Module-only features, such as config-bound scheduled tasks, still require a native module.
 
-See the [External Plugin API Guide](https://dev.ultikits.com/guide/advanced/external-plugin-api) for full details, or check out the [complete working example](https://github.com/UltiKits/UltiTools-External-Example).
+An external plugin can bundle recognized `messages/<locale>.yml` files for a `Messages` instance bound to its own namespace. Its overrides belong in its own data folder; `/ul reload` does not refresh them. See [external plugin messages](COMPATIBILITY.md#external-plugin-messages-as-of-700) and the [External Plugin API guide](https://dev.ultikits.com/guide/advanced/external-plugin-api).
 
 <br>
 
 ## Quick Look
 
-The core pieces of a small UltiTools module:
+The core pieces of a small UltiTools module (imports omitted):
 
 ```java
 // Main class — just one annotation to enable auto-scanning
@@ -372,7 +363,7 @@ That's it. No `onCommand()` switches, no manual listener registration, no `new B
 ## Features
 
 ### Annotation-Driven Commands
-Map subcommands directly to methods. Parameters are parsed and type-converted automatically.
+Paper registers an annotated Brigadier tree: argument parsing, usage and client completions come from that tree rather than a reflective Bukkit command map.
 
 ```java
 @CmdMapping(format = "pay <player> <amount>")
@@ -381,28 +372,16 @@ public void pay(@CmdSender Player sender, @CmdParam("player") String target, @Cm
 }
 ```
 
-> **Migrating from `AbstractCommandExecutor`.** The older base class and its misspelled
-> `AbstractCommendExecutor` shim are removed in **6.3.0**. Extend
-> `abstracts.command.BaseCommandExecutor` and implement the abstract
-> `handleHelp(CommandSender)`. Step-by-step migration instructions are in
-> [`COMPATIBILITY.md`](COMPATIBILITY.md). See the generated
-> [deprecation registry](compatibility/DEPRECATIONS.md) together with the
-> [6.3.0 removal and migration record](compatibility/records/6.3.0.md), which also covers
-> APIs removed without a deprecation period.
+> Extend `BaseCommandExecutor` and implement `handleHelp(CommandSender)`. For removed base classes, argument syntax changes and upgrade steps, see the [7.0 command engine migration](COMPATIBILITY.md#command-engine-as-of-700).
 
 ### IoC Container with `@Autowired`
 Spring-like dependency injection with three-level cache for circular dependency resolution.
 
 ```java
 @Service
-public class EconomyService {
+public class HomeAuditService {
     @Autowired
-    private TransactionLogger logger;  // Auto-injected
-
-    @Transactional
-    public void transfer(UUID from, UUID to, double amount) {
-        // Automatic rollback on exception
-    }
+    private HomeService homes; // Discovered and injected by the container
 }
 ```
 
@@ -410,22 +389,22 @@ public class EconomyService {
 Chain conditions, ordering, and pagination — works across MySQL, SQLite, and JSON storage.
 
 ```java
-List<AccountEntity> richPlayers = plugin.getDataOperator(AccountEntity.class)
+List<HomeEntity> highHomes = plugin.getDataOperator(HomeEntity.class)
     .query()
-    .where("balance").gte(10000)
-    .orderByDesc("balance")
+    .where("y").gte(100)
+    .orderByDesc("y")
     .limit(10)
     .list();
 
-boolean exists = plugin.getDataOperator(AccountEntity.class)
+boolean exists = plugin.getDataOperator(HomeEntity.class)
     .query()
-    .where("owner").eq(uuid)
-    .and("name").eq("savings")
+    .where("player_id").eq(player.getUniqueId().toString())
+    .and("name").eq("base")
     .exists();
 ```
 
 ### `@Scheduled` Tasks
-Declare scheduled methods — the framework handles BukkitRunnable creation, registration, and cleanup.
+Declare work on a managed bean — the module-owned `Scheduler` handles dispatch and unload cleanup.
 
 ```java
 @Service
@@ -498,9 +477,8 @@ public class WarpCommands extends BaseCommandExecutor {
 @Service
 public class BankService {
     @Transactional(propagation = Propagation.REQUIRED)
-    public void transfer(UUID from, UUID to, double amount) {
-        withdraw(from, amount);
-        deposit(to, amount); // Rolls back both if this throws
+    public void updateBalances() {
+        // Put the related DataOperator writes here; unchecked exceptions end the transaction.
     }
 
     @ExceptionCatch(value = IOException.class, silent = true)
@@ -531,22 +509,24 @@ public class BalanceChangeEvent extends ModuleEvent {
 public class AuditService {
     @ModuleEventHandler(priority = EventPriority.NORMAL)
     public void onBalanceChange(BalanceChangeEvent event) {
-        log(event.getSourceModule(), event.getPlayer(), event.getAmount());
+        // Handle the event using event.getSourceModule(), getPlayer() and getAmount().
     }
 }
 
-// Publish from anywhere
+// Publish using the injected EventBus.
 eventBus.publish(new BalanceChangeEvent(player, 100.0));
 ```
 
 ### More Built-in
 
-- **GUI Framework** — A declarative, reactive chest GUI system, plus a UI service for dialogs (notice, confirmation, form, choice)
-- **i18n** — Built-in internationalization with `i18n("key")`
-- **Module Management** — Install and update modules through UPM; changes take effect at the next server start
-- **WebSocket + UltiPanel** — Remote server management (commands, files, monitoring, logs)
-- **Module JAR Validation** — 100 MB / 10,000-entry limits; no class-name sandbox. Install only modules you trust
-- **Remote Access Guards** — Path traversal protection, editable roots, capabilities and command blocklists
+- **Message Catalogues** — Inject `Messages` to render MiniMessage text from `messages/<locale>.yml` for each recipient, with fallback and operator overrides.
+- **UI Service** — Use `UiService` for notices, confirmations, forms, choices, and grids; declarative screens render through the service.
+- **Bootstrap Content** — A module’s `bootstrapper:` hook can register enchantments, declare bundled data packs, and edit tags before worlds load.
+- **External Plugin API** — Connect a separate plugin running on Paper with `UltiToolsAPI`; it can bundle locale files for its own message namespace.
+- **Module Management** — Queue installs, updates and removals with `/upm`; changes take effect at the next server start.
+- **UltiCloud** — Connect the server to the panel for remote commands, editable files, monitoring and logs.
+- **Module JAR Validation** — The framework checks archive size and entry count (100 MB / 10,000 entries), not whether code is safe to run.
+- **Remote Access Guards** — Capability switches, editable roots, path validation and command blocklists bound panel access.
 
 <br>
 
@@ -560,10 +540,10 @@ with the retained error, rather than silently running without modules.
 - First start needs network access to download runtime libraries, unless they are already cached.
   If Paper reports `Error resolving libraries`, check connectivity or set
   `PAPER_DEFAULT_CENTRAL_REPOSITORY` to an accessible Maven mirror before starting the server.
-- Use a full server restart after JAR changes. `/ul reload` reloads configuration only. `/reload`,
+- Use a full server restart after JAR changes. `/ul reload` reloads configuration and message overrides, not JARs. `/reload`,
   plugin-manager hot reload, and disabling then re-enabling UltiTools are unsupported.
-- Pending updates are applied before world loading and confirmed after modules load. Stopping or
-  crashing in between causes the next start to restore the previous JAR; let startup finish first.
+- Pending module changes are applied before world loading and confirmed after modules load. Stopping or
+  crashing in between triggers recovery on the next start; let startup finish first.
 - A module whose bootstrap hook fails is not enabled, but its classes remain on the shared class
   path. Other modules that reference those classes can be affected. Do not initialize shared
   libraries that need Bukkit in an early hook.
@@ -576,8 +556,7 @@ for the startup and class-loading boundaries.
 ## Documentation
 
 Architecture notes, module guides, tutorials and the API reference live on the
-documentation site. For 6.3.0 migration and known limitations, also read
-[COMPATIBILITY.md](COMPATIBILITY.md) and the [release notes](https://dev.ultikits.com/guide/release-notes/6.3.0.html).
+documentation site. For this unreleased line, start with the [7.0 compatibility and migration guide](COMPATIBILITY.md). For earlier versions, see the [6.x compatibility guide](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md).
 
 | Document | Description |
 |----------|-------------|
@@ -598,12 +577,16 @@ UltiTools-Reborn/
 │   ├── annotations/             # Framework annotations (@Service, @CmdExecutor, @Scheduled, etc.)
 │   │   └── config/              # Validation annotations (@Range, @NotEmpty, @Size, @Pattern)
 │   ├── aop/                     # AOP system (ProxyFactory, TransactionInterceptor)
+│   ├── bootstrap/               # Paper loader, module bootstrap and content registration
+│   ├── command/                 # Brigadier compiler and Paper lifecycle integration
 │   ├── context/                 # IoC container (SimpleContainer, ComponentScanner)
 │   ├── events/                  # Module EventBus (EventBus, ModuleEvent, EventPriority, Cancellable)
 │   ├── manager/                 # Core managers (Command, Listener, Config, Plugin, Task)
 │   ├── interfaces/              # Core interfaces (DataOperator, Query, DataStore) + impl/
-│   ├── websocket/               # UltiPanel WebSocket client and protocol support
-│   └── utils/                   # SecurityPolicy, CloudAuthManager, ApiRateLimiter
+│   ├── scheduling/              # Module-owned scheduler
+│   ├── text/                    # Messages, locale selection and catalogues
+│   ├── ui/                      # UI service and screen backends
+│   └── websocket/               # UltiCloud WebSocket client and protocol support
 └── pom.xml
 ```
 

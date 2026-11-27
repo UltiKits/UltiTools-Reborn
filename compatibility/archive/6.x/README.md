@@ -6,11 +6,10 @@ before the 7.0.0 baseline reset. They are historical evidence, not an active rem
 
 - `deprecations.json`: 131 historical entries (124 REMOVED, 5 DEPRECATED, 2 ANNOUNCED).
 - `DEPRECATIONS.md`: the corresponding historical rendered registry.
-- `records/6.3.0.md`: the 6.3.0 behavioural removal records, with relative links adjusted for the archive location.
+- `records/6.3.0.md`: the 6.3.0 behavioural removal records, with links to the original compatibility guide.
 
-The original prose and version-specific links are retained unchanged. Relative links from the
-removal records to the repository-root `COMPATIBILITY.md` use `../../../../COMPATIBILITY.md`;
-only these paths changed when the records moved into the archive.
+The original prose and version-specific links are retained unchanged. Links from the removal
+records to the compatibility guide point to [the original anchors on the `6.x` branch](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md), not the 7.0 guide on the default branch.
 The active `compatibility/deprecations.json` and `compatibility/DEPRECATIONS.md` are regenerated
 from current source declarations during the 7.0.0 development/release cycle. Existing annotations
 retain their original metadata; archiving history does not delete or authorize deleting an API.
