@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -16,6 +18,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.AbstractConfigEntity;
 import com.ultikits.ultitools.abstracts.ConfigFileStubs;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
@@ -85,7 +89,7 @@ class ConfigManagerTest {
      * 测试用配置实体 - 有 @ConfigEntity 注解
      */
     @ConfigEntity("config/test.yml")
-    static class TestConfigEntity extends AbstractConfigEntity {
+    public static class TestConfigEntity extends AbstractConfigEntity {
         @ConfigEntry(path = "testValue", comment = "Test value")
         private String testValue = "default";
 
@@ -458,6 +462,65 @@ class ConfigManagerTest {
 
             // Assert
             assertThat(result).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("UltiToolsPlugin.saveConfig")
+    class SaveConfigTests {
+
+        @BeforeEach
+        void wireModuleToRegistry() throws IOException {
+            when(UltiTools.getInstance().getConfigManager()).thenReturn(configManager);
+            doCallRealMethod().when(mockPlugin).saveConfig(anyString(), any());
+            ConfigFileStubs.stubConfigFolder(mockPlugin, tempDir);
+        }
+
+        @Test
+        void saveConfigRejectsUnregisteredPath() throws IOException {
+            String path = "config/unregistered.yml";
+            Path file = tempDir.toPath().resolve(path);
+            Files.createDirectories(file.getParent());
+            byte[] original = "testValue: operator\n".getBytes(StandardCharsets.UTF_8);
+            Files.write(file, original);
+
+            assertThatThrownBy(() -> mockPlugin.saveConfig(path, TestConfigEntity.class))
+                    .isExactlyInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("TestPlugin")
+                    .hasMessageContaining(path)
+                    .hasMessageContaining("Register the configuration entity");
+            assertThat(configManager.getConfigEntity(mockPlugin, path, TestConfigEntity.class)).isNull();
+            assertThat(Files.readAllBytes(file)).isEqualTo(original);
+        }
+
+        @Test
+        void saveConfigRejectsWrongEntityType() throws IOException {
+            String path = "config/test.yml";
+            TestConfigEntity registered = new TestConfigEntity(path);
+            configManager.register(mockPlugin, registered);
+            Path file = tempDir.toPath().resolve(path);
+            byte[] original = Files.readAllBytes(file);
+            registered.setTestValue("unsaved");
+
+            assertThatThrownBy(() -> mockPlugin.saveConfig(path, AnotherConfigEntity.class))
+                    .isExactlyInstanceOf(ClassCastException.class)
+                    .hasMessageContaining("TestPlugin")
+                    .hasMessageContaining(path)
+                    .hasMessageContaining("expected " + AnotherConfigEntity.class.getName())
+                    .hasMessageContaining("found " + TestConfigEntity.class.getName());
+            assertThat(Files.readAllBytes(file)).isEqualTo(original);
+        }
+
+        @Test
+        void saveConfigAcceptsAssignableEntityType() throws IOException {
+            String path = "config/test.yml";
+            TestConfigEntity registered = new TestConfigEntity(path);
+            configManager.register(mockPlugin, registered);
+            registered.setTestValue("saved");
+
+            mockPlugin.saveConfig(path, AbstractConfigEntity.class);
+
+            assertThat(Files.readString(tempDir.toPath().resolve(path))).contains("testValue: saved");
         }
     }
 

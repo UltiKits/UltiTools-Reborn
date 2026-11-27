@@ -1025,6 +1025,12 @@ publish a catalogue cannot replace an external catalogue either.
 
 ## 7.0
 
+- `UltiToolsPlugin#saveConfig(path, type)` threw `NullPointerException` in 6.x if the path was
+  not registered for the module. In 7.0 it throws `IllegalStateException` naming the module and
+  path, without writing a file. Register the entity before saving; if you caught
+  `NullPointerException` for a missing registration, handle `IllegalStateException` instead.
+  The server-thread requirement is unchanged. A wrong entity type still throws
+  `ClassCastException`, now naming the module, path, requested type and registered type.
 - Inject `com.ultikits.ultitools.scheduling.Scheduler` with `@Autowired` in module beans. Each module
   instance owns its scheduler; unloading it cancels pending and repeating work without affecting a
   same-name replacement. An already running one-shot task may finish.
