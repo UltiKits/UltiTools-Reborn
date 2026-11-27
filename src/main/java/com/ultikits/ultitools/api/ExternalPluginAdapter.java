@@ -4,10 +4,14 @@ import java.io.File;
 import java.util.List;
 import java.util.logging.Logger;
 
+import io.papermc.paper.plugin.configuration.PluginMeta;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
 
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.manager.DataScope;
+import com.ultikits.ultitools.text.internal.TextEngine;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -38,7 +42,7 @@ public class ExternalPluginAdapter {
     private SimpleContainer context;
     @Getter
     @Setter
-    private boolean connected;
+    private volatile boolean connected;
     /**
      * The credential {@code PluginManager.registerExternal} mints for this adapter (D-17), set
      * immediately after minting and before {@code wireAop} runs. {@code null} only in the brief
@@ -49,13 +53,16 @@ public class ExternalPluginAdapter {
     @Getter
     @Setter
     private DataScope dataScope;
+    private volatile @Nullable TextEngine.ExternalCatalogue messageCatalogue;
 
     public ExternalPluginAdapter(JavaPlugin javaPlugin) {
         this.javaPlugin = javaPlugin;
         this.pluginName = javaPlugin.getName();
-        this.version = javaPlugin.getDescription().getVersion();
-        this.authors = javaPlugin.getDescription().getAuthors();
-        this.mainClass = javaPlugin.getDescription().getMain();
+        var description = javaPlugin.getDescription();
+        PluginMeta metadata = description != null ? description : javaPlugin.getPluginMeta();
+        this.version = metadata.getVersion();
+        this.authors = metadata.getAuthors();
+        this.mainClass = description != null ? description.getMain() : metadata.getMainClass();
         this.dataFolder = javaPlugin.getDataFolder();
         this.scanPackage = extractPackage(this.mainClass);
         this.connected = false;
@@ -77,6 +84,29 @@ public class ExternalPluginAdapter {
      */
     public Logger getLogger() {
         return javaPlugin.getLogger();
+    }
+
+    /** Keeps the publication handle even if the child container fails to refresh. */
+    @ApiStatus.Internal
+    public void setMessageCatalogue(TextEngine.ExternalCatalogue catalogue) {
+        messageCatalogue = catalogue;
+    }
+
+    /** Withdraws or rolls back this connection's publication, if any. */
+    @ApiStatus.Internal
+    public void withdrawMessages() {
+        var catalogue = messageCatalogue;
+        messageCatalogue = null;
+        if (catalogue != null) {
+            catalogue.withdraw();
+        }
+    }
+
+    void reloadMessages() {
+        var catalogue = messageCatalogue;
+        if (catalogue != null) {
+            catalogue.reload();
+        }
     }
 
     private static String extractPackage(String mainClassName) {

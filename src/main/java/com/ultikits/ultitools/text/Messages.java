@@ -8,8 +8,10 @@ import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * Thread-safe message rendering, callable from any thread. The injected instance belongs to a
- * module's namespace, which affects only {@link #key(String)}; all namespaces can be rendered.
+ * Thread-safe message rendering, callable from any thread. Modules and external plugins with
+ * bundled catalogues receive a view bound to their own namespace. External plugins without a
+ * bundled catalogue inherit the framework instance without a namespace guarantee. All views can
+ * render explicit keys from any published namespace.
  *
  * <p>Lookup order: requested exactly, requested language; fallback() exactly, fallback() language;
  * source language exactly, source language's language; then the key itself. Each candidate is tried

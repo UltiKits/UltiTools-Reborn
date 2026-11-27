@@ -8,14 +8,18 @@ import com.ultikits.ultitools.text.LocaleResolver;
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.text.Text;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.kyori.adventure.translation.GlobalTranslator;
@@ -34,8 +38,8 @@ public final class TextEngine implements AutoCloseable {
 
     /**
      * A read-only preparation result: constructing it neither registers nor writes anything.
-     * @param pluginName the unnormalized module name, used for namespace conflict diagnostics
-     * @param codeSource the module's own resource source, never a shared-loader lookup
+     * @param pluginName the unnormalized catalogue owner name, used in diagnostics
+     * @param codeSource the owner's resource source, never a shared-loader lookup
      * @param overrideDirectory the operator-owned messages directory
      * @param loaded parsed shipped resources and deferred diagnostics
      */
@@ -86,33 +90,63 @@ public final class TextEngine implements AutoCloseable {
     /** Parses a module's resources without logging, publishing or changing the filesystem. */
     public Prepared prepare(String namespace, String pluginName, @Nullable URL codeSource,
             Path overrideDirectory, Locale sourceLocale) {
-        if (MessageKey.FRAMEWORK_NAMESPACE.equals(namespace)) {
-            throw conflict(namespace, pluginName, "UltiTools framework");
-        }
-        checkNamespace(namespace, pluginName);
-        CatalogueLoader.Loaded loaded = loader.load(namespace, sourceLocale, codeSource);
-        if (!loaded.catalogue().hasLocale(sourceLocale)) {
-            List<String> diagnostics = new ArrayList<>(loaded.diagnostics());
-            diagnostics.add("Module '" + pluginName + "' has no shipped messages catalogue for source language '"
-                    + sourceLocale.toLanguageTag() + "'");
-            loaded = new CatalogueLoader.Loaded(loaded.catalogue(), diagnostics, loaded.shippedFiles());
-        }
-        return new Prepared(pluginName, codeSource, overrideDirectory, loader.withOverrides(loaded, overrideDirectory));
+        checkModulePreparation(namespace, pluginName);
+        return prepareCatalogue(namespace, pluginName, codeSource, overrideDirectory, sourceLocale, "Module");
     }
 
     /** Prepares resources using plugin.yml's optional source-language, defaulting to English. */
     public Prepared prepare(String namespace, String pluginName, @Nullable URL codeSource,
             Path overrideDirectory, @Nullable String sourceLanguage) {
-        Locale source = sourceLanguage == null ? Locale.ENGLISH
-                : LocaleNames.parse(sourceLanguage).orElse(Locale.ENGLISH);
-        Prepared prepared = prepare(namespace, pluginName, codeSource, overrideDirectory, source);
-        if (sourceLanguage == null || LocaleNames.parse(sourceLanguage).isPresent()) {
+        checkModulePreparation(namespace, pluginName);
+        return prepareCatalogue(namespace, pluginName, codeSource, overrideDirectory, sourceLanguage, "Module");
+    }
+
+    /** Prepares a catalogue only if the external plugin's own JAR opts in with a messages/*.yml file. */
+    public @Nullable Prepared prepareExternal(String pluginName, @Nullable URL codeSource, Path overrideDirectory) {
+        CatalogueLoader.ExternalSource source;
+        try {
+            source = loader.inspectExternal(codeSource);
+        } catch (IOException unreadable) {
+            logger.log(Level.WARNING, "Could not inspect the message catalogue of external plugin '" + pluginName + "'", unreadable);
+            return null;
+        }
+        return source == null ? null : prepareCatalogue(MessageKey.namespaceFor(pluginName), pluginName,
+                codeSource, overrideDirectory, source.sourceLanguage(), "External plugin");
+    }
+
+    private void checkModulePreparation(String namespace, String pluginName) {
+        if (MessageKey.FRAMEWORK_NAMESPACE.equals(namespace)) {
+            throw conflict(namespace, pluginName, "UltiTools framework");
+        }
+        checkNamespace(namespace, pluginName);
+    }
+
+    private Prepared prepareCatalogue(String namespace, String pluginName, @Nullable URL codeSource,
+            Path overrideDirectory, @Nullable String sourceLanguage, String kind) {
+        var parsed = sourceLanguage == null ? Optional.<Locale>empty() : LocaleNames.parse(sourceLanguage);
+        Prepared prepared = prepareCatalogue(namespace, pluginName, codeSource, overrideDirectory,
+                parsed.orElse(Locale.ENGLISH), kind);
+        if (sourceLanguage == null || parsed.isPresent()) {
             return prepared;
         }
-        List<String> diagnostics = new ArrayList<>(prepared.loaded().diagnostics());
-        diagnostics.add("Module '" + pluginName + "' has invalid source-language '" + sourceLanguage + "'; using en");
-        return new Prepared(pluginName, codeSource, overrideDirectory, new CatalogueLoader.Loaded(
-                prepared.loaded().catalogue(), diagnostics, prepared.loaded().shippedFiles()));
+        return new Prepared(pluginName, codeSource, overrideDirectory, withDiagnostic(prepared.loaded(),
+                kind + " '" + pluginName + "' has invalid source-language '" + sourceLanguage + "'; using en"));
+    }
+
+    private Prepared prepareCatalogue(String namespace, String pluginName, @Nullable URL codeSource,
+            Path overrideDirectory, Locale sourceLocale, String kind) {
+        CatalogueLoader.Loaded loaded = loader.load(namespace, sourceLocale, codeSource);
+        if (!loaded.catalogue().hasLocale(sourceLocale)) {
+            loaded = withDiagnostic(loaded, kind + " '" + pluginName + "' has no shipped messages catalogue for source language '"
+                    + sourceLocale.toLanguageTag() + "'");
+        }
+        return new Prepared(pluginName, codeSource, overrideDirectory, loader.withOverrides(loaded, overrideDirectory));
+    }
+
+    private static CatalogueLoader.Loaded withDiagnostic(CatalogueLoader.Loaded loaded, String message) {
+        List<String> diagnostics = new ArrayList<>(loaded.diagnostics());
+        diagnostics.add(message);
+        return new CatalogueLoader.Loaded(loaded.catalogue(), diagnostics, loaded.shippedFiles());
     }
 
     /** Publishes accepted module resources, retaining the prior owner until activation succeeds or rolls back. */
@@ -127,6 +161,66 @@ public final class TextEngine implements AutoCloseable {
                 prepared.loaded().catalogue(), prepared, current));
         prepared.loaded().diagnostics().forEach(logger::warning);
         loader.writeReferences(prepared.loaded(), prepared.overrideDirectory()).forEach(logger::warning);
+    }
+
+    /** Claims an exclusive namespace before bean creation, without writing any files. */
+    public synchronized ExternalCatalogue publishExternal(Prepared prepared) {
+        String namespace = prepared.loaded().catalogue().namespace();
+        String pluginName = prepared.pluginName();
+        if (MessageKey.FRAMEWORK_NAMESPACE.equals(namespace)) {
+            throw externalConflict(namespace, pluginName, "the UltiTools framework");
+        }
+        Published current = published.get(namespace);
+        if (current != null) {
+            String kind = current.owner() instanceof ExternalCatalogue ? "external plugin" : "module";
+            throw externalConflict(namespace, pluginName, kind + " '" + current.pluginName() + "'");
+        }
+        var owner = new ExternalCatalogue(namespace);
+        published.put(namespace, new Published(owner, pluginName, prepared.loaded().catalogue(), prepared, null));
+        return owner;
+    }
+
+    /** Lifecycle handle for one external publication; a stale handle never acts on a newer owner. */
+    @ApiStatus.Internal
+    public final class ExternalCatalogue {
+        private final String namespace;
+
+        private ExternalCatalogue(String namespace) {
+            this.namespace = namespace;
+        }
+
+        /** Writes framework-owned reference files after external registration succeeds. */
+        public void writeReferences() {
+            synchronized (TextEngine.this) {
+                Published current = published.get(namespace);
+                if (current == null || !ownedBy(current, this)) {
+                    return;
+                }
+                Prepared prepared = Objects.requireNonNull(current.prepared());
+                prepared.loaded().diagnostics().forEach(logger::warning);
+                try {
+                    loader.writeReferences(prepared.loaded(), prepared.overrideDirectory()).forEach(logger::warning);
+                } catch (UncheckedIOException unreadable) {
+                    logger.log(Level.WARNING, "Could not refresh message references for external plugin '"
+                            + current.pluginName() + "'", unreadable);
+                }
+            }
+        }
+
+        /** Reloads this publication only while it still owns the namespace. */
+        public void reload() {
+            synchronized (TextEngine.this) {
+                Published current = published.get(namespace);
+                if (current != null && ownedBy(current, this)) {
+                    reloadOverrides(current);
+                }
+            }
+        }
+
+        /** Withdraws this publication without changing files on disk. */
+        public void withdraw() {
+            TextEngine.this.withdraw(namespace, this);
+        }
     }
 
     /** Atomically publishes a prebuilt immutable catalogue, used by framework-internal fixtures. */
@@ -164,11 +258,15 @@ public final class TextEngine implements AutoCloseable {
 
     /** Reloads a prepared catalogue by replacing the entire immutable snapshot. */
     public synchronized void reloadOverrides(String namespace) {
-        Published current = published.get(namespace);
+        reloadOverrides(published.get(namespace));
+    }
+
+    private void reloadOverrides(@Nullable Published current) {
         if (current == null || current.prepared() == null) {
             return;
         }
         Prepared prepared = current.prepared();
+        String namespace = current.catalogue().namespace();
         CatalogueLoader.Loaded loaded = loader.withOverrides(
                 loader.load(namespace, current.catalogue().sourceLocale(), prepared.codeSource()), prepared.overrideDirectory());
         published.put(namespace, new Published(current.owner(), current.pluginName(), loaded.catalogue(), prepared,
@@ -183,9 +281,24 @@ public final class TextEngine implements AutoCloseable {
 
     private void checkNamespace(String namespace, String pluginName) {
         Published current = published.get(namespace);
-        if (current != null && !current.pluginName().equals(pluginName)) {
+        if (current == null) {
+            return;
+        }
+        if (current.owner() instanceof ExternalCatalogue) {
+            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
+                    "Module '" + pluginName + "' cannot use message namespace '" + namespace
+                            + "': it is already used by external plugin '" + current.pluginName() + "'");
+        }
+        if (!current.pluginName().equals(pluginName)) {
             throw conflict(namespace, pluginName, current.pluginName());
         }
+    }
+
+    /** Builds the connection refusal for an already-occupied external message namespace. */
+    public static PluginModuleException externalConflict(String namespace, String pluginName, String existing) {
+        return new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED,
+                "External plugin '" + pluginName + "' cannot use message namespace '" + namespace
+                        + "': it is already used by " + existing);
     }
 
     private static PluginModuleException conflict(String namespace, String pluginName, String existing) {

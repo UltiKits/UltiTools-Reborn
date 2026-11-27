@@ -3,6 +3,7 @@ package com.ultikits.ultitools.text.internal;
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.utils.CodeSourceLocations;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
@@ -21,6 +22,7 @@ import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.regex.Pattern;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 import org.yaml.snakeyaml.LoaderOptions;
@@ -63,6 +65,42 @@ public final class CatalogueLoader {
         Catalogue catalogue = parseFiles(namespace, sourceLocale, files, diagnostics);
         warnMissingBaseLanguages(catalogue, files, diagnostics);
         return new Loaded(catalogue, diagnostics, files);
+    }
+
+    /** Metadata is present only when the external plugin's own JAR has a top-level catalogue file. */
+    record ExternalSource(@Nullable String sourceLanguage) { }
+
+    @Nullable ExternalSource inspectExternal(@Nullable URL location) throws IOException {
+        if (location == null) {
+            return null;
+        }
+        Path path = CodeSourceLocations.toFile(location).toPath();
+        if (!Files.isRegularFile(path)) {
+            return null;
+        }
+        try (JarFile jar = new JarFile(path.toFile())) {
+            return jar.stream().anyMatch(CatalogueLoader::isTopLevelYml)
+                    ? new ExternalSource(readSourceLanguage(jar)) : null;
+        }
+    }
+
+    private static boolean isTopLevelYml(JarEntry entry) {
+        String name = entry.getName();
+        return !entry.isDirectory() && name.startsWith("messages/") && name.endsWith(".yml")
+                && name.indexOf('/', "messages/".length()) < 0;
+    }
+
+    private static @Nullable String readSourceLanguage(JarFile jar) throws IOException {
+        JarEntry descriptor = jar.getJarEntry("paper-plugin.yml");
+        if (descriptor == null) {
+            descriptor = jar.getJarEntry("plugin.yml");
+        }
+        if (descriptor == null) {
+            return null;
+        }
+        try (var reader = new InputStreamReader(jar.getInputStream(descriptor), StandardCharsets.UTF_8)) {
+            return YamlConfiguration.loadConfiguration(reader).getString("source-language");
+        }
     }
 
     /** Reads operator-owned overrides without creating or rewriting any operator file. */

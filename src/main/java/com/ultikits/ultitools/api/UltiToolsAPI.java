@@ -75,24 +75,25 @@ public final class UltiToolsAPI {
         if (UltiTools.getInstance() == null) {
             throw new IllegalStateException("UltiTools is not loaded! Declare UltiTools as a dependency: dependencies.server.UltiTools in paper-plugin.yml, or depend: [UltiTools] in plugin.yml");
         }
-        if (adapters.containsKey(plugin)) {
+        ExternalPluginAdapter adapter = new ExternalPluginAdapter(plugin);
+        if (adapters.putIfAbsent(plugin, adapter) != null) {
             Bukkit.getLogger().log(Level.WARNING,
                     "[UltiTools-API] Plugin " + plugin.getName() + " is already connected. Ignoring duplicate connect().");
             return;
         }
 
-        ExternalPluginAdapter adapter = new ExternalPluginAdapter(plugin);
-        adapters.put(plugin, adapter);
-
         try {
             UltiTools.getInstance().getPluginManager().registerExternal(adapter, additionalEntities);
             adapter.setConnected(true);
-            Bukkit.getLogger().log(Level.INFO,
-                    "[UltiTools-API] External plugin connected: " + plugin.getName() + " v" + adapter.getVersion());
         } catch (Exception e) {
-            adapters.remove(plugin);
             throw new IllegalStateException("Failed to connect plugin " + plugin.getName() + " to UltiTools", e);
+        } finally {
+            if (!adapter.isConnected()) {
+                adapters.remove(plugin, adapter);
+            }
         }
+        Bukkit.getLogger().log(Level.INFO,
+                "[UltiTools-API] External plugin connected: " + plugin.getName() + " v" + adapter.getVersion());
     }
 
     /**
@@ -110,6 +111,8 @@ public final class UltiToolsAPI {
                 UltiTools.getInstance().getPluginManager().unregisterExternal(adapter);
             }
         } finally {
+            // Also releases the publication if the framework manager is already gone.
+            adapter.withdrawMessages();
             adapter.setConnected(false);
             try {
                 Bukkit.getLogger().log(Level.INFO,
@@ -118,6 +121,23 @@ public final class UltiToolsAPI {
                 // Bukkit.server may be null during shutdown or in test environments
             }
         }
+    }
+
+    /**
+     * Re-reads the message overrides in a connected external plugin's {@code messages/} data
+     * directory. Does nothing if the plugin did not ship a message catalogue in its JAR.
+     * These overrides are not refreshed by {@code /ul reload}.
+     *
+     * @param plugin the connected external JavaPlugin
+     * @throws IllegalStateException if the plugin is not connected to UltiTools
+     * @since 7.0.0
+     */
+    public static void reloadMessages(JavaPlugin plugin) {
+        ExternalPluginAdapter adapter = adapters.get(plugin);
+        if (adapter == null || !adapter.isConnected()) {
+            throw new IllegalStateException("Plugin " + plugin.getName() + " is not connected to UltiTools");
+        }
+        adapter.reloadMessages();
     }
 
     /**
@@ -220,8 +240,23 @@ public final class UltiToolsAPI {
      * @since 6.2.2
      */
     public static void disconnectAll() {
+        Throwable firstFailure = null;
         for (JavaPlugin plugin : new ArrayList<>(adapters.keySet())) {
-            disconnect(plugin);
+            try {
+                disconnect(plugin);
+            } catch (RuntimeException | Error failure) {
+                if (firstFailure == null) {
+                    firstFailure = failure;
+                } else if (failure != firstFailure) {
+                    firstFailure.addSuppressed(failure);
+                }
+            }
+        }
+        if (firstFailure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (firstFailure instanceof Error error) {
+            throw error;
         }
     }
 }

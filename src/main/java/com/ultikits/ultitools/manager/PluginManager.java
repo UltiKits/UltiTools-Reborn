@@ -2,8 +2,11 @@ package com.ultikits.ultitools.manager;
 
 import static com.ultikits.ultitools.manager.ManagerKeys.*;
 import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.MessageKey;
+import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.text.Text;
 import com.ultikits.ultitools.text.internal.FrameworkMessages;
+import com.ultikits.ultitools.text.internal.TextEngine;
 
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.ui.UiService;
@@ -49,6 +52,7 @@ import org.bukkit.event.server.PluginDisableEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
 
 import com.ultikits.ultitools.UltiTools;
 import com.ultikits.ultitools.abstracts.ReloadReport;
@@ -3849,8 +3853,8 @@ public class PluginManager {
     public void registerExternal(ExternalPluginAdapter adapter, Class<?>[] additionalEntities) {
         // 1. Create child IoC container
         SimpleContainer context = new SimpleContainer();
-        context.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
-        context.registerShutdownHook();
+        SimpleContainer parent = UltiTools.getInstance().getDependenceManagers().getContext();
+        context.setParent(parent);
         context.setClassLoader(adapter.getPluginClassLoader());
 
         // 07-fix: the per-container diagnostic identifier for
@@ -3880,23 +3884,22 @@ public class PluginManager {
         context.registerType(JavaPlugin.class, javaPlugin);
         registerOwnType(context, javaPlugin);
 
-        // 2. Scan components in the external plugin's package
-        if (!adapter.getScanPackage().isEmpty()) {
-            context.scanComponents(new String[]{adapter.getScanPackage()});
-        }
-
-        // 3. Refresh container to instantiate beans
-        DataScope scope = DataScope.forExternal(adapter.getPluginName(), adapter.getDataFolder(),
-                scanExternalEntities(adapter, additionalEntities));
-        // registerExternalScope runs FIRST (02-14 Task 2): if it refuses (another plugin already
-        // holds this data folder), nothing below has run yet -- no entity ownership recorded, no
-        // DataScope attached to the adapter. A refused registerExternal() leaves no partial state.
-        registerExternalScope(adapter.getDataFolder(), scope);
-        // Only the ownership records this attempt inserts are its own to undo on a refusal: a
-        // record already held -- by a live registration of the same plugin, or by anyone else --
-        // is left alone (#537, gate 1).
+        DataScope scope = null;
         List<Class<?>> ownershipAdded = new ArrayList<>();
+        TextEngine.ExternalCatalogue catalogue;
         try {
+            context.registerShutdownHook();
+            // Scanning may instantiate @Configuration beans before refresh().
+            catalogue = registerExternalMessages(adapter, context, parent);
+            if (!adapter.getScanPackage().isEmpty()) {
+                context.scanComponents(new String[]{adapter.getScanPackage()});
+            }
+
+            scope = DataScope.forExternal(adapter.getPluginName(), adapter.getDataFolder(),
+                    scanExternalEntities(adapter, additionalEntities));
+            // Claim the folder before recording any entity ownership or attaching the scope (02-14 Task 2).
+            registerExternalScope(adapter.getDataFolder(), scope);
+            // Undo only the ownership records inserted by this registration (#537).
             recordNewEntityOwnership(scope, ownershipAdded);
             adapter.setDataScope(scope);
             wireAop(context, scope);
@@ -3916,28 +3919,45 @@ public class PluginManager {
             // #531: an external plugin has no module config registry, so a config binding cannot
             // resolve; refuse it here, before any side effect, rather than mid-scheduling.
             refuseConfigBindingsOutsideModules(context);
-        } catch (RuntimeException | Error refused) {
-            // #537: a refusal (or a failed refresh()) after the scope was registered used to leave
-            // the scope, the entity ownership, the adapter's data scope and its context behind, so
-            // a corrected connection of the same plugin in the same process met the stale scope.
-            // Nothing Bukkit-facing has been registered yet at this point, so undoing these four
-            // is the whole unwinding unregisterExternal would do.
-            unwindRefusedExternal(adapter, context, scope, ownershipAdded);
-            throw refused;
-        }
-
-        try {
             registerExternalResources(adapter, context);
-        } catch (RuntimeException | Error failed) {
-            unwindRefusedExternal(adapter, context, scope, ownershipAdded);
-            throw failed;
+        } catch (RuntimeException | Error refused) {
+            unwindRefusedExternal(adapter, context, scope, ownershipAdded, refused);
+            throw refused;
         }
 
         String pluginName = adapter.getPluginName();
         connectedExternalScanPackages.put(pluginName, adapter.getScanPackage());
 
+        if (catalogue != null) {
+            catalogue.writeReferences();
+        }
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
+    }
+
+    private @Nullable TextEngine.ExternalCatalogue registerExternalMessages(ExternalPluginAdapter adapter,
+            SimpleContainer context, @Nullable SimpleContainer parent) {
+        TextEngine engine = parent == null ? null : parent.getBean(TextEngine.class);
+        if (engine == null) {
+            return null;
+        }
+        var source = adapter.getJavaPlugin().getClass().getProtectionDomain().getCodeSource();
+        var prepared = engine.prepareExternal(adapter.getPluginName(), source == null ? null : source.getLocation(),
+                adapter.getDataFolder().toPath().resolve("messages"));
+        if (prepared == null) {
+            return null;
+        }
+        String namespace = prepared.loaded().catalogue().namespace();
+        // A module created through the legacy connector constructor has no TextEngine publication.
+        for (UltiToolsPlugin module : pluginList) {
+            if (namespace.equals(MessageKey.namespaceFor(module.getPluginName()))) {
+                throw TextEngine.externalConflict(namespace, adapter.getPluginName(), "module '" + module.getPluginName() + "'");
+            }
+        }
+        var catalogue = engine.publishExternal(prepared);
+        adapter.setMessageCatalogue(catalogue);
+        context.registerSingleton(Messages.class.getName(), engine.messagesFor(namespace));
+        return catalogue;
     }
 
     /**
@@ -3945,7 +3965,8 @@ public class PluginManager {
      * before its registration starts, so a partially completed failing stage is undone as well.
      * Cleanup runs in reverse order, before the caller closes the container and releases ownership.
      * A cleanup failure is attached to the original exception rather than hiding it or skipping
-     * the remaining inverses. No configuration or language file is written by this path.
+     * the remaining inverses. This stage writes no configuration or messages; the caller writes
+     * catalogue reference copies only after registration succeeds.
      */
     private void registerExternalResources(ExternalPluginAdapter adapter, SimpleContainer context) {
         String pluginName = adapter.getPluginName();
@@ -4043,28 +4064,24 @@ public class PluginManager {
     }
 
     /**
-     * Undoes what {@link #registerExternal(ExternalPluginAdapter, Class[])} registered before a
-     * refusal after the folder scope was recorded (#537): closes the context (if {@code refresh()}
-     * got as far as building one), clears the adapter's context and data scope, removes the
-     * entity-ownership records this attempt inserted, and removes the folder scope -- only if it is
-     * still this attempt's own scope instance. A record or scope this attempt found already in place
-     * (a live registration of the same plugin, for example) is left alone.
-     *
-     * @param adapter        the refused adapter
-     * @param context        the container this attempt built
-     * @param scope          the scope this attempt minted and registered
-     * @param ownershipAdded the entities whose ownership record this attempt inserted
+     * Releases only this attempt's container, message publication and data ownership. No message
+     * files have been written. A scope or ownership record already held by another attempt is left alone.
      */
-    private void unwindRefusedExternal(ExternalPluginAdapter adapter, SimpleContainer context, DataScope scope,
-            List<Class<?>> ownershipAdded) {
+    private void unwindRefusedExternal(ExternalPluginAdapter adapter, SimpleContainer context, @Nullable DataScope scope,
+            List<Class<?>> ownershipAdded, Throwable refused) {
         try {
             context.close();
-        } catch (RuntimeException closeFailure) {
-            Bukkit.getLogger().log(Level.WARNING, closeFailure, () -> "[UltiTools-API] Could not close the container of "
-                    + "refused external plugin " + adapter.getPluginName());
+        } catch (RuntimeException | Error closeFailure) {
+            if (closeFailure != refused) {
+                refused.addSuppressed(closeFailure);
+            }
         }
+        adapter.withdrawMessages();
         adapter.setContext(null);
         adapter.setDataScope(null);
+        if (scope == null) {
+            return;
+        }
         for (Class<?> entity : ownershipAdded) {
             entityOwnership.remove(entity, scope.getPluginName());
         }
@@ -4082,6 +4099,14 @@ public class PluginManager {
      * @since 6.2.2
      */
     public void unregisterExternal(ExternalPluginAdapter adapter) {
+        try {
+            unregisterExternalResources(adapter);
+        } finally {
+            adapter.withdrawMessages();
+        }
+    }
+
+    private void unregisterExternalResources(ExternalPluginAdapter adapter) {
         String pluginName = adapter.getPluginName();
         connectedExternalScanPackages.remove(pluginName);
 
