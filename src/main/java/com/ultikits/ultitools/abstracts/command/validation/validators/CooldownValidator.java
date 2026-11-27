@@ -447,8 +447,8 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      * falling back to a class-level {@code @CmdCD} on the method's declaring class, falling back
      * to {@link #defaultCooldownSeconds} when none is present -- most-derived-wins, via {@link
      * ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class, Class)}. This is the SAME
-     * resolution {@code PluginManager}'s load-time refusal treats as satisfying the contract
-     * (SILENT-11 / D-01 follow-up, WR-02 / 05-REVIEW.md fix): a class-level {@code @CmdCD} that
+     * resolution {@code PluginManager}'s load-time refusal treats as satisfying the contract:
+     * a class-level {@code @CmdCD} that
      * passes the load-time check -- whether declared on a shared abstract base or on the
      * concrete executor class itself -- now actually cools down every inherited mapping that
      * does not declare its own.
@@ -462,8 +462,7 @@ public class CooldownValidator implements CommandValidator, PlayerCacheManager.E
      *
      * @param method  the matched command mapping method
      * @param context the dispatch context; its executor class resolves a class-level
-     *                {@code @CmdCD} (WR-02, 05-REVIEW.md -- {@code null} falls back to the
-     *                declaring class), its executor instance selects a bound value
+     *                {@code @CmdCD} ({@code null} falls back to the declaring class), its executor instance selects a bound value
      * @return the resolved cooldown in seconds, or {@code null} for an unresolved binding
      * @since 6.3.0
      */

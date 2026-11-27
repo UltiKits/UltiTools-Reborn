@@ -19,7 +19,7 @@ public class CommonUtils {
      * <p>
      * Reads the current UUID without writing to the credential store when one already exists --
      * only the first-ever call (or a rare concurrent race against another first-ever call) needs
-     * to write. WR-01 (08-REVIEW.md): the previous unconditional {@link CredentialStore#update}
+     * to write. The previous unconditional {@link CredentialStore#update}
      * call rewrote the live-credential file on every invocation, including the common
      * already-exists case, which needlessly widened the write window on the single-owner store.
      * <p>

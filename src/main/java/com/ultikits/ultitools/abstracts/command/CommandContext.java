@@ -66,7 +66,7 @@ public final class CommandContext {
      * The concrete {@link com.ultikits.ultitools.abstracts.command.BaseCommandExecutor} class
      * dispatching this command -- the live executor class captured by typed invocation, i.e.
      * the SAME class {@code PluginManager}'s load-time contract gate inspects via
-     * {@code executor.getClass()}. WR-02 (05-REVIEW.md): {@link #matchedMethod}'s {@code
+     * {@code executor.getClass()}. The {@link #matchedMethod} method's {@code
      * getDeclaringClass()} is NOT always this class -- an inherited, unoverridden {@code
      * @CmdMapping} method's declaring class is whatever ancestor first declared it. Threading
      * the concrete executor class through the context lets {@code

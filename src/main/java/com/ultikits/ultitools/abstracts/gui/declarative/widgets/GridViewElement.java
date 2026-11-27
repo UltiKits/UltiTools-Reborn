@@ -39,8 +39,7 @@ public class GridViewElement extends Element {
      * this is the only signal available here for D-11's conflict rule without changing
      * {@code Widget}/{@code ItemDisplay}/{@code TextButton}'s public API (out of this plan's
      * scope; {@code Widget} in particular is required to stay unchanged). A widget legitimately
-     * positioned at slot 0 therefore never triggers the conflict warning below -- see
-     * 05-13-SUMMARY.md for the full reasoning behind this choice.
+     * positioned at slot 0 therefore never triggers the conflict warning below.
      */
     private static final int DEFAULT_UNSET_SLOT = 0;
 
@@ -154,9 +153,8 @@ public class GridViewElement extends Element {
      * A child whose Element is not itself a leaf (a nested {@link Container}, for example) has
      * no {@link RenderNode} of its own; {@link #collectRenderNodeLeaves} walks its descendants
      * and every leaf found receives the same computed slot. When more than one leaf exists
-     * under a single cell this is a genuine, documented collision (see
-     * {@code DEFAULT_UNSET_SLOT}'s sibling note in 05-13-SUMMARY.md) rather than an arbitrary
-     * "last writer wins" -- the traversal order is deterministic post-order, matching
+     * under a single cell this is a genuine collision rather than an arbitrary "last writer wins"
+     * -- the traversal order is deterministic post-order, matching
      * {@code GuiRenderer.collectRenderNodesRecursive}'s own discipline, so the result is
      * reproducible across rebuilds even though it is not yet a resolved layout.
      */

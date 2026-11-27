@@ -21,7 +21,10 @@
  * {@code AbstractCommandExecutor} (and its misspelled shim, {@code AbstractCommendExecutor}) was
  * removed in 6.3.0 after its 6.2.1 deprecation window closed. See the
  * <a href="https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md#migrating-off-abstractcommandexecutor">6.x migration guide for AbstractCommandExecutor</a>
- * for the base-class swap shown below and the other steps needed before rebuilding.
+ * for the base-class swap shown below and the other 6.3.0 migration steps. Before rebuilding
+ * against 7.0, also follow the
+ * <a href="https://github.com/UltiKits/UltiTools-Reborn/blob/main/COMPATIBILITY.md#command-engine-as-of-700">Command engine (as of 7.0.0)</a>
+ * section of {@code COMPATIBILITY.md} on {@code main}.
  * <pre>{@code
  * // Old way (removed in 6.3.0)
  * public class MyCommand extends AbstractCommandExecutor {

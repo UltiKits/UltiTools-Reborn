@@ -39,7 +39,7 @@ import org.apache.commons.dbutils.QueryRunner;
  * <p>
  * Deliberately does not attempt to cancel or interrupt a statement already in flight when its
  * budget expires -- that would be a wall-clock bound on the surrounding method body, which
- * REQUIREMENTS.md rules out as not implementable on plain JDBC (WIRE-14). The bound here is
+ * cannot be enforced on plain JDBC. The bound here is
  * per-statement, by construction, applied before the statement is ever executed.
  *
  * @author wisdomme

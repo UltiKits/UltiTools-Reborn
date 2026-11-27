@@ -15,7 +15,7 @@ import java.util.Map;
  * @author wisdomme
  * @since 6.2.0
  */
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Copies private fields between bean instances -- see 08-GATE05-TRIAGE.md
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Copies private fields between bean instances
 public final class BeanCopyUtil {
 
     /** Primitive type to its wrapper class; see {@link #boxed(Class)}. */

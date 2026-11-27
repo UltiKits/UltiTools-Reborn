@@ -74,10 +74,9 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
 final class AgentConnection {
 
     // =====================================================================================
-    // Contract: the codes, classes and numbers below are those of the frozen protocol contract
-    // 2.1.0 (PROTOCOL.md section 7, "close codes and client actions", and section 9's timing
-    // constants), vendored under src/test/resources/ulticloud-contract/v2/2.1.0. AgentConnectionTest
-    // holds one case per row of that table. Nothing outside this section names a raw code.
+    // Contract: see section 7 (close codes, client actions and backoff constants) in
+    // src/test/resources/ulticloud-contract/v2/2.2.0/PROTOCOL.md. AgentConnectionTest covers
+    // the close-code policy. Nothing outside this section names a raw code.
     // =====================================================================================
 
     /** Upgrade refused: the credential is invalid. Stop and delete the credential. */

@@ -14,8 +14,7 @@ import java.lang.annotation.Target;
  * {@code CmdTargetComposition}). BOTH narrowing to PLAYER or to CONSOLE is legal; an identical
  * pair is legal. Widening a restriction back to BOTH, and switching laterally between PLAYER and
  * CONSOLE, are both ambiguous and are refused at plugin load, naming the offending class and
- * method - never silently resolved to either reading. See
- * {@code .planning/phases/01-adjudication-foundations-compatibility-baseline/01-ADJUDICATION.md}.
+ * method - never silently resolved to either reading.
  *
  * @see <a href="https://dev.ultikits.com/en/guide/essentials/cmd-executor.html#sender-limitation">@CmdTarget</a>
  */

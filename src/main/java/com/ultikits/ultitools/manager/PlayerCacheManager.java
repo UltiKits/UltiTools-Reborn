@@ -37,7 +37,7 @@ import org.jetbrains.annotations.ApiStatus;
  *
  * @since 6.2.0
  */
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Sweeps @PlayerCache-annotated fields -- see 08-GATE05-TRIAGE.md
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Sweeps @PlayerCache-annotated fields
 @ApiStatus.Internal
 public class PlayerCacheManager {
 

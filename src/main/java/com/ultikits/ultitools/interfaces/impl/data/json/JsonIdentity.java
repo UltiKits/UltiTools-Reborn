@@ -20,7 +20,7 @@ import com.ultikits.ultitools.exceptions.ErrorCode;
  * The durable state shared by every JSON table of one identity (a plugin, an external data folder,
  * or one directly constructed operator): its redo journal, the sequence numbers its records draw
  * from, the commit gate, the checkpoint mutex, the registry of its operators and the generation
- * counter behind their dirty marks (20.4-RESEARCH.md section 12.7).
+ * counter behind their dirty marks.
  * <p>
  * <b>Commit gate.</b> A commit holds the gate's read side from allocating its record's sequence
  * number until its changes are in the operators' committed entries; a write outside a transaction
@@ -189,7 +189,7 @@ public final class JsonIdentity {
 
     /**
      * Writes every entry changed since the last checkpoint to its file, crash atomically, and
-     * truncates the journal (20.4-RESEARCH.md section 12.7). In order:
+     * truncates the journal. In order:
      * <ol>
      *   <li>take the checkpoint mutex, so checkpoints of this identity run one at a time, waiting
      *       for one already running;</li>

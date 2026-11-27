@@ -54,7 +54,7 @@ public class SimpleTempListener<E extends Event> implements TempListener {
     // from an untyped one here, since Bukkit's own dispatcher is what observes it. It also
     // asserts an effectively-impossible internal state: registerEvent only fires this callback
     // for the exact eventClass this listener registered (or a subclass), so the cast can only
-    // fail if Bukkit's own dispatch contract is violated. See 08-GATE05-TRIAGE.md.
+    // fail if Bukkit's own dispatch contract is violated.
     /**
      * Register the listener with Bukkit. A second call on an instance that is still registered is
      * a no-op.

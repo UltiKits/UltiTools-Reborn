@@ -123,8 +123,7 @@ public class RemoteActionLog {
     }
 
     /**
-     * Removes and closes the {@link FileHandler} this instance attached in {@link #init(File)}
-     * (WR-01, 06-REVIEW.md).
+     * Removes and closes the {@link FileHandler} this instance attached in {@link #init(File)}.
      * <p>
      * A no-op if {@link #init(File)} was never called or failed to attach a handler
      * ({@link #attachedHandler} stays {@code null}). Flushes before closing so no buffered line is

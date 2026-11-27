@@ -71,7 +71,7 @@ import lombok.Getter;
  * writes must not acknowledge unrelated unsaved code edits. Missing reload keys retain live fields,
  * but their baseline remains the initial declared default.
  */
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields -- see 08-GATE05-TRIAGE.md
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Config binder writes/reads private @ConfigEntry fields
 @Getter
 public abstract class AbstractConfigEntity {
     private static final Object ABSENT_RELOAD_VALUE = new Object();
@@ -3044,7 +3044,7 @@ public abstract class AbstractConfigEntity {
      * a length, and {@code @NotEmpty} violations are empty by definition, so neither can leak a
      * secret verbatim (T-04-04).
      * <p>
-     * Widened in 6.3.0 (04-REVIEW.md WR-03) to also cover {@code key}/{@code auth}/
+     * Widened in 6.3.0 to also cover {@code key}/{@code auth}/
      * {@code private}/{@code cert}, accepting the resulting false positives (a field merely
      * named e.g. {@code publicKey} is redacted too) as the safer default, per Phase 2 D-15's
      * fail-closed preference. The reason for the widening is new, not cosmetic: before the

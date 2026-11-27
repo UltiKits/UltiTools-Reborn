@@ -115,7 +115,7 @@ import lombok.Getter;
 /**
  * UltiTools plugin manager.
  */
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Injects a plugin's private static instance field -- see 08-GATE05-TRIAGE.md
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Injects a plugin's private static instance field
 public class PluginManager {
     /**
      * The name of the JVM system property that opts back into the pre-6.3.0 degraded load
@@ -253,7 +253,7 @@ public class PluginManager {
      * DataScope#refusalFor(Class)} say "belongs to module X" instead of only "not registered to
      * you" -- D-15 requires the two to be distinguishable. First registration wins; a genuine
      * collision has never been observed across this project's 21 {@code @Table} classes / 17
-     * repositories (02-CONTEXT.md), so this is a defensive tie-break, not a load-bearing one.
+     * repositories, so this is a defensive tie-break, not a load-bearing one.
      */
     private final Map<Class<?>, String> entityOwnership = new ConcurrentHashMap<>();
 
@@ -728,7 +728,7 @@ public class PluginManager {
      * Logs one refusal WARNING for a module that failed to initialize, surfacing the innermost
      * {@link UltiToolsException}'s message (module/file/field/value/constraint, per e.g.
      * {@code ConfigurationException.validationFailed(...)}) instead of an outer wrapper's
-     * generic text (04-REVIEW.md WR-02). All three refusal-log sites in this class route
+     * generic text. All three refusal-log sites in this class route
      * through here so the message shape has exactly one place it is built.
      * <p>
      * Package-private, not private: {@code PluginManagerTest} lives in this same package and
@@ -752,7 +752,7 @@ public class PluginManager {
      * mirroring {@link #logPluginInitializationFailure(String, Throwable)}'s message shape
      * so both refusal classes (load-time, unload-time) read the same way in the console.
      * Package-private for the same reason as that method: a test-seam choice, not a widened
-     * API surface (WR-01, 16-REVIEW-lifecycle.md).
+     * API surface.
      *
      * @param moduleName the module whose unregistration failed, however the caller
      *                   identifies it
@@ -902,9 +902,8 @@ public class PluginManager {
             // Listener unregistration happens inside unregisterSelf() itself, AFTER
             // onUnregister() (D-02) -- do not also unregister listeners here. Calling it
             // directly at this point ran onUnregister() with the module's own listeners
-            // already torn down, contradicting that hook's own javadoc guarantee (CR-01,
-            // 16-REVIEW-lifecycle.md), and unregistered listeners twice per unregister
-            // (IN-01, harmless but redundant).
+            // already torn down, contradicting that hook's own javadoc guarantee, and
+            // unregistered listeners twice per unregister (harmless but redundant).
             //
             // Unlike the best-effort registry bookkeeping above, this step's own failure is
             // NOT swallowed: a module's onUnregister() throwing is a real defect the caller
@@ -1085,8 +1084,8 @@ public class PluginManager {
             // not cascade into every subsequent module's own command/listener/EventBus/
             // PanelResponderRegistry unregistration, nor skip pluginList.clear()/
             // taskManager.cancelAllCore() below, nor propagate out of close() into
-            // UltiTools.onDisable() and skip its final configuration report (WR-01,
-            // 16-REVIEW-lifecycle.md) -- mirrors the register() convention above.
+            // UltiTools.onDisable() and skip its final configuration report.
+            // This mirrors the register() convention above.
             try {
                 unregister(plugin, isNameInUseByAnotherLoadedCopy(plugin), true);
             } catch (Exception | Error e) {
@@ -2306,7 +2305,7 @@ public class PluginManager {
      * name collision; a plugin that simply writes its own class with a matching {@code @Table}
      * name never reaches this method at all (no {@code additionalEntities} declaration involved),
      * and is a pre-existing, out-of-scope risk inherent to a single shared MySQL DataSource across
-     * all plugins -- not the vulnerability 02-SECURITY.md described or this plan closes.
+     * all plugins.
      *
      * @param declaringPluginName the plugin declaring {@code entityClass}
      * @param declaringClass      the declaring plugin's own main/adapter class, used to look it up
@@ -3697,7 +3696,7 @@ public class PluginManager {
      * Get scan packages for a plugin class.
      * Reads from @UltiToolsModule or @ComponentScan annotations, defaults to plugin class package.
      * <p>
-     * Widened from {@code private} to {@code public} by 16-06-PLAN.md (D-08): {@code EconomyUtils}'
+     * Widened from {@code private} to {@code public}: {@code EconomyUtils}'
      * module-attribution helper needs the same real scan-package resolution this class already
      * uses at registration time, rather than duplicating (and risking drifting from) this logic in
      * another package. A new public method is additive, not a binary-compatibility break — japicmp
@@ -3870,8 +3869,8 @@ public class PluginManager {
         // method -- leaving displayName null, which ModuleScanDiagnostics' isBlank guard turns
         // into a silently dropped record AND a suppressed summary. Set before
         // scanComponents/refresh() so a bean-creation-time linkage failure here produces the
-        // same operator-matchable signature compatibility/records/6.3.0.md documents for
-        // module JARs, instead of only the per-bean WARNING createBean logs.
+        // same operator-matchable signature documented in compatibility/archive/6.x/records/6.3.0.md
+        // for module JARs, instead of only the per-bean WARNING createBean logs.
         context.setDisplayName(adapter.getPluginName());
 
         // Register the connector's own JavaPlugin so services can inject it via constructor.
@@ -3913,7 +3912,7 @@ public class PluginManager {
             context.refresh();
             adapter.setContext(context);
 
-            // WR-01 (05-REVIEW.md): the External Plugin API's own registration path never reached
+            // The External Plugin API's own registration path never reached
             // validateCommandExecutorContracts -- register(UltiToolsPlugin)/initializePlugin already
             // enforce it (assemblePluginContainer's own last line), but registerExternal is a
             // separate, parallel container-assembly path that built its own SimpleContainer and

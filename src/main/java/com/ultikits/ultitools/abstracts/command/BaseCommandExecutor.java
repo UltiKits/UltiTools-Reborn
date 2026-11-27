@@ -80,7 +80,7 @@ import lombok.Getter;
  * @version 2.0.0
  * @since 6.2.0
  */
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes the mapped @CmdMapping method -- see 08-GATE05-TRIAGE.md
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes the mapped @CmdMapping method
 public abstract class BaseCommandExecutor {
     
     private final BiMap<String, Method> mappings = HashBiMap.create();

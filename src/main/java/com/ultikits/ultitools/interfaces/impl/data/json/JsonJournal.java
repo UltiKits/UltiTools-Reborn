@@ -47,8 +47,8 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
 import com.ultikits.ultitools.exceptions.ErrorCode;
 
 /**
- * The redo journal that makes a multi-file JSON commit crash consistent (20.4-RESEARCH.md
- * section 12.7). One journal serves one identity: the directory whose sub-directories are that
+ * The redo journal that makes a multi-file JSON commit crash consistent. One journal
+ * serves one identity: the directory whose sub-directories are that
  * identity's tables, each holding one {@code <key>.json} file per entity.
  * <p>
  * <b>Records.</b> A record lists entity after-images (or deletes) for any number of tables. It is
@@ -171,7 +171,7 @@ final class JsonJournal {
 
     /**
      * Pauses between the attempts of a retried move, in milliseconds: at most 5 attempts and
-     * 150 ms of waiting in all (20.4-DECISIONS.md question 10 A).
+     * 150 ms of waiting in all.
      */
     private static final long[] MOVE_RETRY_PAUSES_MILLIS = {10L, 20L, 40L, 80L};
 
@@ -336,7 +336,7 @@ final class JsonJournal {
      * the applied ones and replay to the same files. A missing journal directory is an empty journal; nothing is created. A real
      * failure to force a table directory stops recovery before any applied record is deleted.
      * <p>
-     * A damaged committed record (question 8 option A of 20.4-DECISIONS.md) makes recovery throw
+     * A damaged committed record makes recovery throw
      * before any table file or record is changed. The record is never deleted, skipped or applied:
      * recovery keeps refusing until the server operator moves the file out of the journal
      * directory, and then applies the remaining records.

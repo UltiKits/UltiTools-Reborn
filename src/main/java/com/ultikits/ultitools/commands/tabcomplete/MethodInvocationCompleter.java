@@ -27,7 +27,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @version 1.0.0
  * @since 6.2.0
  */
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes a @CmdParam(suggest=) method -- see 08-GATE05-TRIAGE.md
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // Invokes a @CmdParam(suggest=) method
 public class MethodInvocationCompleter implements TabCompleter {
     
     private static final Logger logger = Logger.getLogger(MethodInvocationCompleter.class.getName());

@@ -30,7 +30,8 @@ import com.google.gson.JsonPrimitive;
  * <p>
  * {@link #parse} never throws: a missing, partial, malformed or oversized body yields a value that
  * carries only the status (and the header-derived fields), and the status alone then decides what
- * the connection does. As in the frozen contract 2.1.0 (PROTOCOL.md section 10, plan 22-20, S-63),
+ * the connection does. As specified by section 10 of the vendored protocol contract
+ * ({@code src/test/resources/ulticloud-contract/v2/2.2.0/PROTOCOL.md}),
  * every field is read from inside {@code error} only: a body without that wrapper is status-only,
  * and the plan-limit fields of a 402 ({@code reason}, {@code graceEndedAt}, {@code manageUrl}) are
  * read from {@code error.details} only, like the 426 details.

@@ -27,7 +27,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  *
  * @param <T> the entity type
  */
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // ORM maps private @Column fields to SQL -- see 08-GATE05-TRIAGE.md
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // ORM maps private @Column fields to SQL
 public class QueryImpl<T extends BaseDataEntity<String>> implements Query<T> {
 
     private final DataOperator<T> operator;
