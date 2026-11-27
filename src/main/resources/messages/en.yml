@@ -74,6 +74,7 @@ datastore:
     no_provider: "no registered data store provides that type"
   downgraded: "Data store downgraded: datasource.type in config.yml is '<configured>', but '<actual>' is actually in use. Reason: <reason>"
   player_data_store: "Player data will be read from and written to the '<store>' store. Data is not shared between backends - if this is not what you want, stop the server, fix config.yml and restart."
+  flush_rate_negative: "datasource.flushRate in config.yml is <value>, so periodic JSON flushes are off; data is written only when the server stops. Set it to a positive number of seconds and restart the server."
 update:
   checking: "Checking for updates..."
   framework_available: "UltiTools-API update available: <latest> (current: <current>)"

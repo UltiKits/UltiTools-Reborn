@@ -1046,14 +1046,16 @@ publish a catalogue cannot replace an external catalogue either.
   after the body started, the otherwise unobservable failure is logged once instead. Repeating
   failures still log one WARNING per failed execution and do not stop repetition.
 - Set `datasource.flushRate` to a positive number of seconds for periodic JSON flushes. A negative
-  value no longer causes the single background flush that 6.x performed: no periodic flush is
-  started. The normal shutdown checkpoint still saves the JSON data. Correct the value and restart.
+  value no longer causes the single background flush that 6.x performed: in 7.0 it logs one startup
+  warning and starts no periodic flush. The normal shutdown checkpoint still saves the JSON data.
+  Correct the value and restart.
 
 中文补充：`run`、`runLater`、`execute` 提交的一次性任务抛出异常时，恰好记录一条带拥有者名称与
 原始异常堆栈的 WARNING，句柄进入 `FAILED`，完成阶段以该异常失败。`supply` 的异常只交给返回的
 future；若任务开始后该 future 已被取消，无法再观察到的异常才记录一次 WARNING。重复任务仍每次
 失败记录一条 WARNING，并继续后续执行。`datasource.flushRate` 必须设置为正数秒；负数不再像 6.x
-那样触发一次后台落盘，而是不启动周期刷新。正常停服的最终落盘不变；请修正该值并重启服务器。
+那样触发一次后台落盘；7.0 会在启动时记录一条警告，不启动周期落盘。正常停服的最终落盘不变；
+请修正该值并重启服务器。
 
 A failed module load also retires that instance's injected scheduler and cancels pending and repeating
 work submitted during bean construction, `@PostConstruct`, or `registerSelf()`. An already running
