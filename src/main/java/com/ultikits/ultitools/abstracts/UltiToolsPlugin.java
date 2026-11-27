@@ -622,7 +622,7 @@ public abstract class UltiToolsPlugin implements IPlugin, Configurable {
      * This hook may throw anything: an unchecked exception, an {@link Error}, or a checked
      * exception it does not declare (Lombok {@code @SneakyThrows}, or a rethrow helper). Whatever
      * it throws, {@link #unregisterSelf()} still unregisters this module's own commands and
-     * listeners before the exception propagates (WR-01, 16-REVIEW-lifecycle.md) -- a throwing
+     * listeners before the exception propagates -- a throwing
      * hook is surfaced to the caller, not swallowed, but it cannot skip the framework's own
      * cleanup the way an unguarded {@code super} call could. The exception reaches the caller
      * unchanged: the same instance, of the same type, never wrapped. If a cleanup step also

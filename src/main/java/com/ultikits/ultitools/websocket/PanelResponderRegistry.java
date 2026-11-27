@@ -752,7 +752,7 @@ public class PanelResponderRegistry {
     }
 
     /**
-     * Shuts this registry down (WR-01, 06-REVIEW.md): stops the deadline timer and the workers and
+     * Shuts this registry down: stops the deadline timer and the workers and
      * settles every admitted request.
      * <p>
      * Both executors are owned by this instance — nothing else shares or stops them — so without

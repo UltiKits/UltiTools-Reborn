@@ -5,9 +5,9 @@ package com.ultikits.ultitools.entities;
  * {@code CommandExecutionManager}'s command-allowed check and {@code FileOperationManager.isPathAllowed}
  * both previously returned {@code boolean}. Both managers carry {@code @ApiStatus.Internal}, so
  * this signature change is not itself a compatibility event — {@code COMPATIBILITY.md} states that
- * {@code @ApiStatus.Internal} types are not public API — but it is recorded in
- * {@code COMPATIBILITY.md} anyway, because japicmp reads bytecode and does not know
- * {@code @ApiStatus}.
+ * {@code @ApiStatus.Internal} types are not public API. The signature change is documented in
+ * the <a href="https://github.com/UltiKits/UltiTools-Reborn/blob/main/compatibility/archive/6.x/records/6.3.0.md#recorded-instance-commandexecutionmanageriscommandallowed-and-fileoperationmanagerispathallowed-change-return-type-from-boolean-to-accessdecision-remote-02--remote-03-630">6.3.0 compatibility record</a>
+ * because japicmp reads bytecode and does not know {@code @ApiStatus}.
  * <p>
  * Distinguishes a <b>configurable</b> refusal (an operator can flip it — the message names the
  * config key) from a <b>non-configurable</b> one (no configuration changes it — the message says

@@ -96,8 +96,7 @@ public class PluginModuleException extends UltiToolsException {
     }
 
     // The three factories below belong to WIRE-16's single-owner panel responder registry
-    // (Plan 06-08). They join PluginModuleException rather than ContainerException — a deliberate
-    // departure from 06-RESEARCH.md's Pattern 3, whose illustrative code names ContainerException.
+    // (Plan 06-08). They join PluginModuleException rather than ContainerException.
     // The offender here is a module and the failure is at module load/dispatch, which is exactly
     // what this class's four existing factories above already describe; ContainerException
     // describes bean-container failures in the 2000-series, a different resource entirely.

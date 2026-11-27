@@ -421,7 +421,7 @@ public class PluginInitiationUtils {
      * ({@link CloudSession#invalidate()}); see the two review rounds on PR #264 for the original race
      * the former global lifecycle lock guarded.
      * <p>
-     * <b>CR-01 (16-REVIEW-cloud.md):</b> {@link #disableCloud(CloudSession)} -- the overload internal
+     * {@link #disableCloud(CloudSession)} -- the overload internal
      * callers use -- returns the exact session that overload tore down, captured by the caller
      * before any teardown step runs. {@link CloudAuthManager#logout()} reads its disk-clear decision
      * off that return value rather than a second, independent call to {@link CloudSession#current()}
@@ -439,8 +439,8 @@ public class PluginInitiationUtils {
 
     /**
      * The {@code session}-targeted, {@link CloudSession}-returning form of {@link #disableCloud()}
-     * (CR-01/WR-02, 16-REVIEW-cloud.md) -- package-private, since it is new-in-6.3.0 and reached
-     * only by other members of this package ({@code CloudAuthManager#logout()}).
+     * is package-private because only other members of this package call it, such as
+     * {@code CloudAuthManager#logout()}.
      * <p>
      * It acts on the session its caller names, rather than on whatever {@link CloudSession#current()}
      * happens to be when it runs, as the no-arg {@link #disableCloud()} does: a fresh login racing in

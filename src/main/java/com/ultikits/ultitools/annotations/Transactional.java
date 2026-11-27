@@ -128,7 +128,7 @@ public @interface Transactional {
      * deliberately <em>not</em> a wall-clock bound on the method as a whole: non-database work
      * inside the method (a slow computation, a network call to something else) is never
      * interrupted, because plain JDBC has no mechanism to cancel work already in flight, and
-     * this framework does not add one (see {@code REQUIREMENTS.md}'s "out of scope" section).
+     * this framework does not add one.
      * <p>
      * Per backend:
      * <ul>

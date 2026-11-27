@@ -92,7 +92,7 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
      * Since 6.3.0, a call with no conditions (a {@code null} or zero-length
      * {@code whereConditions}) is rejected with a {@code DataAccessException} instead of
      * deleting every row of the table — this is a behavioral change with no migration period
-     * (COMPATIBILITY.md's security-fix channel); see 02-CONTEXT.md D-12.
+     * (COMPATIBILITY.md's security-fix channel).
      *
      * @param whereConditions Conditions
      */

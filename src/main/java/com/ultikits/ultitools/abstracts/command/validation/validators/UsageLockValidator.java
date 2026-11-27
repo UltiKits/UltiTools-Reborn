@@ -291,15 +291,14 @@ public class UsageLockValidator implements CommandValidator, PlayerCacheSaver {
      * this command, falling back to a class-level one on the method's declaring class --
      * most-derived-wins, via {@link ReflectionUtil#resolveMethodOrClassAnnotation(Method, Class,
      * Class)}. This is the SAME resolution {@code PluginManager}'s load-time refusal treats as
-     * satisfying the contract (SILENT-11 / D-01 follow-up, WR-02 / 05-REVIEW.md fix): a
+     * satisfying the contract: a
      * class-level {@code @UsageLimit} that passes the load-time check -- whether declared on a
      * shared abstract base or on the concrete executor class itself -- now actually locks every
      * inherited mapping that does not declare its own.
      *
      * @param method        the matched command mapping method, or {@code null}
-     * @param executorClass the concrete executor class dispatching this command (WR-02,
-     *                      05-REVIEW.md), or {@code null} when unavailable -- falls back to the
-     *                      pre-WR-02, declaring-class-only resolution in that case
+     * @param executorClass the concrete executor class dispatching this command, or {@code null} when unavailable;
+     *                      falls back to declaring-class-only resolution in that case
      * @return the resolved annotation, or {@code null} when {@code method} is {@code null} or
      *         neither the method, {@code executorClass}, nor its declaring class carries one
      * @since 6.3.0

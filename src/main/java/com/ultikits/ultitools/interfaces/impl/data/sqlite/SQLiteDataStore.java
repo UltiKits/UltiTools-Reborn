@@ -231,8 +231,7 @@ public class SQLiteDataStore implements DataStore {
     /**
      * Composite operator-cache key: the backing .db file's canonical path plus the entity class.
      * Both {@code getOperator} overloads resolve their key through this same shape so the two
-     * entry paths cannot diverge again (see 02-CONTEXT.md's "Per-backend path rules differ between
-     * the two entry paths" note).
+     * entry paths cannot diverge again.
      */
     private static final class OperatorKey {
         private final String dbPath;

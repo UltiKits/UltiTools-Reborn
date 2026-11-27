@@ -275,7 +275,7 @@ public class CloudAuthManager {
      * in-flight login that commits mid-teardown is still caught and cleared -- see
      * {@code CloudLoginCommand.logout(CommandSender)}'s own comments for why that order matters.
      * <p>
-     * <b>CR-01 (16-REVIEW-cloud.md):</b> this method captures {@link CloudSession#current()} exactly
+     * This method captures {@link CloudSession#current()} exactly
      * once -- in the statement below, immediately before teardown begins -- and passes that captured
      * reference to {@link PluginInitiationUtils#disableCloud(CloudSession)}, which acts on and
      * returns that exact instance. The revoke-and-delete decision then acts on the returned reference,

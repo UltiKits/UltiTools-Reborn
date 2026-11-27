@@ -398,7 +398,7 @@ public class PluginDependencyResolver {
      * warning makes the operator aware that a pick happened instead of silently choosing a target.
      * Ordinary, unique-simple-name inputs still use the first declarer in discovery order.
      * <p>
-     * <b>IN-01 (gate-1 review, 16-REVIEW-residue.md):</b> "discovery order" here is deterministic
+     * "Discovery order" here is deterministic
      * GIVEN a deterministic {@code nodes} iteration order. As of 6.3.0 (#476) this class's only
      * production caller, {@code PluginManager.init(ClassLoader)}, builds its input list from the
      * modules folder in file-name order ({@code ModuleFileTransactions#moduleJars}) -- before that

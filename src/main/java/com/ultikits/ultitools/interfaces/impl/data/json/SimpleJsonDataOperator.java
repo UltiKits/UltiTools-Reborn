@@ -761,8 +761,7 @@ public class SimpleJsonDataOperator<T extends BaseDataEntity<String>>
      * this overload does <strong>not</strong> fire {@code onDelete()} -- there is no entity to
      * fire it on without fabricating one, and this class does not fabricate entities to satisfy
      * a hook. {@link #delById(Object)} fetches the entity first and does fire {@code onDelete()}
-     * on it (02-08-PLAN.md's delete-hook-path split, mirrored from
-     * {@code AbstractRelationalDataOperator}).
+     * on it, as does {@code AbstractRelationalDataOperator}.
      * <p>
      * A {@code null} or zero-length {@code whereConditions} is refused with a {@link
      * DataAccessException}, matching {@code AbstractRelationalDataOperator.del()}'s guard and the

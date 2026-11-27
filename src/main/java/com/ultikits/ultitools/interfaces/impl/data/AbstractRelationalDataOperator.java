@@ -59,7 +59,7 @@ import com.ultikits.ultitools.utils.ReflectionUtil;
  * @author wisdomme
  * @since 6.2.0
  */
-@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // ORM maps private @Column fields to SQL -- see 08-GATE05-TRIAGE.md
+@SuppressWarnings("PMD.AvoidAccessibilityAlteration") // ORM maps private @Column fields to SQL
 public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<String>>
         implements DataOperator<T>, RowCountingDelete {
 
@@ -205,7 +205,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * {@link #dataSource} -- the two call sites in {@link #insertAll} and {@link #updateAll}
      * that bypass {@code QueryRunner} entirely. A timeout wired only into {@link #queryRunner}'s
      * path would leave these two batch operations silently ignoring
-     * {@code @Transactional(timeout=)}, exactly the gap 02-RESEARCH.md warns about.
+     * {@code @Transactional(timeout=)}.
      *
      * @param statement the statement to apply the timeout to, already prepared
      * @throws SQLException if the driver rejects the timeout value
@@ -486,8 +486,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * The same row-materialization logic as {@link #getListHandler()}, without firing
      * {@code onLoad()}. Used internally by {@link #getById} (which fires {@code onLoad()} itself,
      * exactly once, on the single entity it returns) and {@link #delById} (which needs the
-     * entity to fire {@code onDelete()} on, but deleting is not loading -- see 02-08-PLAN.md's
-     * delete-hook-path split).
+     * entity to fire {@code onDelete()} on, but deleting is not loading).
      */
     private ResultSetHandler<List<T>> getRawListHandler() {
         RowMapper<T> mapper = getRowMapper();
@@ -714,7 +713,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * preserved here rather than changed. {@link #exist(WhereCondition...)},
      * {@link #page(int, int, WhereCondition...)}, and {@link #del(WhereCondition...)} do not
      * skip empty conditions; that asymmetry already existed before this method and is not
-     * resolved by this change (see 02-03-SUMMARY.md).
+     * resolved by this change.
      *
      * @param sql        the SQL being built; must already hold the statement up to (not
      *                   including) the WHERE clause
@@ -926,8 +925,7 @@ public abstract class AbstractRelationalDataOperator<T extends BaseDataEntity<St
      * Deletes by predicate, without loading matched rows into entities first. Consequently this
      * overload does <strong>not</strong> fire {@code onDelete()} -- there is no entity to fire it
      * on without fabricating one, and this class does not fabricate entities to satisfy a hook.
-     * {@link #delById(Object)} fetches the entity first and does fire {@code onDelete()} on it
-     * (02-08-PLAN.md's delete-hook-path split).
+     * {@link #delById(Object)} fetches the entity first and does fire {@code onDelete()} on it.
      */
     @Override
     public void del(WhereCondition... whereConditions) {

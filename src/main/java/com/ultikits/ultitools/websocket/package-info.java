@@ -33,8 +33,9 @@
  * registry-plus-interface pair with five per-message-type implementations, formerly the sole
  * public class of a now-deleted {@code handlers} sub-package (WIRE-17) — replaced by the dispatch
  * table above in Phase 1 (plan 01-05) but left in the tree, unreferenced, until it was deleted in
- * 6.3.0 (GEN-11, see {@code compatibility/records/6.3.0.md}). A reader arriving here from an old
- * link to that cluster will not find it; this is why.
+ * 6.3.0 (GEN-11, see the
+ * <a href="https://github.com/UltiKits/UltiTools-Reborn/blob/main/compatibility/archive/6.x/records/6.3.0.md#recorded-instance-the-seven-type-wire-17-websocket-dispatch-cluster-is-gone-gen-11-630">6.3.0 compatibility record</a>).
+ * A reader arriving here from an old link to that cluster will not find it; this is why.
  *
  * @since 6.2.5
  */

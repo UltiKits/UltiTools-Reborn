@@ -143,8 +143,7 @@ public final class EconomyUtils {
      * [Rule 1 fix, CR-01, 16-07]: re-checks the live {@link #provider} on every call and reports
      * D-08's honest unavailability warning, exactly like every sibling operation, instead of
      * caching a failed first attempt for the rest of the server's uptime (the same defect class
-     * this milestone exists to close, reproduced by this seam's own two frozen-signature methods —
-     * see {@code 16-REVIEW-economy.md} CR-01).
+     * reproduced by this seam's own two frozen-signature methods).
      *
      * @return the economy instance, or null if not available
      */

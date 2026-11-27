@@ -10,9 +10,9 @@ package com.ultikits.ultitools.annotations;
  * A {@code NESTED} propagation (a savepoint within the existing transaction) was removed in 6.3.0
  * (D-09): it is implementable on JDBC via {@code Connection.setSavepoint()}, but savepoint
  * behaviour depends on whichever sqlite-jdbc version the server's Paper build happens to ship, and
- * this project cannot pin or test across that. The removal used the {@code COMPATIBILITY.md}
- * clause-2 same-release exception - {@code Propagation} shipped in 6.2.5 but no released version
- * ever executed it.
+ * this project cannot pin or test across that. The removal used clause 2 of the
+ * <a href="https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md#exception-removal-in-the-same-release-that-announces-it">6.x same-release removal exception</a>:
+ * {@code Propagation} shipped in 6.2.5 but no released version ever executed it.
  *
  * @author wisdomme
  * @since 6.2.0

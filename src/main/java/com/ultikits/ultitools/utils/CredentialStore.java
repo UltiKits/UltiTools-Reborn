@@ -74,7 +74,7 @@ import com.ultikits.ultitools.exceptions.DataAccessException;
  * above {@link UltiTools#getDataFolder()} to find the server root, the old one reads that data
  * folder directly. Neither falls back to a bare {@code System.getProperty("user.dir")} guess:
  * see {@link #resolveTargetPath()} for why a silent CWD fallback is exactly the kind of stray
- * credential file CLAUDE.md gotcha 17 warns about. Tests override both locations independently
+ * credential file this guard prevents. Tests override both locations independently
  * via {@link #setTargetPathForTesting(Path)} and {@link #setOldLocationForTesting(Path)} so
  * neither requires a running Bukkit server.
  * <p>
@@ -228,8 +228,7 @@ public final class CredentialStore {
      * reaches {@link #read()}/{@link #write(Map)}/{@link #update(UnaryOperator)} without mocking
      * {@link UltiTools} write a real {@code .ultikits/credentials.json} at whatever the test
      * runner's working directory happens to be -- for {@code mvn test} run from the repository
-     * root, the repository root itself (CLAUDE.md gotcha 17; measured happening during this
-     * plan's own execution before this guard was added). Failing loudly here is the same shape as
+     * root, the repository root itself. Failing loudly here is the same shape as
      * the {@link NullPointerException} the pre-6.3.0 code would have thrown in that situation, not
      * a new restriction.
      *
@@ -344,7 +343,7 @@ public final class CredentialStore {
      * exactly the swallow-as-absent failure this class exists to prevent. Resolve the parse
      * failure (inspect the file, or overwrite it with {@link #write(Map)}) before calling this.
      * <p>
-     * WR-03 (08-REVIEW.md): {@code mutator} must not return {@code null}. A caller that mutates
+     * The {@code mutator} must not return {@code null}. A caller that mutates
      * the map it was given in place and forgets the trailing {@code return}, or falls through an
      * early-return branch without a value, must not have that silently truncate the credential
      * file to {@code {}} -- this store is the sole owner of a file that holds live OAuth tokens,
