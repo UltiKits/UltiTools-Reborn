@@ -7,6 +7,9 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -139,7 +142,7 @@ class PluginManagerEntityScanSoftDependTest {
 
     @Test
     @DisplayName("场景 1：模块声明的 softdepend 插件缺失——仅因此失败的类记 FINE，不进入 SEVERE 摘要，模块其余实体正常发现")
-    void classFailingOnlyBecauseADeclaredSoftDependPluginIsAbsentIsFineNotSevere() throws Exception {
+    void classFailingOnlyBecauseADeclaredSoftDependPluginIsAbsentIsFineNotSevere() throws Throwable {
         File pluginJar = createModuleJarWithSoftDepend(
                 "softdepend-absent.jar",
                 Collections.singletonList("FakePlaceholderAPI"),
@@ -176,7 +179,7 @@ class PluginManagerEntityScanSoftDependTest {
 
     @Test
     @DisplayName("场景 2：完全相同的缺失类型，但模块没有在 softdepend 中声明任何插件——仍然记 SEVERE")
-    void classFailingWithNoDeclaredSoftDependAtAllStaysSevereForTheIdenticalMissingType() throws Exception {
+    void classFailingWithNoDeclaredSoftDependAtAllStaysSevereForTheIdenticalMissingType() throws Throwable {
         File pluginJar = createModuleJarWithSoftDepend(
                 "softdepend-none-declared.jar",
                 Collections.emptyList(),
@@ -206,7 +209,7 @@ class PluginManagerEntityScanSoftDependTest {
 
     @Test
     @DisplayName("场景 3：模块自身的坏引用（与任何可选插件无关）——仍然记 SEVERE")
-    void modulesOwnBrokenReferenceUnrelatedToAnyOptionalPluginStaysSevere() throws Exception {
+    void modulesOwnBrokenReferenceUnrelatedToAnyOptionalPluginStaysSevere() throws Throwable {
         File pluginJar = createModuleJarWithSoftDepend(
                 "own-broken-reference.jar",
                 Collections.emptyList(),
@@ -233,7 +236,7 @@ class PluginManagerEntityScanSoftDependTest {
 
     @Test
     @DisplayName("场景 4：一个 @Table 实体因为无关原因加载失败——仍然记 SEVERE，且不出现在扫描结果中")
-    void tableAnnotatedEntityFailingForAnUnrelatedReasonStaysSevereAndIsExcludedFromTheScan() throws Exception {
+    void tableAnnotatedEntityFailingForAnUnrelatedReasonStaysSevereAndIsExcludedFromTheScan() throws Throwable {
         File pluginJar = createModuleJarWithSoftDepend(
                 "table-entity-broken.jar",
                 Collections.emptyList(),
@@ -333,10 +336,11 @@ class PluginManagerEntityScanSoftDependTest {
     // ---- reflection helpers -------------------------------------------------------------------
 
     @SuppressWarnings("unchecked")
-    private Set<Class<?>> invokeScanEntitiesInJar(File pluginJar) throws Exception {
-        Method method = PluginManager.class.getDeclaredMethod("scanEntitiesInJar", File.class);
-        method.setAccessible(true);
-        return (Set<Class<?>>) method.invoke(pluginManager, pluginJar);
+    private Set<Class<?>> invokeScanEntitiesInJar(File pluginJar) throws Throwable {
+        MethodHandle scan = MethodHandles.privateLookupIn(PluginManager.class, MethodHandles.lookup())
+                .findVirtual(PluginManager.class, "scanEntitiesInJar",
+                        MethodType.methodType(Set.class, File.class, ClassLoader.class));
+        return (Set<Class<?>>) scan.invoke(pluginManager, pluginJar, UltiTools.getJavaPluginClassLoader());
     }
 
     private boolean invokeIsAbsentSoftDependClasspathGap(Throwable failure, List<String> softDepend)

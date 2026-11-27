@@ -9,6 +9,9 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -35,6 +38,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockbukkit.mockbukkit.MockBukkit;
 
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.api.ExternalPluginAdapter;
 import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
@@ -404,7 +408,7 @@ class PluginManagerClassScanningTest {
 
     @Test
     @DisplayName("扫描应只收集本 JAR 中携带 @Table 的类，忽略非 @Table 类")
-    void shouldScanTableAnnotatedClassesAndOnlyThoseInThisJar() throws Exception {
+    void shouldScanTableAnnotatedClassesAndOnlyThoseInThisJar() throws Throwable {
         File pluginJar = createJar("entity-plugin.jar", EntityA.class, EntityB.class, PlainPlugin.class);
 
         Set<Class<?>> scanned = invokeScanEntitiesInJar(pluginJar);
@@ -419,7 +423,7 @@ class PluginManagerClassScanningTest {
 
     @Test
     @DisplayName("零 @Table 类的 JAR 扫描出空集合，不影响插件加载")
-    void shouldReturnEmptySetForJarWithNoTableClasses() throws Exception {
+    void shouldReturnEmptySetForJarWithNoTableClasses() throws Throwable {
         File pluginJar = createJar("no-entity-plugin.jar", ConcretePlugin.class);
 
         Set<Class<?>> scanned = invokeScanEntitiesInJar(pluginJar);
@@ -429,7 +433,7 @@ class PluginManagerClassScanningTest {
 
     @Test
     @DisplayName("超过 1000 类上限只报告、不截断——扫描完整跑完并记录一条 WARNING")
-    void shouldReportWithoutTruncatingWhenClassCountExceedsCap() throws Exception {
+    void shouldReportWithoutTruncatingWhenClassCountExceedsCap() throws Throwable {
         File pluginJar = new File(tempDir, "oversized-plugin.jar");
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(pluginJar.toPath()))) {
             for (int i = 0; i < 1001; i++) {
@@ -481,7 +485,7 @@ class PluginManagerClassScanningTest {
 
     @Test
     @DisplayName("connect(plugin, additionalEntities) 声明的实体并入外部插件的 scope（D-19 合法用例，同上不会被拒绝）")
-    void externalConnectAdditionalEntitiesShouldBeAddedToScope() throws Exception {
+    void externalConnectAdditionalEntitiesShouldBeAddedToScope() throws Throwable {
         org.bukkit.plugin.java.JavaPlugin mockPlugin = MockBukkit.createMockPlugin("ExternalScanFixture");
         com.ultikits.ultitools.api.ExternalPluginAdapter adapter =
                 new com.ultikits.ultitools.api.ExternalPluginAdapter(mockPlugin);
@@ -589,10 +593,11 @@ class PluginManagerClassScanningTest {
     }
 
     @SuppressWarnings("unchecked")
-    private Set<Class<?>> invokeScanEntitiesInJar(File pluginJar) throws Exception {
-        Method method = PluginManager.class.getDeclaredMethod("scanEntitiesInJar", File.class);
-        method.setAccessible(true);
-        return (Set<Class<?>>) method.invoke(pluginManager, pluginJar);
+    private Set<Class<?>> invokeScanEntitiesInJar(File pluginJar) throws Throwable {
+        MethodHandle scan = MethodHandles.privateLookupIn(PluginManager.class, MethodHandles.lookup())
+                .findVirtual(PluginManager.class, "scanEntitiesInJar",
+                        MethodType.methodType(Set.class, File.class, ClassLoader.class));
+        return (Set<Class<?>>) scan.invoke(pluginManager, pluginJar, UltiTools.getJavaPluginClassLoader());
     }
 
     @SuppressWarnings("unchecked")
@@ -608,18 +613,12 @@ class PluginManagerClassScanningTest {
     }
 
     @SuppressWarnings("unchecked")
-    private Set<Class<?>> invokeScanExternalEntities(
-            com.ultikits.ultitools.api.ExternalPluginAdapter adapter, Class<?>[] additionalEntities
-    ) throws Exception {
-        Method method = PluginManager.class.getDeclaredMethod(
-                "scanExternalEntities", com.ultikits.ultitools.api.ExternalPluginAdapter.class, Class[].class
-        );
-        method.setAccessible(true);
-        try {
-            return (Set<Class<?>>) method.invoke(pluginManager, adapter, additionalEntities);
-        } catch (java.lang.reflect.InvocationTargetException e) {
-            throw unwrap(e);
-        }
+    private Set<Class<?>> invokeScanExternalEntities(ExternalPluginAdapter adapter, Class<?>[] additionalEntities)
+            throws Throwable {
+        MethodHandle scan = MethodHandles.privateLookupIn(PluginManager.class, MethodHandles.lookup())
+                .findVirtual(PluginManager.class, "scanExternalEntities",
+                        MethodType.methodType(Set.class, ExternalPluginAdapter.class, Class[].class, ClassLoader.class));
+        return (Set<Class<?>>) scan.invoke(pluginManager, adapter, additionalEntities, adapter.getPluginClassLoader());
     }
 
     private void invokeValidateAdditionalEntity(

@@ -6,7 +6,9 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
@@ -14,6 +16,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -128,7 +131,7 @@ class ModuleScanQuietStartTest {
 
     @Test
     @DisplayName("two clean module jars registered at start-up produce no record at INFO or above")
-    void twoCleanModulesAreQuiet() throws Exception {
+    void twoCleanModulesAreQuiet() throws Throwable {
         startUp(createModuleJar("clean-one.jar", CleanPlugin.class));
         startUp(createModuleJar("clean-two.jar", CleanPlugin.class));
 
@@ -137,7 +140,7 @@ class ModuleScanQuietStartTest {
 
     @Test
     @DisplayName("no record text carries an internal requirement code")
-    void noRecordCarriesAnInternalCode() throws Exception {
+    void noRecordCarriesAnInternalCode() throws Throwable {
         startUp(createModuleJar("clean-code.jar", CleanPlugin.class));
         File brokenJar = createModuleJar("broken-code.jar", CleanPlugin.class, BrokenScannedClass.class);
         Field field = UltiTools.class.getDeclaredField("ultiToolsClassLoader");
@@ -185,7 +188,7 @@ class ModuleScanQuietStartTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"module-info.class", "com/example/package-info.class"})
-    void metadataEntriesCurrentlyProduceOneWarning(String entry) throws Exception {
+    void metadataEntriesCurrentlyProduceOneWarning(String entry) throws Throwable {
         File jar = new File(tempDir, "metadata.jar");
         try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar.toPath()))) {
             output.putNextEntry(new JarEntry("plugin.yml"));
@@ -218,15 +221,17 @@ class ModuleScanQuietStartTest {
     }
 
     /** The two steps the framework runs for every module jar: read the main class, then scan for entities. */
-    private void startUp(File moduleJar) throws Exception {
-        Method load = PluginManager.class.getDeclaredMethod("loadPluginMainClass", ClassLoader.class, File.class);
-        load.setAccessible(true);
-        Object mainClass = load.invoke(pluginManager, Thread.currentThread().getContextClassLoader(), moduleJar);
+    private void startUp(File moduleJar) throws Throwable {
+        MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(PluginManager.class, MethodHandles.lookup());
+        MethodHandle load = lookup.findVirtual(PluginManager.class, "loadPluginMainClass",
+                MethodType.methodType(Class.class, ClassLoader.class, File.class));
+        ClassLoader moduleLoader = UltiTools.getJavaPluginClassLoader();
+        Object mainClass = load.invoke(pluginManager, moduleLoader, moduleJar);
         assertThat(mainClass).as("control: %s's main class was found", moduleJar.getName()).isEqualTo(CleanPlugin.class);
 
-        Method scan = PluginManager.class.getDeclaredMethod("scanEntitiesInJar", File.class);
-        scan.setAccessible(true);
-        scan.invoke(pluginManager, moduleJar);
+        MethodHandle scan = lookup.findVirtual(PluginManager.class, "scanEntitiesInJar",
+                MethodType.methodType(Set.class, File.class, ClassLoader.class));
+        scan.invoke(pluginManager, moduleJar, moduleLoader);
     }
 
     private File createModuleJar(String name, Class<?>... classes) throws IOException {

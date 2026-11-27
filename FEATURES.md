@@ -300,6 +300,14 @@ startup itself — before the module class loader is built (`ModuleClassPath#mod
 and after module loading returns (`UltiTools` calls `ModuleFileTransactions#observeAfterLoad`) —
 and likewise reconcile against no annotation.
 
+## External Plugin API
+
+| ID | Feature | Kind | How to reach | Permission | Target | Tier | Manual | Source |
+|----|---------|------|--------------|------------|--------|------|--------|--------|
+| ultitools.external.connect-entity | A plain Bukkit plugin connecting at enable discovers `@Table` entities in its own JAR through its own class loader, so its `DataOperator` is available on first start and after a clean restart | persistence | `UltiToolsAPI.connect(this)` and `getDataOperator(this, VisitorRecord.class)` in `UltiToolsExtExample` on Paper 26.3 | n/a | n/a | internal | detailed | PluginManager#scanExternalEntities |
+| ultitools.external.execute-command | A connected external plugin's annotated command is registered in Paper's command tree and invokes the external plugin's injected service for a player | gate | As a player with `ultiext.greet`, run `/ultiext hello` from a verified 7.0 build of `UltiToolsExtExample` | n/a | n/a | player | detailed | CommandManager#registerAllExternal |
+| ultitools.external.transactional-service | An external plugin's container-managed `@Transactional` service is proxied and runs with the transaction manager for that plugin's data scope | gate | Call an external probe's injected `@Transactional` service through its scanned command on Paper 26.3 with SQLite | n/a | n/a | internal | detailed | PluginManager#wireTransactional |
+
 ## Native sounds
 
 The framework uses Paper’s native sound API. Exercise the framework-owned service through a compatible module or a purpose-built 7.0 probe;
