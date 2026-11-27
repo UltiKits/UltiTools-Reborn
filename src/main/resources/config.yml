@@ -8,8 +8,8 @@ datasource:
   # 仅对json存储有效，数据自动保存时间（秒），高性能机器可酌情调低
   # 越低数据越不容易丢失，但是性能消耗越大
   # 越高性能消耗越小，但是数据丢失可能性越大
-  # Must be positive (seconds); negative values disable periodic JSON flushes.
-  # 必须为正数（秒）；负数不会启动 JSON 周期落盘
+  # A negative value disables periodic JSON flushes and logs one startup warning.
+  # 负数会关闭 JSON 周期落盘，并在启动时记录一条警告。
   flushRate: 10
 
 # auto follows each player's client language; a locale such as en or zh forces all players.

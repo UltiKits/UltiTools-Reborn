@@ -3,19 +3,22 @@ package com.ultikits.ultitools.interfaces.impl.data.json;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
-import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.file.YamlConfiguration;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.TaskContext;
 import com.ultikits.ultitools.scheduling.TaskHandle;
@@ -31,7 +34,13 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
+
+import com.ultikits.ultitools.abstracts.command.CommandMessageTestSupport;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import com.ultikits.ultitools.UltiTools;
@@ -59,6 +68,9 @@ class JsonStoreTest {
     private static UltiTools mockUltiToolsInstance;
     private Scheduler scheduler;
     private TaskContext async;
+    private YamlConfiguration config;
+    private Logger logger;
+    private JsonStore resetAnchor;
     private static PluginManager mockPluginManager;
 
     @BeforeAll
@@ -76,10 +88,6 @@ class JsonStoreTest {
         
         // Setup UltiTools static mock BEFORE JsonStore class is loaded
         mockUltiToolsInstance = mock(UltiTools.class);
-        FileConfiguration mockConfig = mock(FileConfiguration.class);
-        
-        when(mockUltiToolsInstance.getConfig()).thenReturn(mockConfig);
-        when(mockConfig.getInt(anyString())).thenReturn(10);
         when(mockUltiToolsInstance.isEnabled()).thenReturn(true);
 
         // Tests mint a real DataScope from the requesting plugin and these entity-owner stubs.
@@ -105,6 +113,12 @@ class JsonStoreTest {
     @BeforeEach
     void useInternalDataFolder() {
         when(mockUltiToolsInstance.getDataFolder()).thenReturn(tempDir.toFile());
+        config = new YamlConfiguration();
+        logger = mock(Logger.class);
+        when(mockUltiToolsInstance.getConfig()).thenReturn(config);
+        when(mockUltiToolsInstance.getLogger()).thenReturn(logger);
+        resetAnchor = new JsonStore(tempDir.toString());
+        resetAnchor.resetSchedulerState();
         scheduler = mock(Scheduler.class);
         async = mock(TaskContext.class);
         when(scheduler.async()).thenReturn(async);
@@ -114,19 +128,48 @@ class JsonStoreTest {
 
     @AfterEach
     void uninstallScheduler() {
+        resetAnchor.resetSchedulerState();
         FrameworkScheduling.uninstall(scheduler);
     }
 
-    @Test
-    void flushTaskUsesTheFrameworkAsyncContextAndConfiguredInterval() {
-        JsonStore previous = new JsonStore(tempDir.toString());
-        previous.resetSchedulerState();
-        org.mockito.Mockito.clearInvocations(async);
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(ints = {0, 7})
+    void flushTaskUsesTheFrameworkAsyncContextAndConfiguredInterval(Integer seconds) {
+        config.set("datasource.flushRate", seconds);
         new JsonStore(tempDir.toString());
 
-        verify(async).runRepeating(org.mockito.ArgumentMatchers.eq(Ticks.of(20)),
-                org.mockito.ArgumentMatchers.eq(Ticks.of(200)), any());
-        assertThat(mockingDetails(async).getInvocations()).hasSize(1);
+        assertFlushScheduledAfterOneSecond(seconds == null || seconds == 0 ? 10 : seconds);
+        verifyNoInteractions(logger);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"en", "zh"})
+    void negativeFlushRateWarnsOnlyOnceWithoutRegisteringATask(String language) throws Exception {
+        config.set("datasource.flushRate", -5);
+        try (var support = new CommandMessageTestSupport(language);
+             var scope = FrameworkMessages.overrideForTests(support.messages(), Locale.forLanguageTag(language))) {
+            new JsonStore(tempDir.toString());
+            new JsonStore(tempDir.toString());
+
+            verifyNoInteractions(async);
+            String warning = language.equals("en")
+                    ? "datasource.flushRate in config.yml is -5, so periodic JSON flushes are off; "
+                    + "data is written only when the server stops. Set it to a positive number of seconds and restart the server."
+                    : "config.yml 里 datasource.flushRate 配置为 -5，JSON 周期落盘已关闭，数据只在停服时写入。请将其设置为正数秒后重启服务器。";
+            verify(logger).log(Level.WARNING, warning);
+
+            // A later construction with a valid rate can still initialize the scheduler.
+            config.set("datasource.flushRate", 7);
+            new JsonStore(tempDir.toString());
+            assertFlushScheduledAfterOneSecond(7);
+            verifyNoMoreInteractions(logger);
+        }
+    }
+
+    private void assertFlushScheduledAfterOneSecond(int seconds) {
+        verify(async).runRepeating(eq(Ticks.of(20)), eq(Ticks.of(20L * seconds)), any());
+        verifyNoMoreInteractions(async);
     }
 
     // ==================== Constructor Tests ====================

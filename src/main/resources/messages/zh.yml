@@ -74,6 +74,7 @@ datastore:
     no_provider: "没有已注册的数据存储提供该类型"
   downgraded: "数据存储降级：config.yml 里 datasource.type 配置为 '<configured>'，实际使用的是 '<actual>'。原因：<reason>"
   player_data_store: "玩家数据将读写 '<store>' 存储；不同后端之间的数据并不互通，如果这不是你要的，请停服修正 config.yml 后重启"
+  flush_rate_negative: "config.yml 里 datasource.flushRate 配置为 <value>，JSON 周期落盘已关闭，数据只在停服时写入。请将其设置为正数秒后重启服务器。"
 update:
   checking: "正在检查版本更新..."
   framework_available: "UltiTools-API有新版本 <latest> 可用（当前：<current>）"

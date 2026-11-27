@@ -7,6 +7,7 @@ import java.nio.file.Paths;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 
 import com.ultikits.ultitools.scheduling.Ticks;
 import com.ultikits.ultitools.scheduling.internal.FrameworkScheduling;
@@ -17,9 +18,12 @@ import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.interfaces.Cached;
 import com.ultikits.ultitools.interfaces.DataOperator;
 import com.ultikits.ultitools.interfaces.DataStore;
+import com.ultikits.ultitools.interfaces.impl.data.DataKeys;
 import com.ultikits.ultitools.manager.DataScope;
 import com.ultikits.ultitools.manager.DataStoreManager;
 import com.ultikits.ultitools.manager.JsonTransactionManager;
+import com.ultikits.ultitools.text.Arg;
+import com.ultikits.ultitools.text.internal.FrameworkMessages;
 import com.ultikits.ultitools.utils.ReflectionUtil;
 
 /**
@@ -42,7 +46,9 @@ public class JsonStore implements DataStore {
      * javadoc.
      */
     private final Map<OperatorKey, Cached> dataOperatorMap = new ConcurrentHashMap<>();
-    private static volatile boolean schedulerInitialized = false;
+    private static boolean schedulerInitialized;
+    /** Guarded by the class monitor, independently of successful scheduler registration. */
+    private static boolean negativeFlushRateWarned;
 
     private final String storeLocation;
 
@@ -66,12 +72,10 @@ public class JsonStore implements DataStore {
      * Initialize the flush scheduler. Called lazily when first JsonStore is created.
      * This avoids static initializer issues in test environments.
      * <p>
-     * Only the first {@code JsonStore} instance in a JVM ever starts the periodic flush task
-     * (guarded by the {@code static} {@link #schedulerInitialized} flag, matching pre-existing
-     * behavior); in production there is exactly one {@code JsonStore} instance, so this flushes
-     * that instance's own cache, not a shared static one.
-     * A negative {@code datasource.flushRate} starts no periodic flush; the shutdown checkpoint
-     * ({@link #destroyAllOperators()}) still runs.
+     * The periodic flush task is registered at most once per JVM. In production there is exactly
+     * one {@code JsonStore} instance, so the task flushes that instance's own cache, not a shared
+     * static one. A negative {@code datasource.flushRate} logs one startup warning per JVM and
+     * starts no periodic flush; the shutdown checkpoint ({@link #destroyAllOperators()}) still runs.
      */
     private void initScheduler() {
         synchronized (JsonStore.class) {
@@ -79,15 +83,23 @@ public class JsonStore implements DataStore {
                 return;
             }
             try {
-                int flushRate = UltiTools.getInstance().getConfig().getInt("datasource.flushRate");
+                UltiTools plugin = UltiTools.getInstance();
+                int flushRate = plugin.getConfig().getInt("datasource.flushRate");
+                if (flushRate < 0) {
+                    if (!negativeFlushRateWarned) {
+                        plugin.getLogger().log(Level.WARNING, FrameworkMessages.plain(DataKeys.DATASTORE_FLUSH_RATE_NEGATIVE,
+                                Arg.string("value", Integer.toString(flushRate))));
+                        negativeFlushRateWarned = true;
+                    }
+                    return;
+                }
                 flushRate = flushRate == 0 ? 10 : flushRate;
                 FrameworkScheduling.scheduler().async().runRepeating(
                         Ticks.of(20), Ticks.of(20L * flushRate), handle -> flushAllCaches());
                 schedulerInitialized = true;
             } catch (Exception e) {
-                // A negative datasource.flushRate makes Ticks.of throw, so no periodic flush is started
-                // (see config.yml and COMPATIBILITY.md). The framework instance can also be unavailable
-                // outside a server, as in tests. Neither failure is logged here.
+                // Keep scheduler setup best-effort: the framework instance or scheduler can
+                // be unavailable outside a running server, as in tests.
             }
         }
     }
@@ -147,7 +159,10 @@ public class JsonStore implements DataStore {
      * Reset the scheduler state. Used for testing.
      */
     void resetSchedulerState() {
-        schedulerInitialized = false;
+        synchronized (JsonStore.class) {
+            schedulerInitialized = false;
+            negativeFlushRateWarned = false;
+        }
     }
 
     public JsonStore(String storeLocation) {
