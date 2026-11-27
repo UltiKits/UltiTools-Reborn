@@ -14,8 +14,16 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ConfigEntry {
     /**
-     * Declares a nested entry path split at every dot. Dots inside keys of a bound map are
-     * whole map keys instead; they are not interpreted as annotation path separators.
+     * The setting's dotted path in the file. An empty path (the default) uses the field name.
+     * The file can hold the setting as nested keys, as one flat dotted key such as
+     * {@code features.chat: false}, or in any other split at its dots. For example, {@code a.b.c}
+     * can be read as {@code a.b:} with a child key {@code c}. Reads and writes use the form already
+     * in the file and never add a second one. Load and reload reject a setting written in more than
+     * one form, even if the values agree. Dots inside the keys of a bound map are part of those keys,
+     * not path separators. {@link ConditionalOnConfig} and
+     * {@link com.ultikits.ultitools.abstracts.AbstractConfigEntity#isPresentInFile(String)} resolve
+     * paths the same way.
+     *
      * @return the nested config entry path
      */
     String path() default "";

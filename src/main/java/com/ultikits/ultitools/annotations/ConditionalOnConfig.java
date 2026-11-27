@@ -10,8 +10,10 @@ import java.lang.annotation.Target;
  * <p>
  * When placed on a {@code @Service}, {@code @CmdExecutor}, {@code @EventListener}, or any
  * component class, the framework checks the specified config file and key <b>once</b>, during
- * component scanning at plugin startup. If the config value is {@code false} (or missing), the
- * component is skipped entirely for the lifetime of that startup.
+ * component scanning at plugin startup. Only a boolean {@code true} counts as true: any other
+ * value, a missing key or file, or a file that cannot be read or parsed counts as {@code false}.
+ * A false result skips the component unless {@code negate = true}, which reverses the decision.
+ * If the file holds the path in more than one form, the framework refuses to load the module.
  *
  * <p>Usage example:
  * <pre>{@code
@@ -40,14 +42,17 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ConditionalOnConfig {
     /**
-     * Config file path relative to the plugin data folder.
+     * Config file path relative to the module's configuration folder
+     * ({@code plugins/UltiTools/pluginConfig/<module name>/}, given by
+     * {@code UltiToolsPlugin#getResourceFolderPath()}), for example {@code config/config.yml}.
      *
      * @return the config file path
      */
     String value();
 
     /**
-     * Dot-separated or slash-separated YAML key path.
+     * The setting's dotted path, resolved as for {@link ConfigEntry#path()}: it can be written as
+     * nested keys, one flat dotted key, or a mix. A slash is part of a key, not a separator.
      *
      * @return the config key path
      */

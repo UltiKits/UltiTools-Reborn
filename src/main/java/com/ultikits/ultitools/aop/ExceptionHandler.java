@@ -16,10 +16,11 @@ import java.lang.reflect.Method;
  * wrong about this interface's contract - write {@code handleException} bodies with that in mind, or
  * catch what you do not want to propagate before it leaves this method.
  * <p>
- * The annotation's default value ({@code @ExceptionCatch(defaultValue = ...)}) is used instead of a
- * handler's result only when: no handler is configured, the configured handler bean name cannot be
- * resolved from the container, the resolved bean does not implement this interface, or
- * {@code handleException} returns normally.
+ * The annotation's default value ({@code @ExceptionCatch(defaultValue = ...)}) is used only when
+ * no handler is configured, the configured handler bean name cannot be resolved from the container,
+ * or the resolved bean does not implement this interface. Once a handler runs, the value
+ * {@code handleException} returns (including {@code null}) is used as the intercepted method's
+ * result without consulting the default value.
  * <p>
  * <b>Self-invocation:</b> a call a bean makes to its own method is intercepted here exactly as an
  * external call is - this codebase's proxy is instantiated directly as the bean (there is no
@@ -42,14 +43,18 @@ public interface ExceptionHandler {
      * @param target    the target object whose method threw the exception
      * @param method    the method that threw the exception
      * @param args      the arguments passed to the method
-     * @return a replacement return value, or null
+     * @return the value the intercepted method returns to its caller, used as is (including
+     *         {@code null}) and never replaced by the annotation's default value; it must be
+     *         assignable to the method's return type
      * @throws Throwable if the handler decides to re-throw the exception, or if the handler's own
      *                    body fails - both propagate identically, see the interface javadoc
      */
     Object handleException(Throwable exception, Object target, Method method, Object[] args) throws Throwable;
 
     /**
-     * Determines if this handler supports handling the given exception type.
+     * Determines if this handler supports handling the given exception type. This is consulted only
+     * for global handlers passed to {@link ExceptionInterceptor}; a handler named in
+     * {@code @ExceptionCatch(handler = ...)} is called without this check.
      *
      * @param exceptionType the type of exception
      * @return true if this handler can handle the exception
@@ -59,7 +64,8 @@ public interface ExceptionHandler {
     }
 
     /**
-     * Gets the order of this handler. Lower values have higher priority.
+     * Gets the order of this handler. The framework does not use this value; global handlers are
+     * tried in list order.
      *
      * @return the handler order
      */

@@ -23,8 +23,10 @@ import com.ultikits.ultitools.manager.TriggerContext;
 /**
  * AOP interceptor that handles @ExceptionCatch annotated methods.
  * <p>
- * When a method throws an exception that matches the @ExceptionCatch configuration,
- * this interceptor catches it and returns a default value instead of propagating.
+ * When a method throws an exception that matches the {@code @ExceptionCatch} configuration,
+ * this interceptor returns the named handler's result. If no handler is configured, the name
+ * cannot be resolved, or the bean does not implement {@link ExceptionHandler}, it returns the
+ * annotation's default value instead. Anything the handler throws propagates to the caller.
  *
  * @author wisdomme
  * @since 6.2.0
