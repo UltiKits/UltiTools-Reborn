@@ -40,8 +40,9 @@ public interface Configurable {
     /**
      * Saves the configuration entity registered for {@code path} in this module. See
      * {@link com.ultikits.ultitools.abstracts.UltiToolsPlugin#saveConfig(String, Class)} for what
-     * is written. Throws {@link NullPointerException} if no entity is registered for the path and
-     * {@link ClassCastException} if the registered entity is not an instance of {@code configType}.
+     * is written. Throws {@link IllegalStateException} naming the module and path if no entity is
+     * registered for the path. If the registered entity is not an instance of {@code configType},
+     * throws {@link ClassCastException} naming the module, path, expected type and actual type.
      *
      * @param path       Config path
      * @param configType Config type

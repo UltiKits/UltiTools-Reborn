@@ -477,20 +477,30 @@ public abstract class UltiToolsPlugin implements IPlugin, Configurable {
      * change the operator asked for through the module, or for shipped text re-rendered after a language switch.
      * <p>
      * If no entity is registered for {@code path} in this module, this method throws
-     * {@link NullPointerException} without creating, registering or writing a file, even if the file
-     * already exists on disk. Register the entity first, or call {@link AbstractConfigEntity#save()}
-     * on an entity you hold. Call this method on the server thread.
+     * {@link IllegalStateException} naming the module and path without creating, registering or
+     * writing a file, even if the file already exists on disk. Register the entity first, or call
+     * {@link AbstractConfigEntity#save()} on an entity you hold. Call this method on the server thread.
      *
      * @param path       the registered configuration file path, for example {@code config/config.yml}
      * @param configType the configuration entity class
      * @param <T>        the configuration entity type
-     * @throws IOException          if publishing the verified file fails
-     * @throws NullPointerException if no configuration entity is registered for {@code path} in this module
-     * @throws ClassCastException   if the registered entity is not an instance of {@code configType}
-     * @throws IllegalStateException if the server is running and this is called off the server thread
+     * @throws IOException           if publishing the verified file fails
+     * @throws IllegalStateException if no configuration entity is registered for {@code path} in this module,
+     *                               or if the server is running and this is called off the server thread
+     * @throws ClassCastException    if the registered entity is not an instance of {@code configType};
+     *                               the message names the module, path, expected type and actual type
      */
     public <T extends AbstractConfigEntity> void saveConfig(String path, Class<T> configType) throws IOException {
-        getConfigManager().getConfigEntity(this, path, configType).save();
+        AbstractConfigEntity entity = getConfigManager().getConfigEntity(this, path, AbstractConfigEntity.class);
+        if (entity == null) {
+            throw new IllegalStateException("No configuration entity is registered for path '" + path
+                    + "' in module '" + getPluginName() + "'. Register the configuration entity before saving it.");
+        }
+        if (!configType.isInstance(entity)) {
+            throw new ClassCastException("Wrong configuration entity type for path '" + path + "' in module '"
+                    + getPluginName() + "': expected " + configType.getName() + " but found " + entity.getClass().getName());
+        }
+        entity.save();
     }
 
     /**
