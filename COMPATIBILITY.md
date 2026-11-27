@@ -351,6 +351,42 @@ Only `.yml` is read (`.yaml` warns), files must be UTF-8, and a UTF-8 BOM is acc
 拒绝并告警，嵌套映射仍用于点分键分组。仅读取 `.yml`，`.yaml` 会告警；文件必须为 UTF-8，允许 BOM。
 只带 `zh_CN.yml` 等地区文件却没有 `zh.yml` 时会提示补基础语言文件，不把地区变体回退规则改成模糊匹配。
 
+### External plugin messages (as of 7.0.0)
+
+A connected `JavaPlugin` that ships a top-level `messages/<locale>.yml` in its own JAR
+gets an injected `Messages` bound to its plugin name, normalized just like a module name.
+The filename before `.yml` must be a locale accepted by the text engine (for example, `en`
+or `zh-CN`); other bundled files such as `messages/config.yml` are ignored. The catalogue
+format and recipient-locale rules are the same as for modules. The source language comes from
+`source-language` in `paper-plugin.yml`, or in `plugin.yml` when there is no `paper-plugin.yml`,
+and defaults to `en` when absent or invalid. Without a recognized bundled locale file, no
+catalogue is loaded or directory created, and the plugin inherits the framework `Messages`
+instance, **with no guarantee about its namespace**. For a framework key, pass an explicit
+key such as `MessageKey.of("ultitools", "ul.help")` rather than deriving it from the injected instance.
+
+Put overrides in `plugins/<plugin name>/messages/<locale>.yml`. After a successful connection,
+`plugins/<plugin name>/messages/reference/` contains informational copies of the bundled files;
+changing those copies does not change messages. A refused connection does not write copies.
+Disconnecting withdraws the in-memory catalogue but leaves message files on disk. `/ul reload`
+does not refresh these overrides; the plugin can call `UltiToolsAPI.reloadMessages(this)` in
+its own reload command. This is a no-op for a connected plugin without a bundled catalogue and
+throws `IllegalStateException` for an unconnected plugin.
+
+A plugin that ships a catalogue cannot connect if its normalized namespace is reserved by
+UltiTools, matches a loaded module, or is already published by another external plugin.
+If the external plugin publishes first, a later module trying to publish that namespace is
+refused instead, even if its name matches exactly. A legacy connector module that does not
+publish a catalogue cannot replace an external catalogue either.
+
+外部 `JavaPlugin` 在自身 JAR 的 `messages/` 顶层带有 `messages/<locale>.yml` 时，连接后注入绑定自己
+命名空间的 `Messages`。去掉 `.yml` 后的文件名须是文本引擎认可的语言标识（如 `en`、`zh-CN`），
+`messages/config.yml` 等其他随包文件会被忽略。源语言可在 `paper-plugin.yml`（没有时用 `plugin.yml`）
+声明 `source-language`，未声明或无效则用 `en`。未随包提供合法语言文件的插件继承框架实例，但不承诺
+它的命名空间，也不创建消息目录。服主覆盖放在
+`plugins/<插件名>/messages/`，成功连接后生成的 `reference/` 是参考副本，改它不会生效。
+`/ul reload` 不刷新外部覆盖；插件须调用 `UltiToolsAPI.reloadMessages(this)`。拒绝不落盘，断开不删文件。
+消息命名空间已被框架、模块或另一个外部目录占用时，连接被拒绝；外部目录先发布时，后加载的标准模块也不能占用它。
+
 ## Legacy text system removed (as of 7.0.0)
 
 7.0 has one text system: `Messages`, with dotted keys and MiniMessage values. It removes the
