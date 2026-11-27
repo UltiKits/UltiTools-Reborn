@@ -5,8 +5,7 @@ import com.ultikits.ultitools.UltiTools;
 import java.util.regex.Pattern;
 
 /**
- * Utility class for ensuring proper class loader usage throughout the plugin.
- * All class loaders created in this plugin should use the JavaPlugin class loader as parent.
+ * Helpers for framework and module class loading and for loading with an explicit owner loader.
  */
 public class ClassLoaderUtils {
 
@@ -29,17 +28,17 @@ public class ClassLoaderUtils {
     }
     
     /**
-     * Get the JavaPlugin class loader.
-     * This should be used as the parent class loader for any custom class loaders.
+     * Get the shared loader for framework and module classes, not for external plugin classes.
      *
-     * @return JavaPlugin class loader
+     * @return framework and module class loader
      */
     public static ClassLoader getPluginClassLoader() {
         return UltiTools.getJavaPluginClassLoader();
     }
 
     /**
-     * Load a class using the plugin class loader with name-format validation.
+     * Load a framework or module class with name-format validation. For an external plugin class,
+     * pass its owner's loader to {@link #loadClass(String, ClassLoader)} instead.
      *
      * @param className class name
      * @return loaded class
@@ -47,16 +46,30 @@ public class ClassLoaderUtils {
      * @throws SecurityException if the class name format is invalid
      */
     public static Class<?> loadClass(String className) throws ClassNotFoundException, SecurityException {
+        return loadClass(className, getPluginClassLoader());
+    }
+
+    /**
+     * Load a class without initializing it, using the given owner loader after validating its name.
+     *
+     * @param className class name
+     * @param owner class loader to use for lookup
+     * @return loaded class
+     * @throws ClassNotFoundException if class not found
+     * @throws SecurityException if the class name format is invalid
+     */
+    public static Class<?> loadClass(String className, ClassLoader owner) throws ClassNotFoundException, SecurityException {
         validateClassName(className);
         try {
-            return getPluginClassLoader().loadClass(className);
+            return owner.loadClass(className);
         } catch (ClassNotFoundException e) {
             throw new ClassNotFoundException("Failed to load class: " + className, e);
         }
     }
     
     /**
-     * Load a class using the plugin class loader with initialization control and name-format validation.
+     * Load a framework or module class with initialization control and name-format validation.
+     * This does not use an external plugin's own loader.
      *
      * @param className class name
      * @param initialize whether to initialize the class
@@ -75,8 +88,8 @@ public class ClassLoaderUtils {
     }
     
     /**
-     * Safely load a class that extends UltiToolsPlugin.
-     * This method provides additional validation for plugin classes.
+     * Load and validate an UltiToolsPlugin subclass using the shared module loader.
+     * This method is not for external Bukkit plugin classes.
      *
      * @param className class name
      * @return loaded plugin class
@@ -105,7 +118,8 @@ public class ClassLoaderUtils {
     }
     
     /**
-     * Validate that a class loader has the correct parent hierarchy.
+     * Validate a class loader's parent hierarchy against the shared framework and module loader.
+     * External Bukkit plugin loaders are not required to use this hierarchy.
      *
      * @param classLoader class loader to validate
      * @return true if valid, false otherwise

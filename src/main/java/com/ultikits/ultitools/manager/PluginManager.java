@@ -65,6 +65,7 @@ import com.ultikits.ultitools.annotations.EnableAutoRegister;
 import com.ultikits.ultitools.annotations.ExceptionCatch;
 import com.ultikits.ultitools.annotations.ModuleEventHandler;
 import com.ultikits.ultitools.annotations.Transactional;
+import com.ultikits.ultitools.annotations.Table;
 import com.ultikits.ultitools.annotations.UltiToolsModule;
 import com.ultikits.ultitools.annotations.command.CmdCD;
 import com.ultikits.ultitools.annotations.command.CmdMapping;
@@ -1895,10 +1896,11 @@ public class PluginManager {
      * needs a decision on whether an entity scan may also skip classes outside a declared scan
      * root, which plan 17-30 does not make.
      *
-     * @param pluginJar the module's own jar file
+     * @param pluginJar the module's or external plugin's own jar file
+     * @param owner the class loader of the owner of the jar
      * @return every {@code @Table}-annotated class found, never null
      */
-    private Set<Class<?>> scanEntitiesInJar(File pluginJar) {
+    private Set<Class<?>> scanEntitiesInJar(File pluginJar, ClassLoader owner) {
         Set<Class<?>> entities = new HashSet<>();
         if (pluginJar == null || !pluginJar.isFile()) {
             return entities;
@@ -1927,7 +1929,7 @@ public class PluginManager {
                             + "not enforced, so no entity is silently dropped).");
                 }
 
-                resolveEntityClass(className, pluginJar.getName(), softDepend).ifPresent(entities::add);
+                resolveEntityClass(className, pluginJar.getName(), softDepend, owner).ifPresent(entities::add);
             }
         } catch (IOException | LinkageError | RuntimeException e) {
             Bukkit.getLogger().log(Level.SEVERE,
@@ -1970,13 +1972,14 @@ public class PluginManager {
      *                   block can accumulate into the correct module
      * @param softDepend the scanning module's own declared {@code plugin.yml} {@code softdepend:}
      *                   list (UltiEconomy#20); may be empty, never {@code null}
+     * @param owner the loader to use when resolving the class name
      * @return the loaded class if it is a {@code @Table} entity, otherwise empty
      */
     private static Optional<Class<?>> resolveEntityClass(
-            String className, String moduleName, List<String> softDepend) {
+            String className, String moduleName, List<String> softDepend, ClassLoader owner) {
         try {
-            Class<?> aClass = ClassLoaderUtils.loadClass(className);
-            if (aClass.isAnnotationPresent(com.ultikits.ultitools.annotations.Table.class)) {
+            Class<?> aClass = ClassLoaderUtils.loadClass(className, owner);
+            if (aClass.isAnnotationPresent(Table.class)) {
                 return Optional.of(aClass);
             }
         } catch (ClassNotFoundException | LinkageError e) {
@@ -2202,7 +2205,7 @@ public class PluginManager {
         Set<Class<?>> entities = new HashSet<>();
         File jarFile = resolveOwnJarFile(pluginClass);
         if (jarFile != null) {
-            entities.addAll(scanEntitiesInJar(jarFile));
+            entities.addAll(scanEntitiesInJar(jarFile, pluginClass.getClassLoader()));
         }
         UltiToolsModule module = pluginClass.getAnnotation(UltiToolsModule.class);
         if (module != null) {
@@ -2226,16 +2229,18 @@ public class PluginManager {
      *
      * @param adapter            the external plugin adapter
      * @param additionalEntities entity classes declared via {@code connect(...)}
+     * @param owner the external plugin's own class loader
      * @return the entity set for that external plugin's scope
      * @throws PluginModuleException fail-closed, when {@code additionalEntities} names an entity
      *                                that does not live on this plugin's own classpath (02-14)
      */
-    private Set<Class<?>> scanExternalEntities(ExternalPluginAdapter adapter, Class<?>[] additionalEntities) {
+    private Set<Class<?>> scanExternalEntities(ExternalPluginAdapter adapter, Class<?>[] additionalEntities,
+            ClassLoader owner) {
         Set<Class<?>> entities = new HashSet<>();
         Class<?> declaringClass = adapter.getJavaPlugin().getClass();
         File jarFile = resolveOwnJarFile(declaringClass);
         if (jarFile != null) {
-            entities.addAll(scanEntitiesInJar(jarFile));
+            entities.addAll(scanEntitiesInJar(jarFile, owner));
         }
         if (additionalEntities != null) {
             for (Class<?> entity : additionalEntities) {
@@ -3850,8 +3855,15 @@ public class PluginManager {
         // 1. Create child IoC container
         SimpleContainer context = new SimpleContainer();
         context.setParent(UltiTools.getInstance().getDependenceManagers().getContext());
+        ClassLoader owner = adapter.getPluginClassLoader();
+        try {
+            requireExternalMainClass(adapter, owner);
+        } catch (PluginModuleException refused) {
+            unwindRefusedExternal(adapter, context, null, Collections.emptyList());
+            throw refused;
+        }
         context.registerShutdownHook();
-        context.setClassLoader(adapter.getPluginClassLoader());
+        context.setClassLoader(owner);
 
         // 07-fix: the per-container diagnostic identifier for
         // SimpleContainer.preInstantiateSingletons' own SEVERE summary (07-21 D-19).
@@ -3887,7 +3899,7 @@ public class PluginManager {
 
         // 3. Refresh container to instantiate beans
         DataScope scope = DataScope.forExternal(adapter.getPluginName(), adapter.getDataFolder(),
-                scanExternalEntities(adapter, additionalEntities));
+                scanExternalEntities(adapter, additionalEntities, owner));
         // registerExternalScope runs FIRST (02-14 Task 2): if it refuses (another plugin already
         // holds this data folder), nothing below has run yet -- no entity ownership recorded, no
         // DataScope attached to the adapter. A refused registerExternal() leaves no partial state.
@@ -3938,6 +3950,22 @@ public class PluginManager {
 
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
+    }
+
+    private static void requireExternalMainClass(ExternalPluginAdapter adapter, ClassLoader owner) {
+        Class<?> mainClass = adapter.getJavaPlugin().getClass();
+        String name = mainClass.getName();
+        String reason = "Cannot register external plugin '" + adapter.getPluginName()
+                + "': the selected class loader cannot resolve main class '" + name
+                + "' to the running plugin class.";
+        try {
+            if (owner != null && owner.loadClass(name) == mainClass) {
+                return;
+            }
+        } catch (ClassNotFoundException | LinkageError | SecurityException e) {
+            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED, reason, e);
+        }
+        throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED, reason);
     }
 
     /**
@@ -4065,6 +4093,9 @@ public class PluginManager {
         }
         adapter.setContext(null);
         adapter.setDataScope(null);
+        if (scope == null) {
+            return; // Refused before any data scope or entity ownership was registered.
+        }
         for (Class<?> entity : ownershipAdded) {
             entityOwnership.remove(entity, scope.getPluginName());
         }
