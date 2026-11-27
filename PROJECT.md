@@ -23,7 +23,7 @@
   | CI toolchain + `paper-api` | JDK 25 · Paper `26.3.build.258-stable` | build toolchain and compile-time API |
   | framework `paper-plugin.yml` `api-version` | `26.3` | Paper API level |
 
-  As of `7.0.0-SNAPSHOT`, the pom uses `<release>${java.version}</release>` with Java 25, not
+  As of `7.0.0`, the pom uses `<release>${java.version}</release>` with Java 25, not
   separate `-source`/`-target` settings. Both building and running the framework require Java 25.
 - **Runtime dependency model:** Paper is the only declared server API (`paper-api`, `provided` scope).
   Paper invokes `UltiToolsLoader` to download the coordinates in `src/main/resources/ultitools-libraries.txt`.
