@@ -34,7 +34,8 @@ import java.lang.annotation.Target;
  * {@code async = true} runs the method body off the main thread. For config-bound timings, a
  * synchronous trigger observes each fire before dispatching the async body; see the binding
  * contract below (#535). Literal async tasks retain their direct async scheduling behavior.
- * As of 7.0, literal async periods are wall-clock durations (50 ms per tick), not server tick time.
+ * As of 7.0, literal async delays and periods are wall-clock durations (50 ms per tick),
+ * not server tick time.
  *
  * <h2>Binding the timing to a config key (6.3.0)</h2>
  * Instead of a literal, {@link #periodKey()} and {@link #delayKey()} can name a
@@ -76,9 +77,10 @@ import java.lang.annotation.Target;
  *       config reload itself, which aborts the rest of that module's reload (issue #509) instead of
  *       keeping the running value.</li>
  *   <li><b>Async bindings.</b> With {@code async = true}, a synchronous trigger records each fire
- *       on the main thread, then submits the method body with a one-tick async delay (#535). The
- *       body starts one scheduler heartbeat after the trigger, or later under load; the period and
- *       reload phase are measured between triggers, not between worker starts or completions.
+ *       on the main thread, then submits the method body to the async scheduler with a 50 ms
+ *       wall-clock delay (one nominal tick, #535). The body starts about 50 ms after the trigger,
+ *       or later under load; the period and reload phase are measured between triggers, not between
+ *       worker starts or completions.
  *       Reload leaves already-dispatched work alone. Slow bodies may overlap, as with literal async
  *       tasks, and must not use thread-unsafe Bukkit APIs. Module unload cancels the trigger and
  *       pending workers; a body already running may finish. Literal async tasks are unchanged.</li>
@@ -97,16 +99,16 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Scheduled {
     /**
-     * Initial delay in ticks before first execution. Default: 0. Leave unset when
-     * {@link #delayKey()} is set.
+     * Initial delay in ticks before first execution. Default: 0. On the main thread a delay of 0
+     * runs on the next tick at the earliest. Leave unset when {@link #delayKey()} is set.
      *
      * @return delay in ticks
      */
     long delay() default 0;
 
     /**
-     * Repeat interval in ticks. -1 = run once after delay. Default: -1. Leave unset when
-     * {@link #periodKey()} is set.
+     * Repeat interval in ticks. Zero or a negative value runs once after the delay. Default: -1.
+     * Leave unset when {@link #periodKey()} is set.
      *
      * @return period in ticks
      */

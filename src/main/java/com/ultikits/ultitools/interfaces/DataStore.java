@@ -35,9 +35,10 @@ public interface DataStore {
      * <p>
      * Module code does not call this directly; it uses {@code UltiToolsPlugin#getDataOperator(Class)}
      * (internal modules) or {@code UltiToolsAPI.getDataOperator(JavaPlugin, Class)} (external
-     * plugins), both of which pass the scope the framework minted for them. The two legacy
-     * overloads taking an {@code UltiToolsPlugin} or a {@link java.io.File}, deprecated in 6.3.0,
-     * were removed in 6.4.0.
+     * plugins), both of which pass the scope the framework minted for them. The two legacy overloads
+     * of this interface taking an {@code UltiToolsPlugin} or a {@link java.io.File}, deprecated in
+     * 6.3.0, were removed in 6.4.0. The backends' own overloads and {@code checkOwnership} were
+     * removed in 6.5.0.
      * <p>
      * Delegates to {@link #getOperatorUnchecked(DataScope, Class)}, an internal construction path
      * with no ownership check of its own, reachable only after this method's own {@code

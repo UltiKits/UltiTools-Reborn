@@ -475,11 +475,19 @@ public abstract class UltiToolsPlugin implements IPlugin, Configurable {
      * cannot be written stays in memory and is named in one warning. It cannot overwrite operator content: a value the
      * operator edited, deleted or wrote unusably is never written over (maintainer decision 2026-10-04). Use it for a
      * change the operator asked for through the module, or for shipped text re-rendered after a language switch.
+     * <p>
+     * If no entity is registered for {@code path} in this module, this method throws
+     * {@link NullPointerException} without creating, registering or writing a file, even if the file
+     * already exists on disk. Register the entity first, or call {@link AbstractConfigEntity#save()}
+     * on an entity you hold. Call this method on the server thread.
      *
      * @param path       the registered configuration file path, for example {@code config/config.yml}
      * @param configType the configuration entity class
      * @param <T>        the configuration entity type
-     * @throws IOException if publishing the verified file fails
+     * @throws IOException          if publishing the verified file fails
+     * @throws NullPointerException if no configuration entity is registered for {@code path} in this module
+     * @throws ClassCastException   if the registered entity is not an instance of {@code configType}
+     * @throws IllegalStateException if the server is running and this is called off the server thread
      */
     public <T extends AbstractConfigEntity> void saveConfig(String path, Class<T> configType) throws IOException {
         getConfigManager().getConfigEntity(this, path, configType).save();

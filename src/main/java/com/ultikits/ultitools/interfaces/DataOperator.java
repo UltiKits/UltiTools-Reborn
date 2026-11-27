@@ -60,12 +60,39 @@ public interface DataOperator<T extends BaseDataEntity<String>> {
     List<T> getAll(WhereCondition... whereConditions);
 
     /**
-     * Fuzzy Query
+     * Pattern query on one column: finds rows whose value at {@code column} starts with
+     * ({@link LikeType#START}), ends with ({@link LikeType#END}) or contains
+     * ({@link LikeType#CONTAINS}) {@code value}.
+     * <p>
+     * The built-in backends interpret the arguments differently. This describes their current
+     * behaviour, not a cross-backend contract.
+     * <ul>
+     *   <li>SQLite and MySQL bind {@code value%}, {@code %value} or {@code %value%} to SQL
+     *       {@code LIKE} without an {@code ESCAPE} clause, so {@code %} and {@code _} in {@code value}
+     *       act as wildcards under the database's rules, and letter case follows the database.
+     *       {@code column} is put into the SQL as given, without checking the entity's
+     *       {@code @Column} mappings: pass only a column name fixed by your code, never user input.
+     *       A name the database rejects throws {@link DataAccessException} with
+     *       {@link ErrorCode#DATA_OPERATION_FAILED}.</li>
+     *   <li>JSON resolves a mapped column name or a dot-separated field path, turns each non-null
+     *       value into text with {@code toString()} after a Gson round trip (an integer {@code 15}
+     *       is matched as {@code 15.0}), skips rows without a value there, and compares with
+     *       {@link String#startsWith(String)}, {@link String#endsWith(String)} or
+     *       {@link String#contains(CharSequence)}. Matching is case-sensitive, and {@code %} and
+     *       {@code _} are ordinary characters.</li>
+     * </ul>
+     * Do not pass {@code null} for {@code value} or {@code likeType}: SQL turns a {@code null} value
+     * into the text {@code null}, and a {@code null} {@code likeType} throws {@link NullPointerException}
+     * on SQL. JSON throws it for either null argument once a row has a value at {@code column}.
+     * For a literal prefix, suffix or substring match, use a {@link WhereCondition} with
+     * {@link com.ultikits.ultitools.entities.Comparison#STARTSWITH},
+     * {@link com.ultikits.ultitools.entities.Comparison#ENDSWITH} or
+     * {@link com.ultikits.ultitools.entities.Comparison#INCLUDE}.
      *
-     * @param column   Column name
-     * @param value    Query value
-     * @param likeType Like type
-     * @return Data record list
+     * @param column   the column name, or on JSON a mapped column name or field path
+     * @param value    the text to match
+     * @param likeType where {@code value} must occur
+     * @return detached copies of the matching rows
      */
     List<T> getLike(String column, String value, LikeType likeType);
 
