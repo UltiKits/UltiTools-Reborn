@@ -38,8 +38,9 @@ public class ClassLoaderUtils {
     }
 
     /**
-     * Load a framework or module class with name-format validation. For an external plugin class,
-     * pass its owner's loader to {@link #loadClass(String, ClassLoader)} instead.
+     * Load a framework or module class with name-format validation. This method does not use an
+     * external plugin's own loader: for an external plugin class, call {@code loadClass} on that
+     * plugin's class loader directly.
      *
      * @param className class name
      * @return loaded class
