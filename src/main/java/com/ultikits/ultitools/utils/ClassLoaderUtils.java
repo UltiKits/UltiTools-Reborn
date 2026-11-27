@@ -1,6 +1,7 @@
 package com.ultikits.ultitools.utils;
 
 import com.ultikits.ultitools.UltiTools;
+import org.jetbrains.annotations.ApiStatus;
 
 import java.util.regex.Pattern;
 
@@ -50,14 +51,20 @@ public class ClassLoaderUtils {
     }
 
     /**
-     * Load a class without initializing it, using the given owner loader after validating its name.
+     * Load a class by validating its name and delegating to the supplied owner loader.
+     * This method does not request class initialization.
+     *
+     * <p>For framework use only. Modules should not call this method. It is not covered by
+     * the public API compatibility policy and may change or be removed in any release.</p>
      *
      * @param className class name
-     * @param owner class loader to use for lookup
+     * @param owner non-null class loader to use for lookup; there is no fallback loader
      * @return loaded class
-     * @throws ClassNotFoundException if class not found
-     * @throws SecurityException if the class name format is invalid
+     * @throws ClassNotFoundException if the owner loader cannot find the class; the loader's exception is the cause
+     * @throws NullPointerException if the name is valid and the owner loader is null
+     * @throws SecurityException if the class name is null or malformed, even if the owner loader is null
      */
+    @ApiStatus.Internal
     public static Class<?> loadClass(String className, ClassLoader owner) throws ClassNotFoundException, SecurityException {
         validateClassName(className);
         try {
