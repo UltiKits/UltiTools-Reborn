@@ -363,7 +363,8 @@ public class ConfigManager {
      * @param path   Config entity path
      * @param type   Config entity type
      * @param <T>    Config entity type
-     * @return Config entity
+     * @return the entity registered for {@code path}, or {@code null} if none is registered
+     *         (a registered entity of another type throws {@link ClassCastException})
      */
     public <T extends AbstractConfigEntity> T getConfigEntity(UltiToolsPlugin plugin, String path, Class<T> type) {
         requireConfigThread(plugin, "getConfigEntity " + path);

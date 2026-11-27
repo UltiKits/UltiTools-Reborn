@@ -70,6 +70,8 @@ public class JsonStore implements DataStore {
      * (guarded by the {@code static} {@link #schedulerInitialized} flag, matching pre-existing
      * behavior); in production there is exactly one {@code JsonStore} instance, so this flushes
      * that instance's own cache, not a shared static one.
+     * A negative {@code datasource.flushRate} starts no periodic flush; the shutdown checkpoint
+     * ({@link #destroyAllOperators()}) still runs.
      */
     private void initScheduler() {
         synchronized (JsonStore.class) {
@@ -83,8 +85,9 @@ public class JsonStore implements DataStore {
                         Ticks.of(20), Ticks.of(20L * flushRate), handle -> flushAllCaches());
                 schedulerInitialized = true;
             } catch (Exception e) {
-                // Scheduler initialization failed - likely in test environment
-                // This is acceptable as tests don't need periodic flushing
+                // A negative datasource.flushRate makes Ticks.of throw, so no periodic flush is started
+                // (see config.yml and COMPATIBILITY.md). The framework instance can also be unavailable
+                // outside a server, as in tests. Neither failure is logged here.
             }
         }
     }

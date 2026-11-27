@@ -32,12 +32,16 @@ public interface Configurable {
      * @param path       Config path
      * @param configType Config type
      * @param <T>        Config type
-     * @return Config
+     * @return the entity registered for {@code path}, or {@code null} if none is registered
+     *         (a registered entity of another type throws {@link ClassCastException})
      */
     <T extends AbstractConfigEntity> T getConfig(String path, Class<T> configType);
 
     /**
-     * Save config by config type.
+     * Saves the configuration entity registered for {@code path} in this module. See
+     * {@link com.ultikits.ultitools.abstracts.UltiToolsPlugin#saveConfig(String, Class)} for what
+     * is written. Throws {@link NullPointerException} if no entity is registered for the path and
+     * {@link ClassCastException} if the registered entity is not an instance of {@code configType}.
      *
      * @param path       Config path
      * @param configType Config type
