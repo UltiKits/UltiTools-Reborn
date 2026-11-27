@@ -74,8 +74,8 @@ import com.ultikits.ultitools.websocket.PanelConnectionLog;
 final class AgentConnection {
 
     // =====================================================================================
-    // Contract: see section 7 (close codes, client actions and backoff constants) in
-    // src/test/resources/ulticloud-contract/v2/2.2.0/PROTOCOL.md. AgentConnectionTest covers
+    // Contract: see PROTOCOL.md section 7 (close codes, client actions and backoff constants),
+    // checked in under src/test/resources/ulticloud-contract/v2/2.2.0/. AgentConnectionTest covers
     // the close-code policy. Nothing outside this section names a raw code.
     // =====================================================================================
 
