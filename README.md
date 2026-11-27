@@ -78,8 +78,8 @@ one-shot task may finish. This guarantee applies to the module-owned scheduler, 
 
 ### Requirements
 
-- **Version**: [6.5.0](https://github.com/UltiKits/UltiTools-Reborn/releases/tag/v6.5.0) is the latest stable release. `7.0.0-SNAPSHOT` is the development version on this branch; 7.0.0 has not been released. For 6.x server requirements, use the [6.x compatibility guide](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md).
-- **Server**: Paper 26.3 (build 258), the baseline for 7.0.0-SNAPSHOT. Each framework version targets one latest Paper version, not a range of older servers. Plain Spigot is not supported.
+- **Version**: [7.0.0](https://github.com/UltiKits/UltiTools-Reborn/releases/tag/v7.0.0) is the latest stable release. For 6.x server requirements, use the [6.x compatibility guide](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md).
+- **Server**: Paper 26.3 (build 258), the baseline for 7.0.0. Each framework version targets one latest Paper version, not a range of older servers. Plain Spigot is not supported.
 - **Server Java**: Java 25.
 - **Building the framework**: JDK 25, compiling with `--release 25` (Java 25 bytecode, class major 69). The framework plugin declares `api-version: '26.3'`.
 - **Modules**: use builds compiled for UltiTools-API 7.0 and the target Paper version. A native module declares an integer `api-version: 700` in its `plugin.yml`, not the framework plugin’s Paper API version `26.3`. Rebuild 6.x modules; changing the declaration alone will not make a 6.x JAR work. See the [support matrix](COMPATIBILITY.md#support-matrix).
@@ -134,22 +134,21 @@ selects `zh` (an unmatched safe name selects `en`) without reading the old custo
 
 ### Add the Dependency
 
-The examples below target 7.0. Build and install the framework from this branch with JDK 25 before using `7.0.0-SNAPSHOT` as a local dependency. For the released `6.5.0` artifact on Maven Central, use the [6.x branch’s API examples](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/README.md) instead.
+The examples below target 7.0 and resolve `7.0.0` from Maven Central. For the earlier `6.5.0` release, use the [6.x branch’s API examples](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/README.md) instead.
 
 **Maven**
 ```xml
 <dependency>
     <groupId>com.ultikits</groupId>
     <artifactId>UltiTools-API</artifactId>
-    <version>7.0.0-SNAPSHOT</version>
+    <version>7.0.0</version>
     <scope>provided</scope>
 </dependency>
 ```
 
 **Gradle**
 ```groovy
-// Add mavenLocal() to repositories when using a locally installed snapshot.
-compileOnly 'com.ultikits:UltiTools-API:7.0.0-SNAPSHOT'
+compileOnly 'com.ultikits:UltiTools-API:7.0.0'
 ```
 
 > Compile against UltiTools-API with `provided` or `compileOnly`, and declare the matching

@@ -157,8 +157,8 @@ the framework moves it.
 
 ## Declaring the dependency
 
-The examples target the unreleased `7.0.0-SNAPSHOT` installed locally from this branch.
-The latest released artifact on Maven Central is `6.5.0`; use the [6.x compatibility guide](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md) for that release.
+The examples target `7.0.0`, the latest release on Maven Central.
+For the earlier `6.5.0` release, use the [6.x compatibility guide](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md).
 
 Maven:
 
@@ -166,15 +166,15 @@ Maven:
 <dependency>
     <groupId>com.ultikits</groupId>
     <artifactId>UltiTools-API</artifactId>
-    <version>7.0.0-SNAPSHOT</version>
+    <version>7.0.0</version>
     <scope>provided</scope>
 </dependency>
 ```
 
-Gradle (enable `mavenLocal()` for a locally installed snapshot):
+Gradle:
 
 ```groovy
-compileOnly 'com.ultikits:UltiTools-API:7.0.0-SNAPSHOT'
+compileOnly 'com.ultikits:UltiTools-API:7.0.0'
 ```
 
 **Use `provided` / `compileOnly`.** The POM published to Maven Central is processed by
@@ -184,7 +184,7 @@ What it does do, if your build has a shade or shadow step, is bundle the framewo
 your module JAR, where it conflicts at runtime with the UltiTools already installed on the server.
 Declare the matching `paper-api` separately for code that uses Paper types.
 
-## Paper and Java baseline (as of 7.0.0-SNAPSHOT)
+## Paper and Java baseline (as of 7.0.0)
 
 The baseline is **Paper 26.3 build 258 with Java 25**. The build pins
 `paper-api:26.3.build.258-stable`, compiles with `--release 25` (class major 69), and the
@@ -205,7 +205,7 @@ is missing or not loaded, does not fall back to `world`: Paper's `Location.deser
 `unknown world`; its serialization layer logs the failure and returns null, and the framework's
 Bukkit converter rejects the configuration value with a `ConversionException`.
 
-中文补充：7.0.0-SNAPSHOT 的基准是 **Paper 26.3 build 258 + Java 25**，只对准最新的一个
+中文补充：7.0.0 的基准是 **Paper 26.3 build 258 + Java 25**，只对准最新的一个
 Paper 版本，不承诺兼容旧服务器；本文其他位置的 6.x 旧服务器说明不适用于 7.0。Paper 26.3 把位置的世界
 保存为 `world_key`，不写 `world`。`world_key` 是形如 `命名空间:路径` 的键，**不是世界名**；
 读取仍兼容旧 `world`（世界名）。两者共存时 `world_key` 优先。手工修改世界时，应**从一个已在目标世界
@@ -4331,7 +4331,7 @@ framework and are not subjected to an additional global strict-JSON pass.
 
 ## Support matrix
 
-Current baseline: **7.0.0-SNAPSHOT** (7.0.0 is not released). Each framework version targets one latest Paper version;
+Current baseline: **7.0.0**. Each framework version targets one latest Paper version;
 older servers are not promised compatibility.
 
 | Item | Value |
