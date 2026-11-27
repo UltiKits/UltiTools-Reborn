@@ -48,15 +48,19 @@ public final class CatalogueLoader {
 
     /** Loads only resources from the explicitly supplied module code source. */
     public Loaded load(String namespace, Locale sourceLocale, @Nullable URL location) {
+        return load(namespace, sourceLocale, location, false);
+    }
+
+    Loaded load(String namespace, Locale sourceLocale, @Nullable URL location, boolean external) {
         List<String> diagnostics = new ArrayList<>();
         Map<String, String> files = new LinkedHashMap<>();
         if (location != null) {
             Path source = CodeSourceLocations.toFile(location).toPath();
             try {
-                if (Files.isDirectory(source)) {
+                if (!external && Files.isDirectory(source)) {
                     readDirectory(source.resolve("messages"), files, diagnostics);
                 } else {
-                    readJar(source, files, diagnostics);
+                    readJar(source, files, diagnostics, external);
                 }
             } catch (IOException failure) {
                 diagnostics.add(source + ": " + failure.getMessage());
@@ -67,7 +71,7 @@ public final class CatalogueLoader {
         return new Loaded(catalogue, diagnostics, files);
     }
 
-    /** Metadata is present only when the external plugin's own JAR has a top-level catalogue file. */
+    /** Metadata is present only when the external plugin's own JAR has a recognized locale file. */
     record ExternalSource(@Nullable String sourceLanguage) { }
 
     @Nullable ExternalSource inspectExternal(@Nullable URL location) throws IOException {
@@ -79,15 +83,22 @@ public final class CatalogueLoader {
             return null;
         }
         try (JarFile jar = new JarFile(path.toFile())) {
-            return jar.stream().anyMatch(CatalogueLoader::isTopLevelYml)
+            return jar.stream().anyMatch(CatalogueLoader::isExternalCatalogue)
                     ? new ExternalSource(readSourceLanguage(jar)) : null;
         }
     }
 
-    private static boolean isTopLevelYml(JarEntry entry) {
+    private static boolean isExternalCatalogue(JarEntry entry) {
         String name = entry.getName();
-        return !entry.isDirectory() && name.startsWith("messages/") && name.endsWith(".yml")
-                && name.indexOf('/', "messages/".length()) < 0;
+        if (entry.isDirectory() || !name.startsWith("messages/")) {
+            return false;
+        }
+        String file = name.substring("messages/".length());
+        return LANGUAGE_FILE.matcher(file).matches() && catalogueLocale(file).isPresent();
+    }
+
+    private static Optional<Locale> catalogueLocale(String file) {
+        return LocaleNames.parse(file.substring(0, file.length() - ".yml".length()));
     }
 
     private static @Nullable String readSourceLanguage(JarFile jar) throws IOException {
@@ -137,8 +148,7 @@ public final class CatalogueLoader {
             return diagnostics;
         }
         shipped.shippedFiles().forEach((name, text) -> {
-            if (!catalogueFile(name, reference + "/" + name, diagnostics)
-                    || LocaleNames.parse(name.substring(0, name.length() - 4)).isEmpty()) {
+            if (!catalogueFile(name, reference + "/" + name, diagnostics) || catalogueLocale(name).isEmpty()) {
                 return;
             }
             Path target = reference.resolve(name).normalize();
@@ -211,9 +221,10 @@ public final class CatalogueLoader {
         }
     }
 
-    private static void readJar(Path path, Map<String, String> files, List<String> diagnostics) throws IOException {
+    private static void readJar(Path path, Map<String, String> files, List<String> diagnostics, boolean external)
+            throws IOException {
         try (JarFile jar = new JarFile(path.toFile())) {
-            for (var entry : jar.stream().filter(entry -> !entry.isDirectory())
+            for (var entry : jar.stream().filter(external ? CatalogueLoader::isExternalCatalogue : entry -> !entry.isDirectory())
                     .sorted(Comparator.comparing(JarEntry::getName)).toList()) {
                 String name = entry.getName();
                 if (!name.startsWith("messages/")) {
@@ -243,7 +254,7 @@ public final class CatalogueLoader {
     private static void warnMissingBaseLanguages(Catalogue catalogue, Map<String, String> files,
             List<String> diagnostics) {
         List<String> missing = files.keySet().stream()
-                .map(file -> LocaleNames.parse(file.substring(0, file.length() - 4)))
+                .map(file -> catalogueLocale(file))
                 .flatMap(Optional::stream).filter(locale -> !locale.getCountry().isEmpty())
                 .map(locale -> Locale.of(locale.getLanguage())).distinct()
                 .filter(locale -> !catalogue.hasLocale(locale)).map(locale -> "messages/" + locale.getLanguage() + ".yml")
@@ -264,7 +275,7 @@ public final class CatalogueLoader {
         Catalogue.Builder builder = new Catalogue.Builder(namespace, sourceLocale);
         Set<Locale> loaded = new HashSet<>();
         files.forEach((file, text) -> {
-            var locale = LocaleNames.parse(file.substring(0, file.length() - 4));
+            var locale = catalogueLocale(file);
             if (locale.isEmpty()) {
                 diagnostics.add(file + ": Invalid catalogue locale");
             } else if (!loaded.add(locale.orElseThrow())) {

@@ -124,12 +124,19 @@ public final class UltiToolsAPI {
     }
 
     /**
-     * Re-reads the message overrides in a connected external plugin's {@code messages/} data
-     * directory. Does nothing if the plugin did not ship a message catalogue in its JAR.
-     * These overrides are not refreshed by {@code /ul reload}.
+     * Re-reads the message catalogues bundled in a connected external plugin's JAR and the
+     * overrides in its {@code messages/} data directory. A malformed override file is ignored
+     * with a warning in the server console, so the bundled messages remain available as fallback.
+     * Does nothing if the plugin did not ship a message catalogue. These overrides are not
+     * refreshed by {@code /ul reload}.
+     * <p>
+     * May be called from any thread; file I/O is synchronous under the text engine lock.
+     * Call only after {@link #connect(JavaPlugin)} returns successfully, not from a bean
+     * initializer or other code running during registration.
      *
      * @param plugin the connected external JavaPlugin
-     * @throws IllegalStateException if the plugin is not connected to UltiTools
+     * @throws IllegalStateException if the plugin is not connected to UltiTools, including
+     *                               while it is still being registered by {@code connect}
      * @since 7.0.0
      */
     public static void reloadMessages(JavaPlugin plugin) {
@@ -247,8 +254,12 @@ public final class UltiToolsAPI {
             } catch (RuntimeException | Error failure) {
                 if (firstFailure == null) {
                     firstFailure = failure;
-                } else if (failure != firstFailure) {
-                    firstFailure.addSuppressed(failure);
+                } else {
+                    try {
+                        firstFailure.addSuppressed(failure);
+                    } catch (IllegalArgumentException ignored) {
+                        // Throwable rejects only the same exception instance here.
+                    }
                 }
             }
         }

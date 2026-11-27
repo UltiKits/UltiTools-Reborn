@@ -13,12 +13,14 @@ import static org.mockito.Mockito.when;
 import com.ultikits.testfixtures.externalmessages.MessagesProbePlugin;
 import com.ultikits.testfixtures.externalmessages.MessagesProbePlugin.ProbeBinding;
 import com.ultikits.ultitools.UltiTools;
+import com.ultikits.ultitools.abstracts.UltiToolsPlugin;
 import com.ultikits.ultitools.context.SimpleContainer;
 import com.ultikits.ultitools.exceptions.PluginModuleException;
 import com.ultikits.ultitools.interfaces.DataStore;
 import com.ultikits.ultitools.manager.CommandManager;
 import com.ultikits.ultitools.manager.DependenceManagers;
 import com.ultikits.ultitools.manager.ListenerManager;
+import com.ultikits.ultitools.manager.PluginListSeeding;
 import com.ultikits.ultitools.manager.PluginManager;
 import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Messages;
@@ -31,11 +33,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
@@ -59,19 +63,26 @@ class ExternalPluginMessagesTest {
             "messages/zh.yml", "greeting: 插件向你问好\n");
     @TempDir Path temporary;
     private final List<URLClassLoader> loaders = new ArrayList<>();
+    private final List<String> warnings = new ArrayList<>();
     private MockedStatic<UltiTools> tools;
     private MockedStatic<Bukkit> bukkit;
     private TextEngine engine;
     private SimpleContainer parent;
     private PluginManager manager;
     private Messages frameworkMessages;
-    private CommandManager commands;
     private ListenerManager listeners;
 
     @BeforeEach
     void setUp() {
         Logger logger = Logger.getAnonymousLogger();
-        engine = new TextEngine(new ConfiguredLocaleResolver(() -> "auto", () -> "en", logger), logger);
+        logger.setFilter(record -> {
+            if (Level.WARNING.equals(record.getLevel())) {
+                warnings.add(record.getMessage());
+            }
+            return true;
+        });
+        // Keep the server fallback distinct from English so source-language tests exercise that fallback.
+        engine = new TextEngine(new ConfiguredLocaleResolver(() -> "auto", () -> "de", logger), logger);
         frameworkMessages = engine.messagesFor(MessageKey.FRAMEWORK_NAMESPACE);
         parent = new SimpleContainer();
         parent.registerSingleton(Messages.class.getName(), frameworkMessages);
@@ -79,7 +90,7 @@ class ExternalPluginMessagesTest {
         parent.refresh();
 
         manager = new PluginManager();
-        commands = mock(CommandManager.class);
+        CommandManager commands = mock(CommandManager.class);
         listeners = mock(ListenerManager.class);
         DependenceManagers dependencies = mock(DependenceManagers.class);
         when(dependencies.getContext()).thenReturn(parent);
@@ -150,6 +161,43 @@ class ExternalPluginMessagesTest {
     }
 
     @Test
+    void jarWithOnlyNonLocaleFilesKeepsTheParentInstanceWithoutClaimingANamespace() throws Exception {
+        JavaPlugin plugin = plugin("NonLocaleProbe", Map.of(
+                "messages/config.yml", "greeting: Ignored config\n",
+                "messages/messages_en.yml", "greeting: Ignored translation\n"));
+
+        UltiToolsAPI.connect(plugin);
+
+        assertThat(binding(plugin).messages()).isSameAs(frameworkMessages);
+        UltiToolsAPI.reloadMessages(plugin);
+        assertThat(plugin.getDataFolder()).doesNotExist();
+        engine.publish(moduleCatalogue(plugin.getName()), this);
+        assertThat(renderFor(engine.messagesFor("nonlocaleprobe"), Locale.US)).isEqualTo("Hello from the module");
+    }
+
+    @Test
+    void jarWithMixedFilesPublishesOnlyRecognizedLocales() throws Exception {
+        Map<String, String> resources = new LinkedHashMap<>(CATALOGUE);
+        resources.put("messages/zh-CN.yml", "greeting: 中国大陆的问候\n");
+        resources.put("messages/config.yml", "greeting: Ignored config\n");
+        resources.put("messages/messages_en.yml", "greeting: Ignored translation\n");
+        JavaPlugin plugin = plugin("MixedCatalogueProbe", resources);
+
+        UltiToolsAPI.connect(plugin);
+
+        Messages messages = binding(plugin).messages();
+        assertThat(renderFor(messages, Locale.US)).isEqualTo("Hello from the plugin");
+        assertThat(renderFor(messages, Locale.SIMPLIFIED_CHINESE)).isEqualTo("中国大陆的问候");
+        try (var references = Files.list(messagesDirectory(plugin).resolve("reference"))) {
+            assertThat(references.map(path -> path.getFileName().toString()).toList())
+                    .containsExactlyInAnyOrder("en.yml", "zh.yml", "zh-CN.yml");
+        }
+        UltiToolsAPI.reloadMessages(plugin);
+        assertThat(renderFor(messages, Locale.SIMPLIFIED_CHINESE)).isEqualTo("中国大陆的问候");
+        assertThat(warnings).noneMatch(warning -> warning.contains("config.yml") || warning.contains("messages_en.yml"));
+    }
+
+    @Test
     void reloadAndDuplicateConnectKeepTheSamePublishedView() throws Exception {
         JavaPlugin plugin = plugin("ReloadProbe", CATALOGUE);
         assertThatThrownBy(() -> UltiToolsAPI.reloadMessages(plugin)).isInstanceOf(IllegalStateException.class)
@@ -184,6 +232,35 @@ class ExternalPluginMessagesTest {
         UltiToolsAPI.connect(plugin);
 
         assertThat(renderFor(binding(plugin).messages(), Locale.JAPAN)).isEqualTo("Bonjour");
+    }
+
+    @Test
+    void invalidSourceLanguageFallsBackToEnglish() throws Exception {
+        JavaPlugin plugin = plugin("InvalidSourceProbe", Map.of("plugin.yml", "source-language: not-a-locale\n",
+                "messages/en.yml", "greeting: Hello from the plugin\n"));
+
+        UltiToolsAPI.connect(plugin);
+
+        assertThat(renderFor(binding(plugin).messages(), Locale.JAPAN)).isEqualTo("Hello from the plugin");
+        assertThat(warnings).contains("External plugin 'InvalidSourceProbe' has invalid source-language 'not-a-locale'; using en");
+    }
+
+    @Test
+    void aLoadedLegacyModuleWithoutAPublicationRejectsTheExternalConnection() throws Exception {
+        JavaPlugin plugin = plugin("LegacyProbe", CATALOGUE);
+        UltiToolsPlugin legacy = mock(UltiToolsPlugin.class);
+        when(legacy.getPluginName()).thenReturn("LegacyProbe");
+        PluginListSeeding.add(manager, legacy);
+        Messages view = engine.messagesFor("legacyprobe");
+
+        assertThatThrownBy(() -> UltiToolsAPI.connect(plugin)).isInstanceOf(IllegalStateException.class)
+                .hasCauseInstanceOf(PluginModuleException.class)
+                .hasRootCauseMessage("External plugin 'LegacyProbe' cannot use message namespace 'legacyprobe': "
+                        + "it is already used by module 'LegacyProbe'");
+        assertThat(UltiToolsAPI.isConnected(plugin)).isFalse();
+        assertThat(manager.getPluginList()).containsExactly(legacy);
+        assertThat(view.isDefined(view.key("greeting"), Locale.ENGLISH)).isFalse();
+        assertThat(plugin.getDataFolder()).doesNotExist();
     }
 
     @Test
@@ -255,7 +332,29 @@ class ExternalPluginMessagesTest {
     }
 
     @Test
-    void frameworkShutdownWithdrawsAllCataloguesEvenWhenOneDisconnectFails() throws Exception {
+    void disconnectWithdrawsTheCatalogueWhenTheManagerIsUnavailable() throws Exception {
+        JavaPlugin plugin = plugin("MissingManagerProbe", CATALOGUE);
+        UltiToolsAPI.connect(plugin);
+        ExternalPluginAdapter adapter = UltiToolsAPI.getAdapter(plugin);
+        Messages messages = binding(plugin).messages();
+        assertThat(messages.isDefined(messages.key("greeting"), Locale.ENGLISH)).isTrue();
+        UltiTools framework = UltiTools.getInstance();
+        when(framework.getPluginManager()).thenReturn(null);
+        try {
+            UltiToolsAPI.disconnect(plugin);
+
+            assertThat(UltiToolsAPI.isConnected(plugin)).isFalse();
+            assertThat(messages.isDefined(messages.key("greeting"), Locale.ENGLISH)).isFalse();
+            assertThat(messagesDirectory(plugin).resolve("reference/en.yml")).exists();
+        } finally {
+            when(framework.getPluginManager()).thenReturn(manager);
+            manager.unregisterExternal(adapter);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void frameworkShutdownWithdrawsAllCataloguesEvenWhenADisconnectFails(boolean repeatFailure) throws Exception {
         JavaPlugin first = plugin("FirstProbe", CATALOGUE);
         JavaPlugin second = plugin("SecondProbe", CATALOGUE);
         UltiToolsAPI.connect(first);
@@ -264,8 +363,12 @@ class ExternalPluginMessagesTest {
         Messages secondMessages = binding(second).messages();
         IllegalStateException error = new IllegalStateException("listener teardown failed");
         doThrow(error).when(listeners).unregisterAllExternal(first.getName());
+        if (repeatFailure) {
+            doThrow(error).when(listeners).unregisterAllExternal(second.getName());
+        }
 
         assertThatThrownBy(manager::close).isSameAs(error);
+        assertThat(error.getSuppressed()).isEmpty();
         assertThat(firstMessages.isDefined(firstMessages.key("greeting"), Locale.ENGLISH)).isFalse();
         assertThat(secondMessages.isDefined(secondMessages.key("greeting"), Locale.ENGLISH)).isFalse();
         assertThat(UltiToolsAPI.isConnected(first)).isFalse();

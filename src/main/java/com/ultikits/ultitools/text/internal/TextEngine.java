@@ -91,17 +91,17 @@ public final class TextEngine implements AutoCloseable {
     public Prepared prepare(String namespace, String pluginName, @Nullable URL codeSource,
             Path overrideDirectory, Locale sourceLocale) {
         checkModulePreparation(namespace, pluginName);
-        return prepareCatalogue(namespace, pluginName, codeSource, overrideDirectory, sourceLocale, "Module");
+        return prepareCatalogue(namespace, pluginName, codeSource, overrideDirectory, sourceLocale, false);
     }
 
     /** Prepares resources using plugin.yml's optional source-language, defaulting to English. */
     public Prepared prepare(String namespace, String pluginName, @Nullable URL codeSource,
             Path overrideDirectory, @Nullable String sourceLanguage) {
         checkModulePreparation(namespace, pluginName);
-        return prepareCatalogue(namespace, pluginName, codeSource, overrideDirectory, sourceLanguage, "Module");
+        return prepareCatalogue(namespace, pluginName, codeSource, overrideDirectory, sourceLanguage, false);
     }
 
-    /** Prepares a catalogue only if the external plugin's own JAR opts in with a messages/*.yml file. */
+    /** Prepares a catalogue only if the external plugin's own JAR supplies a recognized locale file. */
     public @Nullable Prepared prepareExternal(String pluginName, @Nullable URL codeSource, Path overrideDirectory) {
         CatalogueLoader.ExternalSource source;
         try {
@@ -111,7 +111,7 @@ public final class TextEngine implements AutoCloseable {
             return null;
         }
         return source == null ? null : prepareCatalogue(MessageKey.namespaceFor(pluginName), pluginName,
-                codeSource, overrideDirectory, source.sourceLanguage(), "External plugin");
+                codeSource, overrideDirectory, source.sourceLanguage(), true);
     }
 
     private void checkModulePreparation(String namespace, String pluginName) {
@@ -122,25 +122,29 @@ public final class TextEngine implements AutoCloseable {
     }
 
     private Prepared prepareCatalogue(String namespace, String pluginName, @Nullable URL codeSource,
-            Path overrideDirectory, @Nullable String sourceLanguage, String kind) {
+            Path overrideDirectory, @Nullable String sourceLanguage, boolean external) {
         var parsed = sourceLanguage == null ? Optional.<Locale>empty() : LocaleNames.parse(sourceLanguage);
         Prepared prepared = prepareCatalogue(namespace, pluginName, codeSource, overrideDirectory,
-                parsed.orElse(Locale.ENGLISH), kind);
+                parsed.orElse(Locale.ENGLISH), external);
         if (sourceLanguage == null || parsed.isPresent()) {
             return prepared;
         }
         return new Prepared(pluginName, codeSource, overrideDirectory, withDiagnostic(prepared.loaded(),
-                kind + " '" + pluginName + "' has invalid source-language '" + sourceLanguage + "'; using en"));
+                catalogueOwner(pluginName, external) + " has invalid source-language '" + sourceLanguage + "'; using en"));
     }
 
     private Prepared prepareCatalogue(String namespace, String pluginName, @Nullable URL codeSource,
-            Path overrideDirectory, Locale sourceLocale, String kind) {
-        CatalogueLoader.Loaded loaded = loader.load(namespace, sourceLocale, codeSource);
+            Path overrideDirectory, Locale sourceLocale, boolean external) {
+        CatalogueLoader.Loaded loaded = loader.load(namespace, sourceLocale, codeSource, external);
         if (!loaded.catalogue().hasLocale(sourceLocale)) {
-            loaded = withDiagnostic(loaded, kind + " '" + pluginName + "' has no shipped messages catalogue for source language '"
-                    + sourceLocale.toLanguageTag() + "'");
+            loaded = withDiagnostic(loaded, catalogueOwner(pluginName, external)
+                    + " has no shipped messages catalogue for source language '" + sourceLocale.toLanguageTag() + "'");
         }
         return new Prepared(pluginName, codeSource, overrideDirectory, loader.withOverrides(loaded, overrideDirectory));
+    }
+
+    private static String catalogueOwner(String pluginName, boolean external) {
+        return (external ? "External plugin" : "Module") + " '" + pluginName + "'";
     }
 
     private static CatalogueLoader.Loaded withDiagnostic(CatalogueLoader.Loaded loaded, String message) {
@@ -267,8 +271,10 @@ public final class TextEngine implements AutoCloseable {
         }
         Prepared prepared = current.prepared();
         String namespace = current.catalogue().namespace();
+        boolean external = current.owner() instanceof ExternalCatalogue;
         CatalogueLoader.Loaded loaded = loader.withOverrides(
-                loader.load(namespace, current.catalogue().sourceLocale(), prepared.codeSource()), prepared.overrideDirectory());
+                loader.load(namespace, current.catalogue().sourceLocale(), prepared.codeSource(), external),
+                prepared.overrideDirectory());
         published.put(namespace, new Published(current.owner(), current.pluginName(), loaded.catalogue(), prepared,
                 current.previous()));
         loaded.diagnostics().forEach(logger::warning);

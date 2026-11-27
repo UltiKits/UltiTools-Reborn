@@ -4072,8 +4072,10 @@ public class PluginManager {
         try {
             context.close();
         } catch (RuntimeException | Error closeFailure) {
-            if (closeFailure != refused) {
+            try {
                 refused.addSuppressed(closeFailure);
+            } catch (IllegalArgumentException ignored) {
+                // Throwable rejects only the same exception instance here.
             }
         }
         adapter.withdrawMessages();
