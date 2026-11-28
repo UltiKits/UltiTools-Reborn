@@ -42,8 +42,8 @@
 #   Compatibility baseline reset: 7.0.0 alone may use japicmp.skip=true and does not compare
 #   against 6.x. Every later candidate must enable japicmp with a released baseline >=7.0.0;
 #   the normal clean verify enforces this through tests and the registry generator.
-#   After 7.0.0 is downloadable from Maven Central, set japicmp.baseline.version=7.0.0 and
-#   japicmp.skip=false in pom.xml before advancing the development version, then clean verify.
+#   The transition to 7.1.0-SNAPSHOT restored japicmp with japicmp.skip=false and
+#   japicmp.baseline.version=7.0.0, comparing against the release from Maven Central.
 #
 #   --prerelease              Mark the release as a prerelease.
 #   --notes <text>            Release notes.
