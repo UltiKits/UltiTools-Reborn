@@ -322,8 +322,7 @@ class RemoteCommandEndToEndTest {
                 auth.verify(() -> CloudAuthManager.login(any(CloudAuthManager.DeviceLoginListener.class)));
             } else {
                 auth.verify(() -> CloudAuthManager.logoutReporting(any()));
-                server.getScheduler().waitAsyncTasksFinished();
-                assertThat(CloudAuthManager.status().isLinked()).isFalse();
+                awaitConsoleUnlink();
             }
         }
     }
@@ -346,8 +345,15 @@ class RemoteCommandEndToEndTest {
             assertThat(Bukkit.dispatchCommand(server.getConsoleSender(), "cloud-alias")).isTrue();
             auth.verify(() -> CloudAuthManager.logoutReporting(any()));
         }
-        server.getScheduler().waitAsyncTasksFinished();
-        assertThat(CloudAuthManager.status().isLinked()).isFalse();
+        awaitConsoleUnlink();
+    }
+
+    private void awaitConsoleUnlink() throws InterruptedException {
+        // MockBukkit dispatches the revoke on the next tick. Stopping the session does not
+        // unlink it: status still sees the held or persisted credential until it is cleared.
+        server.getScheduler().performOneTick();
+        CloudLogoutRevokeTest.awaitWithin(10_000, () -> !CloudAuthManager.status().isLinked(),
+                "console logout to clear the server credential");
     }
 
     @Test

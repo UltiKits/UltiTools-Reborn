@@ -4,6 +4,7 @@ import com.ultikits.ultitools.scheduling.AbstractSchedulerContractTest;
 import com.ultikits.ultitools.scheduling.Scheduler;
 import com.ultikits.ultitools.scheduling.Ticks;
 import java.lang.reflect.Field;
+import java.lang.reflect.InaccessibleObjectException;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -14,6 +15,8 @@ import java.util.Queue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RunnableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -119,28 +122,35 @@ class PaperSchedulerEngineContractTest extends AbstractSchedulerContractTest {
                 pool.set(scheduler, tracking);
                 original.shutdown();
                 return tracking;
-            } catch (ReflectiveOperationException failure) {
-                throw new AssertionError("Cannot track MockBukkit's async deliveries", failure);
+            } catch (ReflectiveOperationException | ClassCastException | IllegalArgumentException
+                     | InaccessibleObjectException | SecurityException failure) {
+                throw new AssertionError("MockBukkit's async pool layout changed or the JDK denied replacing it; "
+                        + "update the Paper scheduler contract fixture to track deliveries on this MockBukkit/JDK version",
+                        failure);
             }
         }
 
         @Override
-        public Future<?> submit(Runnable task) {
-            Future<?> completion = super.submit(task);
+        public void execute(Runnable task) {
+            // submit already supplies a Future; keep it so its exceptions remain visible to the fixture.
+            RunnableFuture<?> completion = task instanceof RunnableFuture<?> future
+                    ? future : new FutureTask<>(task, null);
+            super.execute(completion);
             dispatched.add(completion);
-            return completion;
         }
 
         void awaitThroughTick(long tick) {
-            // waitAsyncTasksFinished() can see zero active workers after a hand-off but before a worker
-            // starts the callback. Only the returned Future confirms the callback has actually finished.
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20); // Deadlock guard only.
-            for (Future<?> completion; (completion = dispatched.poll()) != null; ) {
+            // An idle pool need not have started the hand-off. Wait for the actual deliveries, with
+            // enough room for three drains before the outer JUnit watchdog.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+            for (Future<?> completion; (completion = dispatched.peek()) != null; ) {
                 try {
                     completion.get(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                    dispatched.remove();
                 } catch (TimeoutException failure) {
-                    throw new AssertionError("Timed out waiting for MockBukkit async deliveries through tick " + tick,
-                            failure);
+                    long unfinished = dispatched.stream().filter(task -> !task.isDone()).count();
+                    throw new AssertionError("Timed out waiting for MockBukkit async deliveries through tick " + tick
+                            + " (" + unfinished + " unfinished)", failure);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     throw new AssertionError("Interrupted while waiting for MockBukkit async deliveries", interrupted);

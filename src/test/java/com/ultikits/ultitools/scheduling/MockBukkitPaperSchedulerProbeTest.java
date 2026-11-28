@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.ultikits.ultitools.utils.MockBukkitHelper;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -64,26 +65,34 @@ class MockBukkitPaperSchedulerProbeTest {
     }
 
     @Test
-    void asyncRunNow_finishesOffTickThreadBeforeWaitReturns() {
+    void asyncRunNow_runsOffTickThread() throws InterruptedException {
         Thread tickThread = Thread.currentThread();
         List<Thread> threads = new CopyOnWriteArrayList<>();
         List<Boolean> ownership = new CopyOnWriteArrayList<>();
+        CountDownLatch ran = new CountDownLatch(1);
         Bukkit.getAsyncScheduler().runNow(plugin, ignored -> {
             threads.add(Thread.currentThread());
             ownership.add(Bukkit.isGlobalTickThread());
+            ran.countDown();
         });
-        server.getScheduler().waitAsyncTasksFinished();
+        server.getScheduler().performOneTick();
+        // waitAsyncTasksFinished() may return before a handed-off callback has even started.
+        assertThat(ran.await(10, TimeUnit.SECONDS)).as("runNow callback ran after the tick").isTrue();
         assertThat(threads).hasSize(1);
         assertThat(threads.getFirst()).isNotSameAs(tickThread);
         assertThat(ownership).containsExactly(false);
     }
 
     @Test
-    void asyncDelay49Millis_isRoundedDownAndRunsAfterOneTick() {
+    void asyncDelay49Millis_runsAfterOneTick() throws InterruptedException {
         AtomicInteger runs = new AtomicInteger();
-        Bukkit.getAsyncScheduler().runDelayed(plugin, ignored -> runs.incrementAndGet(), 49, TimeUnit.MILLISECONDS);
-        server.getScheduler().performTicks(1);
-        server.getScheduler().waitAsyncTasksFinished();
-        assertThat(runs).as("MockBukkit rounds 49 ms down to zero ticks").hasValue(1);
+        CountDownLatch ran = new CountDownLatch(1);
+        Bukkit.getAsyncScheduler().runDelayed(plugin, ignored -> {
+            runs.incrementAndGet();
+            ran.countDown();
+        }, 49, TimeUnit.MILLISECONDS);
+        server.getScheduler().performOneTick();
+        assertThat(ran.await(10, TimeUnit.SECONDS)).as("49 ms callback ran after one tick").isTrue();
+        assertThat(runs).hasValue(1);
     }
 }
