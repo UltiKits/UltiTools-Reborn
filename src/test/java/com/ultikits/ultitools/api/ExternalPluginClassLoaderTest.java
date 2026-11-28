@@ -13,6 +13,7 @@ import com.ultikits.ultitools.text.MessageKey;
 import com.ultikits.ultitools.text.Messages;
 import com.ultikits.ultitools.text.internal.ConfiguredLocaleResolver;
 import com.ultikits.ultitools.text.internal.TextEngine;
+import com.ultikits.ultitools.utils.ModuleScanDiagnostics;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.description.annotation.AnnotationDescription;
 import org.bukkit.Bukkit;
@@ -20,8 +21,6 @@ import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 
 import java.net.URL;
@@ -29,7 +28,12 @@ import java.net.URLClassLoader;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,61 +71,44 @@ class ExternalPluginClassLoaderTest {
             ultiTools.when(UltiTools::getJavaPluginClassLoader).thenReturn(FRAMEWORK_LOADER);
             bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger(getClass().getName()));
 
-            UltiToolsAPI.connect(plugin);
+            List<String> scanSummaries = new ArrayList<>();
+            Handler capture = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    if (Level.SEVERE.equals(record.getLevel())
+                            && record.getMessage().matches("(?s).*\\bskipped \\d+ class\\(es\\).*")) {
+                        scanSummaries.add(record.getMessage());
+                    }
+                }
+
+                @Override
+                public void flush() {
+                    // Nothing buffered.
+                }
+
+                @Override
+                public void close() {
+                    // No resources to release.
+                }
+            };
+            Logger diagnostics = Logger.getLogger(ModuleScanDiagnostics.class.getName());
+            diagnostics.addHandler(capture);
+            try {
+                UltiToolsAPI.connect(plugin);
+            } finally {
+                diagnostics.removeHandler(capture);
+            }
             try {
                 ExternalPluginAdapter adapter = UltiToolsAPI.getAdapter(plugin);
                 assertThat(adapter.getDataScope().getOwnedEntities()).containsExactly(entity);
                 assertThat(adapter.getContext().getBean(Messages.class).isDefined(GREETING, Locale.ENGLISH)).isTrue();
+                assertThat(scanSummaries).as("skipped-class summaries while connecting the external JAR").isEmpty();
             } finally {
                 UltiToolsAPI.disconnect(plugin);
             }
             assertThat(manager.findScopeForDataFolder(plugin.getDataFolder())).isNull();
             assertThat(engine.messagesFor(GREETING.namespace()).isDefined(GREETING, Locale.ENGLISH)).isFalse();
             assertThat(plugin.getDataFolder().toPath().resolve("messages/reference/en.yml")).exists();
-        }
-    }
-
-    @ParameterizedTest(name = "same-named class visible: {0}")
-    @ValueSource(booleans = {false, true})
-    void connectRefusesAnOwnerLoaderThatCannotResolveItsMainClass(boolean duplicateMain) throws Exception {
-        URL jar = createPluginJar();
-        try (RedirectableMainLoader owner = new RedirectableMainLoader(jar);
-             URLClassLoader alternate = new URLClassLoader(new URL[]{jar}, FRAMEWORK_LOADER);
-             TextEngine engine = textEngine();
-             MockedStatic<UltiTools> ultiTools = mockStatic(UltiTools.class);
-             MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
-            JavaPlugin plugin = mockExternalPlugin(owner);
-            Class<?> entity = owner.loadClass(ENTITY);
-            PluginManager manager = new PluginManager();
-            UltiTools framework = framework(manager, engine);
-            ultiTools.when(UltiTools::getInstance).thenReturn(framework);
-            bukkit.when(Bukkit::getLogger).thenReturn(Logger.getLogger(getClass().getName()));
-            owner.mainLookupOverride = duplicateMain ? alternate : FRAMEWORK_LOADER;
-            if (duplicateMain) {
-                assertThat(owner.loadClass(MAIN)).isNotSameAs(plugin.getClass());
-            }
-
-            assertThatThrownBy(() -> UltiToolsAPI.connect(plugin))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessage("Failed to connect plugin " + PLUGIN + " to UltiTools")
-                    .cause().isInstanceOf(PluginModuleException.class)
-                    .hasMessageContaining("the selected class loader cannot resolve main class '" + MAIN + "'");
-            assertThat(UltiToolsAPI.getAdapter(plugin)).isNull();
-            assertThat(manager.findScopeForDataFolder(plugin.getDataFolder())).isNull();
-            assertThat(manager.findOwningPlugin(entity)).isNull();
-            assertThat(manager.getConnectedExternalScanPackages()).isEmpty();
-            Messages messages = engine.messagesFor(GREETING.namespace());
-            assertThat(messages.isDefined(GREETING, Locale.ENGLISH)).isFalse();
-            assertThat(plugin.getDataFolder()).doesNotExist();
-
-            owner.mainLookupOverride = null;
-            UltiToolsAPI.connect(plugin);
-            try {
-                assertThat(UltiToolsAPI.isConnected(plugin)).isTrue();
-                assertThat(messages.isDefined(GREETING, Locale.ENGLISH)).isTrue();
-            } finally {
-                UltiToolsAPI.disconnect(plugin);
-            }
         }
     }
 
@@ -197,21 +184,5 @@ class ExternalPluginClassLoaderTest {
         when(framework.getListenerManager()).thenReturn(mock(ListenerManager.class));
         when(framework.getDataStore()).thenReturn(mock(DataStore.class, CALLS_REAL_METHODS));
         return framework;
-    }
-
-    private static final class RedirectableMainLoader extends URLClassLoader {
-        private ClassLoader mainLookupOverride;
-
-        private RedirectableMainLoader(URL jar) {
-            super(new URL[]{jar}, FRAMEWORK_LOADER);
-        }
-
-        @Override
-        public Class<?> loadClass(String name) throws ClassNotFoundException {
-            if (MAIN.equals(name) && mainLookupOverride != null) {
-                return mainLookupOverride.loadClass(name);
-            }
-            return super.loadClass(name);
-        }
     }
 }

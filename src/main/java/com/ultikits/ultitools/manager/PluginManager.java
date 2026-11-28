@@ -3893,7 +3893,6 @@ public class PluginManager {
         List<Class<?>> ownershipAdded = new ArrayList<>();
         TextEngine.ExternalCatalogue catalogue;
         try {
-            requireExternalMainClass(adapter, owner);
             context.registerShutdownHook();
             // Scanning may instantiate @Configuration beans before refresh().
             catalogue = registerExternalMessages(adapter, context, parent);
@@ -3939,22 +3938,6 @@ public class PluginManager {
         }
         Bukkit.getLogger().log(Level.INFO,
                 "[UltiTools-API] External plugin registered: " + pluginName + " v" + adapter.getVersion());
-    }
-
-    private static void requireExternalMainClass(ExternalPluginAdapter adapter, ClassLoader owner) {
-        Class<?> mainClass = adapter.getJavaPlugin().getClass();
-        String name = mainClass.getName();
-        String reason = "Cannot register external plugin '" + adapter.getPluginName()
-                + "': the selected class loader cannot resolve main class '" + name
-                + "' to the running plugin class.";
-        try {
-            if (owner != null && owner.loadClass(name) == mainClass) {
-                return;
-            }
-        } catch (ClassNotFoundException | LinkageError | SecurityException e) {
-            throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED, reason, e);
-        }
-        throw new PluginModuleException(ErrorCode.PLUGIN_LOAD_FAILED, reason);
     }
 
     private @Nullable TextEngine.ExternalCatalogue registerExternalMessages(ExternalPluginAdapter adapter,
