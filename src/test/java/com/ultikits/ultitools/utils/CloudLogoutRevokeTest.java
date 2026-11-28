@@ -169,7 +169,7 @@ class CloudLogoutRevokeTest {
         assertThat(credentialPresentAtRevoke).isTrue();
         assertThat(ServerCredentialStore.load()).isNotNull();
         replyAllowed.countDown();
-        server.getScheduler().waitAsyncTasksFinished();
+        awaitWithin(10_000, () -> lines.size() >= 3, "both logout outcome lines after credential removal");
         assertThat(CredentialStore.read().data()).containsEntry("uuid", UUID).doesNotContainKey("cloud_credential");
         assertThat(CloudSession.current().getCredential()).isNull();
         assertThat(CloudAuthManager.status().isLinked()).isFalse();
@@ -244,7 +244,6 @@ class CloudLogoutRevokeTest {
         try {
             new CloudLoginCommand().logout(sender());
             server.getScheduler().performOneTick();
-            server.getScheduler().waitAsyncTasksFinished();
             awaitWithin(10_000, () -> lines.size() >= 3, "both logout outcome lines");
         } finally {
             CredentialStore.setSimulateWriteFailureForTesting(false);
@@ -310,13 +309,16 @@ class CloudLogoutRevokeTest {
         assertThat(PluginInitiationUtils.resumeSavedCredentialOnStartup()).isTrue();
         CloudSession old = CloudSession.current();
         pauseReply = true;
-        CloudAuthManager.logoutReporting(outcome -> { });
+        List<CloudAuthManager.LogoutOutcome> outcomes = new CopyOnWriteArrayList<>();
+        CloudAuthManager.logoutReporting(outcomes::add);
         server.getScheduler().performOneTick();
-        assertThat(requestArrived.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(requestArrived.await(5, TimeUnit.SECONDS))
+                .as("revoke POST arrived before committing the replacement credential").isTrue();
         CloudSession fresh = CloudSession.startNew();
         assertThat(fresh.commitCredential(credential("NEW_TEST"))).isTrue();
         replyAllowed.countDown();
-        server.getScheduler().waitAsyncTasksFinished();
+        awaitOutcome(outcomes);
+        assertThat(outcomes).containsExactly(CloudAuthManager.LogoutOutcome.REVOKED);
         assertThat(ServerCredentialStore.load().getCredentialId()).isEqualTo("cred-NEW_TEST");
         assertThat(fresh.getCredential().getCredentialId()).isEqualTo("cred-NEW_TEST");
         assertThat(old.getCredential()).isNull();
