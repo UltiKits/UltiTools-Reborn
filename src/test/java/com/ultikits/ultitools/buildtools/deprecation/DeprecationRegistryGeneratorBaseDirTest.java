@@ -296,11 +296,13 @@ class DeprecationRegistryGeneratorBaseDirTest {
         assertThat(removedRows).as("the frozen 6.x ledger must exercise all REMOVED history rows")
                 .isEqualTo(124);
         // Pin this cumulative-history fixture below its synthetic @removeIn 7.0.0 deadline and
-        // outside the reset. Its semantics must not change with the product's current version.
+        // outside the reset, independently of the product's current version and baseline.
         // Test-only read of this project's own pom.xml; the path is a compile-time constant.
         // nosemgrep: java_inject_rule-SpotbugsPathTraversalAbsolute
         String fixturePom = new String(Files.readAllBytes(Paths.get("pom.xml")), StandardCharsets.UTF_8)
                 .replaceFirst("<version>[^<]+</version>", "<version>6.6.0-SNAPSHOT</version>")
+                .replaceFirst("<japicmp[.]baseline[.]version>[^<]+</japicmp[.]baseline[.]version>",
+                        "<japicmp.baseline.version>6.5.0</japicmp.baseline.version>")
                 .replace("<japicmp.skip>true</japicmp.skip>", "<japicmp.skip>false</japicmp.skip>");
         Files.write(project.resolve("pom.xml"), fixturePom.getBytes(StandardCharsets.UTF_8));
         // Freeze both the source and compiled declarations: a 7.x API removal must not change

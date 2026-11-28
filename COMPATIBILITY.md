@@ -18,10 +18,9 @@ For APIs removed or changed in 7.0, see the command, text, GUI and item migratio
 
 ### New public API baseline: 7.0.0
 
-**7.0.0 establishes a new baseline and does not compare against 6.x.** The japicmp check is
-intentionally disabled (`japicmp.skip=true`) only for `7.0.0-SNAPSHOT` and the `7.0.0` release.
-After 7.0.0 is downloadable from Maven Central, set `japicmp.baseline.version=7.0.0` and
-`japicmp.skip=false` in `pom.xml` before advancing the development version; run `mvn -B clean verify`.
+**7.0.0 establishes a new baseline and does not compare against 6.x.** The japicmp check was
+intentionally skipped only for `7.0.0-SNAPSHOT` and the `7.0.0` release. Starting with
+`7.1.0-SNAPSHOT`, `mvn -B clean verify` runs japicmp against the published `7.0.0` artifact from Maven Central.
 Default build tests and the registry generator reject later versions with comparison disabled or a
 baseline older than 7.0.0. Subsequent releases compare against the previous released baseline.
 
@@ -35,15 +34,15 @@ The five compatibility rules continue unchanged in 7.x, with **“published” s
    passed since the warning first shipped (no earlier than 7.0.0 for this baseline).
 
 The 6.x registry and removal records are frozen in [`compatibility/archive/6.x/`](compatibility/archive/6.x/).
-They are read-only history, not input to the active generator. During the baseline reset the active
-`compatibility/deprecations.json` / `DEPRECATIONS.md` are derived only from current source declarations.
+They are read-only history, not input to the active generator. The active `compatibility/deprecations.json`
+and `compatibility/DEPRECATIONS.md` started from the 7.0.0 source declarations. With the comparison
+restored, the generator cross-checks the active ledger against the japicmp report.
 The remaining 6.x deprecation annotations keep their original metadata; their presence does not
 implicitly authorize deleting those APIs in 7.0. The [historical 6.x examples and exceptions](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md)
 explain that release line, not an exception to these five 7.x rules.
 
-中文补充：**7.0.0 是新的公开 API 基线，不与 6.x 比较。** 仅 `7.0.0-SNAPSHOT` 与 `7.0.0` 发布允许
-`japicmp.skip=true`。7.0.0 可从 Maven Central 下载后，在推进开发版本之前把 `pom.xml` 中的
-`japicmp.baseline.version` 改为 `7.0.0`、`japicmp.skip` 改为 `false`，然后运行 `mvn -B clean verify`。
+中文补充：**7.0.0 是新的公开 API 基线，不与 6.x 比较。** 仅 `7.0.0-SNAPSHOT` 与 `7.0.0` 发布跳过检查。
+自 `7.1.0-SNAPSHOT` 起，`mvn -B clean verify` 会运行 japicmp，以 Maven Central 上已发布的 `7.0.0` 为基线。
 默认构建测试与废弃登记生成器会拒绝后续版本继续关闭检查或使用低于 7.0.0 的基线；后续正式发布比较此前已发布的基线。
 
 7.x 原样沿用五条规则，但“已发布”从 7.0.0 起算：（1）不改已发布公开 API 的签名；（2）新增参数走重载并保留旧签名；
