@@ -304,7 +304,24 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .replaceFirst("<japicmp[.]baseline[.]version>[^<]+</japicmp[.]baseline[.]version>",
                         "<japicmp.baseline.version>6.5.0</japicmp.baseline.version>")
                 .replace("<japicmp.skip>true</japicmp.skip>", "<japicmp.skip>false</japicmp.skip>");
+        assertThat(fixturePom).as("historical fixture japicmp baseline")
+                .contains("<japicmp.baseline.version>6.5.0</japicmp.baseline.version>");
+        assertThat(fixturePom).as("historical fixture japicmp comparison must be enabled")
+                .contains("<japicmp.skip>false</japicmp.skip>");
         Files.write(project.resolve("pom.xml"), fixturePom.getBytes(StandardCharsets.UTF_8));
+        // The first <version> in the file must be the project's own: read it back as a direct
+        // child of <project>, so a replacement that lands on another element fails here by name.
+        String fixtureProjectVersion = null;
+        NodeList fixtureProjectChildren = DeprecationRegistryGenerator.readPomDocument(project)
+                .getDocumentElement().getChildNodes();
+        for (int i = 0; i < fixtureProjectChildren.getLength(); i++) {
+            if ("version".equals(fixtureProjectChildren.item(i).getNodeName())) {
+                fixtureProjectVersion = fixtureProjectChildren.item(i).getTextContent().trim();
+            }
+        }
+        assertThat(fixtureProjectVersion)
+                .as("historical fixture project version (<project>'s own <version>)")
+                .isEqualTo("6.6.0-SNAPSHOT");
         // Freeze both the source and compiled declarations: a 7.x API removal must not change
         // this 6.x history fixture. Keep all seven active rows and all 124 removed rows intact.
         Path sourceRoot = Paths.get("src/test/resources/buildtools/history-6.x");

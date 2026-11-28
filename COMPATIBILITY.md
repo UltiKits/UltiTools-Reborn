@@ -63,7 +63,7 @@ Runtime libraries (the Paper loader) follow their own versioning,
 not this framework's version-number contract.
 
 Packages and types marked `@ApiStatus.Internal` are not part of the removal list even when
-japicmp's exclusion list carries an entry for them — japicmp reads bytecode, not `@ApiStatus`,
+japicmp's exclusion list carries an entry for them — japicmp does not act on `@ApiStatus` here,
 so an internal-only removal still needs an exclusion entry to keep the binary-compatibility gate
 green, but it was never public API and its removal is not a compatibility event.
 
