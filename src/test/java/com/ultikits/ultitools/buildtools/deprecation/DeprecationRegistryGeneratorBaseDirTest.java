@@ -304,6 +304,12 @@ class DeprecationRegistryGeneratorBaseDirTest {
                 .replaceFirst("<japicmp[.]baseline[.]version>[^<]+</japicmp[.]baseline[.]version>",
                         "<japicmp.baseline.version>6.5.0</japicmp.baseline.version>")
                 .replace("<japicmp.skip>true</japicmp.skip>", "<japicmp.skip>false</japicmp.skip>");
+        assertThat(fixturePom).as("historical fixture project version")
+                .contains("<version>6.6.0-SNAPSHOT</version>");
+        assertThat(fixturePom).as("historical fixture japicmp baseline")
+                .contains("<japicmp.baseline.version>6.5.0</japicmp.baseline.version>");
+        assertThat(fixturePom).as("historical fixture japicmp comparison must be enabled")
+                .contains("<japicmp.skip>false</japicmp.skip>");
         Files.write(project.resolve("pom.xml"), fixturePom.getBytes(StandardCharsets.UTF_8));
         // Freeze both the source and compiled declarations: a 7.x API removal must not change
         // this 6.x history fixture. Keep all seven active rows and all 124 removed rows intact.

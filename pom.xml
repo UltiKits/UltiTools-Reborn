@@ -368,17 +368,14 @@
                         <includes>
                             <include>com.ultikits.ultitools</include>
                         </includes>
-                        <!-- The authored exclusion record (D-04): one entry per symbol, never
-                             package-wide (a bare FQCN is a whole-class removal, a
-                             Class#member(paramTypes) key names one member). On every build,
-                             DeprecationRegistryGenerator holds each entry to the removal ledger
-                             (RemovalConsistencyEvaluator: no unregistered, stale or missing
-                             exclusion) and OverBroadExclusionInvariantTest rejects a whole-class
-                             entry for a class that still exists. Emptied again when the baseline
-                             advanced from 6.4.0 to 6.5.0: every ledger removal carries removedIn
-                             6.3.0, 6.4.0 or 6.5.0, so each symbol is absent from both the baseline
-                             and this tree. A removal made in this cycle adds its entry here together
-                             with its ledger record. -->
+                        <!-- Use one entry per symbol, never package-wide (a bare FQCN excludes a
+                             whole class; Class#member(paramTypes) excludes one member).
+                             After 7.0.0 was published, the baseline was reset to that release.
+                             The sole retained exclusion is ClassLoaderUtils#loadClass(String, ClassLoader),
+                             marked @ApiStatus.Internal. It was never public API and is not part of the
+                             compatibility promise or removal ledger (see COMPATIBILITY.md); japicmp
+                             reads bytecode, not @ApiStatus. When removing public API, add its exact
+                             exclusion together with its removal ledger record. -->
                         <excludes>
                             <!-- Framework-internal since its introduction in 7.0; keep the older overloads checked. -->
                             <exclude>com.ultikits.ultitools.utils.ClassLoaderUtils#loadClass(java.lang.String,java.lang.ClassLoader)</exclude>
