@@ -63,13 +63,11 @@ public abstract class AbstractSchedulerContractTest {
         void advanceTicks(long ticks);
 
         /**
-         * Lets at least {@code atLeast} pass on the async clock, then returns only when the async side is
-         * settled: every async task due by then has finished and none is running, and their effects
-         * happen-before the return. A virtual-clock double advances its clock; a MockBukkit-backed fixture
-         * performs {@code Ticks.ceil(atLeast) + 1} ticks and then calls
-         * {@code BukkitSchedulerMock#waitAsyncTasksFinished()}; a real-time fixture sleeps at least
-         * {@code atLeast} and then waits for the async pool to be idle. It may also advance tick contexts,
-         * so a test must not assert tick-context progress across this call. Must be called on the tick thread.
+         * Lets at least {@code atLeast} pass on the async clock and waits for each async delivery due
+         * through that point to finish. The effects of those deliveries happen-before the return.
+         * This does not require draining work scheduled beyond the elapsed window. The fixture may also
+         * advance tick contexts, so a test must not assert tick-context progress across this call.
+         * Must be called on the tick thread.
          */
         void elapseAsync(Duration atLeast);
 
