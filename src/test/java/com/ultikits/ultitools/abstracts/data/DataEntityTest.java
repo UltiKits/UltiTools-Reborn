@@ -15,6 +15,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -27,6 +28,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.bukkit.Bukkit;
@@ -450,6 +453,7 @@ public class DataEntityTest {
     @DisplayName("BaseCommandExecutor current-user wrapper tests")
     @Timeout(30)
     class CurrentUserCommandWrapperTests {
+        private static final long HANDLER_WAIT_NANOS = TimeUnit.SECONDS.toNanos(12);
 
         private Command mockCommand;
         private UUID postRunState;
@@ -478,13 +482,28 @@ public class DataEntityTest {
 
         private TaskHandle runOnNewThread(Runnable r) throws InterruptedException, ExecutionException {
             FutureTask<Void> handler = new FutureTask<>(() -> runWithMockedPlugin(r), null);
-            Thread.ofPlatform().daemon().name("current-user-handler").start(handler);
+            Thread worker = Thread.ofPlatform().daemon().name("current-user-handler").start(handler);
             try {
-                handler.get();
+                awaitCompletion(handler, HANDLER_WAIT_NANOS, "the command handler to finish");
             } finally {
                 handler.cancel(true);
+                assertTrue(worker.join(Duration.ofSeconds(4)), "Timed out waiting for the command handler to terminate");
             }
             return mock(TaskHandle.class);
+        }
+
+        private void awaitCompletion(Future<?> completion, long remainingNanos, String description)
+                throws InterruptedException, ExecutionException {
+            try {
+                completion.get(remainingNanos, TimeUnit.NANOSECONDS);
+            } catch (TimeoutException failure) {
+                throw new AssertionError("Timed out waiting for " + description, failure);
+            }
+        }
+
+        private void stopAndAwait(ExecutorService workers, String description) throws InterruptedException {
+            workers.shutdownNow();
+            assertTrue(workers.awaitTermination(6, TimeUnit.SECONDS), "Timed out waiting for " + description);
         }
 
         private void runWithMockedPlugin(Runnable r) {
@@ -648,7 +667,7 @@ public class DataEntityTest {
                 assertNull(executorB.observedDuringHandler,
                         "the pooled thread must not carry executorA's user into executorB's dispatch");
             } finally {
-                pooledWorker.shutdownNow();
+                stopAndAwait(pooledWorker, "the reused command worker to terminate");
             }
         }
 
@@ -656,7 +675,8 @@ public class DataEntityTest {
                                      String[] args) {
             stubOffThreadScheduler(inv -> {
                 Runnable r = inv.getArgument(0);
-                pool.submit(() -> runWithMockedPlugin(r)).get();
+                awaitCompletion(pool.submit(() -> runWithMockedPlugin(r)), HANDLER_WAIT_NANOS,
+                        "the pooled command handler to finish");
                 return mock(TaskHandle.class);
             });
             dispatchWithThreadLocalMocks(executor, sender, args);
@@ -683,14 +703,17 @@ public class DataEntityTest {
             ExecutorService dispatchers = Executors.newFixedThreadPool(2,
                     Thread.ofPlatform().daemon().name("current-user-dispatch-", 0).factory());
             try {
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(18);
                 Future<?> dispatchA = dispatchers.submit(() -> dispatchWithThreadLocalMocks(executorA, playerA, new String[]{}));
                 Future<?> dispatchB = dispatchers.submit(() -> dispatchWithThreadLocalMocks(executorB, playerB, new String[]{}));
-                dispatchA.get();
-                dispatchB.get();
+                awaitCompletion(dispatchA, deadline - System.nanoTime(), "player A's command dispatch");
+                awaitCompletion(dispatchB, deadline - System.nanoTime(), "player B's command dispatch");
             } finally {
-                dispatchers.shutdownNow();
+                stopAndAwait(dispatchers, "both command dispatchers to terminate");
             }
 
+            executorA.assertOverlapCompleted();
+            executorB.assertOverlapCompleted();
             assertEquals(uuidA, executorA.observedDuringHandler);
             assertEquals(uuidB, executorB.observedDuringHandler);
             assertNotEquals(executorA.observedDuringHandler, executorB.observedDuringHandler);
@@ -939,6 +962,7 @@ public class DataEntityTest {
         volatile Thread executionThread;
         volatile boolean throwOnInvoke;
         CyclicBarrier overlap;
+        private AssertionError overlapFailure;
 
         @Override
         protected void handleHelp(CommandSender sender) {
@@ -946,13 +970,14 @@ public class DataEntityTest {
         }
 
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
-        private void probeBody() throws InterruptedException, BrokenBarrierException {
-            if (overlap != null) {
-                overlap.await(); // Both wrappers have installed their audit user.
+        private void probeBody() throws InterruptedException {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+            if (!awaitOverlap(deadline, "both handlers to enter their audit scopes")) {
+                return;
             }
             UUID observed = AuditableDataEntity.getCurrentUser();
-            if (overlap != null) {
-                overlap.await(); // Neither wrapper may restore its context before both reads.
+            if (!awaitOverlap(deadline, "both handlers to read their audit users before restoring their scopes")) {
+                return;
             }
             observedDuringHandler = observed;
             invoked = true;
@@ -962,20 +987,40 @@ public class DataEntityTest {
             }
         }
 
+        private boolean awaitOverlap(long deadline, String description) throws InterruptedException {
+            if (overlap == null) {
+                return true;
+            }
+            try {
+                overlap.await(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                return true;
+            } catch (BrokenBarrierException | TimeoutException failure) {
+                // Command dispatch catches handler exceptions. Surface the failure on the test thread.
+                overlapFailure = new AssertionError("Command handler barrier failed waiting for " + description, failure);
+                return false;
+            }
+        }
+
+        private void assertOverlapCompleted() {
+            if (overlapFailure != null) {
+                throw overlapFailure;
+            }
+        }
+
         @CmdMapping(format = "")
-        public void probe(CommandSender sender) throws InterruptedException, BrokenBarrierException {
+        public void probe(CommandSender sender) throws InterruptedException {
             probeBody();
         }
 
         @CmdMapping(format = "async")
         @AsyncCommand(showProcessing = false, timeout = 0)
-        public void probeAsync(CommandSender sender) throws InterruptedException, BrokenBarrierException {
+        public void probeAsync(CommandSender sender) throws InterruptedException {
             probeBody();
         }
 
         @CmdMapping(format = "runasync")
         @RunAsync
-        public void probeRunAsync(CommandSender sender) throws InterruptedException, BrokenBarrierException {
+        public void probeRunAsync(CommandSender sender) throws InterruptedException {
             probeBody();
         }
     }

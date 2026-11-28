@@ -139,7 +139,6 @@ class CredentialRotationOwnerTest {
         CloudAuthManager.logoutReporting(outcomes::add);
         server.getScheduler().performOneTick();
         await(() -> !outcomes.isEmpty(), "the logout outcome");
-        server.getScheduler().waitAsyncTasksFinished();
 
         String rotated = StubAccessLog.fingerprint(ROTATED);
         String retired = StubAccessLog.fingerprint(CREDENTIAL);
