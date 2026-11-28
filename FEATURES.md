@@ -308,6 +308,12 @@ and likewise reconcile against no annotation.
 | ultitools.external.execute-command | A connected external plugin's annotated command is registered in Paper's command tree and invokes the external plugin's injected service for a player | gate | As a player with `ultiext.greet`, run `/ultiext hello` from a verified 7.0 build of `UltiToolsExtExample` | n/a | n/a | player | detailed | CommandManager#registerAllExternal |
 | ultitools.external.transactional-service | An external plugin's container-managed `@Transactional` service is proxied and runs with the transaction manager for that plugin's data scope | gate | Call an external probe's injected `@Transactional` service through its scanned command on Paper 26.3 with SQLite | n/a | n/a | internal | detailed | PluginManager#wireTransactional |
 
+**Known limitation (since 6.3.0):** If Paper defines a plugin's main class from a JAR loaded
+through `libraries:` in `plugin.yml`, automatic entity discovery scans that library JAR rather
+than the plugin's own JAR. To use automatic discovery, package the main class and the `@Table`
+entities together in the plugin's own JAR. If the main class stays in a library, pass the plugin's
+entity classes explicitly to `UltiToolsAPI.connect(JavaPlugin, Class<?>... additionalEntities)`.
+
 ## Native sounds
 
 The framework uses Paper’s native sound API. Exercise the framework-owned service through a compatible module or a purpose-built 7.0 probe;
