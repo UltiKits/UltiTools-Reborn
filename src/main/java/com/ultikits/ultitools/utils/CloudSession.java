@@ -943,33 +943,30 @@ final class CloudSession {
                     return;
                 }
                 rejectionReported = true;
+                String notice;
                 try {
                     if (ServerCredentialStore.deleteIfMatches(attemptCredentialId)) {
                         // Issue #869: after the panel's "Revoke and re-pair" the owner holds a code for the same
                         // server record, so both ways back are named.
-                        PanelConnectionLog.log(Level.WARNING,
-                                "UltiCloud rejected this server's credential (it was revoked or is no longer valid). "
+                        notice = "UltiCloud rejected this server's credential (it was revoked or is no longer valid). "
                                 + "The saved credential was deleted. If you used \"Revoke and re-pair\" in the panel, "
                                 + "run /ulticloud login <code> with the code it shows; otherwise run /ulticloud login "
-                                + "to link this server again."
-                                + requestSuffix(requestId));
+                                + "to link this server again.";
                     } else {
-                        PanelConnectionLog.log(Level.WARNING,
-                                "UltiCloud rejected the credential this connection used (it was revoked or is no "
+                        notice = "UltiCloud rejected the credential this connection used (it was revoked or is no "
                                 + "longer valid). credentials.json now holds a different credential, so it was kept. "
-                                + "Cloud features are stopped; run /ulticloud reconnect to connect with it."
-                                + requestSuffix(requestId));
+                                + "Cloud features are stopped; run /ulticloud reconnect to connect with it.";
                     }
                 } catch (DataAccessException failure) {
-                    PanelConnectionLog.log(Level.WARNING,
-                            "UltiCloud rejected this server's credential, but the saved credential could not be deleted. "
-                            + "Cloud features are stopped. Check credentials.json and run /ulticloud login again."
-                            + requestSuffix(requestId));
+                    notice = "UltiCloud rejected this server's credential, but the saved credential could not be deleted. "
+                            + "Cloud features are stopped. Check credentials.json and run /ulticloud login again.";
                 } finally {
                     // S-12: the buffered state belongs to the credential that was just revoked.
                     discardCloudState();
                     credential = null;
                 }
+                // Login checks the held credential before acquiring the session monitor.
+                PanelConnectionLog.log(Level.WARNING, notice + requestSuffix(requestId));
             }
         }
 
