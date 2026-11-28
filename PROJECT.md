@@ -60,7 +60,7 @@ All commands run from the repository root.
 | Goal | Command |
 |---|---|
 | Build shaded JAR | `mvn clean package` → `target/UltiTools-API-<version>.jar` |
-| Full verification | `mvn clean verify` — package plus packaged-runtime, dependency and deprecation-registry checks, including the japicmp binary compatibility check against the published `7.0.0` baseline |
+| Full verification | `mvn clean verify` — package plus packaged-runtime, dependency and deprecation-registry checks, including the japicmp binary compatibility check against the published baseline set by `japicmp.baseline.version` in `pom.xml` |
 | Test | `mvn test` |
 | Single test class | `mvn test -Dtest=ClassName` |
 | Include isolated tests | `mvn test -DexcludedGroups=` |
