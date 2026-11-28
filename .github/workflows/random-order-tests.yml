@@ -63,6 +63,19 @@ jobs:
               summary.write(f'## Random-order unit tests\n\nSeed: `{seed}`\n\nReplay:\n```sh\n{replay}\n```\n')
           PYTHON
 
+      - name: Resolve Maven dependencies and plugins
+        run: |
+          for attempt in 1 2 3; do
+            if mvn -B -ntp -U dependency:go-offline; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            printf 'Maven dependency resolution failed (attempt %s/3); retrying.\n' "$attempt"
+            sleep "$((attempt * 5))"
+          done
+
       - name: Run unit tests in random order
         env:
           SEED: ${{ steps.seed.outputs.seed }}
