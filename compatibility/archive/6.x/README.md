@@ -11,7 +11,7 @@ before the 7.0.0 baseline reset. They are historical evidence, not an active rem
 The original prose and version-specific links are retained unchanged. Links from the removal
 records to the compatibility guide point to [the original anchors on the `6.x` branch](https://github.com/UltiKits/UltiTools-Reborn/blob/6.x/COMPATIBILITY.md), not the 7.0 guide on the default branch.
 The active `compatibility/deprecations.json` and `compatibility/DEPRECATIONS.md` are regenerated
-from current source declarations during the 7.0.0 development/release cycle. Existing annotations
+from current source declarations, starting with the 7.0.0 development cycle. Existing annotations
 retain their original metadata; archiving history does not delete or authorize deleting an API.
 
 7.0.0 established a new public API baseline without comparing against 6.x. After the artifact
