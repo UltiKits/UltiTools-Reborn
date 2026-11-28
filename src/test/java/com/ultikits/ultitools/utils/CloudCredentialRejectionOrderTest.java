@@ -99,7 +99,7 @@ class CloudCredentialRejectionOrderTest {
         var login = new DeviceLoginTestSupport.RecordingListener();
         Handler handler = new Handler() {
             @Override public void publish(LogRecord record) {
-                if (record.getLevel() == Level.WARNING && record.getMessage().contains(messageFragment)) {
+                if (Level.WARNING.equals(record.getLevel()) && record.getMessage().contains(messageFragment)) {
                     // Capture the state inside the publication, before login can replace the session.
                     observed.add(new NoticeState(Thread.currentThread(), session.hasCredential(),
                             session.cloudOutbox() != null || session.commandDedupe() != null
@@ -107,8 +107,12 @@ class CloudCredentialRejectionOrderTest {
                     CloudAuthManager.login(login);
                 }
             }
-            @Override public void flush() { }
-            @Override public void close() { }
+            @Override public void flush() {
+                // Nothing is buffered: each record is inspected as it is published.
+            }
+            @Override public void close() {
+                // No resource to release.
+            }
         };
         logger.addHandler(handler);
         try {
