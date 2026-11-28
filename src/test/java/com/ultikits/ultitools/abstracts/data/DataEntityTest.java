@@ -20,10 +20,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.bukkit.Bukkit;
@@ -37,6 +40,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.mockito.MockedStatic;
 import org.mockito.stubbing.Answer;
 
@@ -444,10 +448,11 @@ public class DataEntityTest {
      */
     @Nested
     @DisplayName("BaseCommandExecutor current-user wrapper tests")
+    @Timeout(30)
     class CurrentUserCommandWrapperTests {
 
         private Command mockCommand;
-        private final UUID[] postRunState = new UUID[1];
+        private UUID postRunState;
 
         @org.junit.jupiter.api.BeforeEach
         void setUpCommand() {
@@ -460,32 +465,35 @@ public class DataEntityTest {
             return mockUltiTools;
         }
 
-        /**
-         * Runs {@code r} on a brand-new thread (joined before returning), capturing
-         * {@link AuditableDataEntity#getCurrentUser()} into {@link #postRunState} on that same
-         * thread immediately after {@code r} finishes -- whether it returned normally or
-         * {@code BaseCommandExecutor}'s internal catch swallowed an exception from it. Opens its
-         * own {@code UltiTools} static mock scope on the new thread, since Mockito's static
-         * mocking is thread-scoped and the error-report path in {@code run()} calls
-         * {@code UltiTools.getInstance()} from whatever thread the handler runs on.
-         */
-        private TaskHandle runOnNewThreadCapturingPostState(Runnable r) {
-            Thread t = new Thread(() -> {
-                try (MockedStatic<UltiTools> inner = mockStatic(UltiTools.class)) {
-                    UltiTools mockUltiToolsForThread = stubUltiTools();
-                    inner.when(UltiTools::getInstance).thenReturn(mockUltiToolsForThread);
+        private TaskHandle runOnNewThreadCapturingPostState(Runnable r)
+                throws InterruptedException, ExecutionException {
+            return runOnNewThread(() -> {
+                try {
                     r.run();
                 } finally {
-                    postRunState[0] = AuditableDataEntity.getCurrentUser();
+                    postRunState = AuditableDataEntity.getCurrentUser();
                 }
-            }, "gsd-02-08-dispatch-thread");
-            t.start();
+            });
+        }
+
+        private TaskHandle runOnNewThread(Runnable r) throws InterruptedException, ExecutionException {
+            FutureTask<Void> handler = new FutureTask<>(() -> runWithMockedPlugin(r), null);
+            Thread.ofPlatform().daemon().name("current-user-handler").start(handler);
             try {
-                t.join(5000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                handler.get();
+            } finally {
+                handler.cancel(true);
             }
             return mock(TaskHandle.class);
+        }
+
+        private void runWithMockedPlugin(Runnable r) {
+            // Static mocks are thread-scoped; the error-report path needs the plugin on the handler thread.
+            try (MockedStatic<UltiTools> inner = mockStatic(UltiTools.class)) {
+                UltiTools plugin = stubUltiTools();
+                inner.when(UltiTools::getInstance).thenReturn(plugin);
+                r.run();
+            }
         }
 
         /**
@@ -499,28 +507,26 @@ public class DataEntityTest {
             when(mockScheduler.global().run(any(Runnable.class)))
                     .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(0)));
 
-            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
-                 MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
-                when(mockScheduler.global().isCurrentThread()).thenReturn(true);
-                UltiTools mockUltiTools = stubUltiTools();
-                ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, mockCommand, "probe", args);
-            }
+            when(mockScheduler.global().isCurrentThread()).thenReturn(true);
+            dispatchWithThreadLocalMocks(executor, sender, args);
         }
 
         private void dispatch(BaseCommandExecutor executor, CommandSender sender, String[] args) {
-            Scheduler mockScheduler = CommandRuntime.scheduler();
-            when(mockScheduler.global().run(any(Runnable.class)))
-                    .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(0)));
-            when(mockScheduler.async().run(any(Runnable.class)))
-                    .thenAnswer(inv -> runOnNewThreadCapturingPostState(inv.getArgument(0)));
+            stubOffThreadScheduler(inv -> runOnNewThreadCapturingPostState(inv.getArgument(0)));
+            dispatchWithThreadLocalMocks(executor, sender, args);
+        }
 
-            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
-                 MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
-                when(mockScheduler.global().isCurrentThread()).thenReturn(false);
-                UltiTools mockUltiTools = stubUltiTools();
-                ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, mockCommand, "probe", args);
+        private void stubOffThreadScheduler(Answer<TaskHandle> submit) {
+            Scheduler mockScheduler = CommandRuntime.scheduler();
+            when(mockScheduler.global().run(any(Runnable.class))).thenAnswer(submit);
+            when(mockScheduler.async().run(any(Runnable.class))).thenAnswer(submit);
+            when(mockScheduler.global().isCurrentThread()).thenReturn(false);
+        }
+
+        private void dispatchWithThreadLocalMocks(BaseCommandExecutor executor, CommandSender sender, String[] args) {
+            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class)) {
+                runWithMockedPlugin(() -> com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(
+                        executor, sender, mockCommand, "probe", args));
             }
         }
 
@@ -600,7 +606,7 @@ public class DataEntityTest {
             dispatch(executor, player, new String[]{});
 
             assertTrue(executor.invoked);
-            assertNull(postRunState[0],
+            assertNull(postRunState,
                     "clearCurrentUser() must run on the handler's own thread before it finishes");
         }
 
@@ -617,7 +623,7 @@ public class DataEntityTest {
 
             assertTrue(executor.invoked, "the handler ran (and observed its user) before throwing");
             assertEquals(uuid, executor.observedDuringHandler);
-            assertNull(postRunState[0],
+            assertNull(postRunState,
                     "clearCurrentUser() must still run in a finally even though the handler threw");
         }
 
@@ -647,38 +653,23 @@ public class DataEntityTest {
         }
 
         private void dispatchOnPool(ExecutorService pool, BaseCommandExecutor executor, CommandSender sender,
-                                     String[] args) throws Exception {
-            Scheduler mockScheduler = CommandRuntime.scheduler();
-            Answer<TaskHandle> submit = inv -> {
+                                     String[] args) {
+            stubOffThreadScheduler(inv -> {
                 Runnable r = inv.getArgument(0);
-                pool.submit(() -> {
-                    try (MockedStatic<UltiTools> inner = mockStatic(UltiTools.class)) {
-                        UltiTools mockUltiToolsForThread = stubUltiTools();
-                    inner.when(UltiTools::getInstance).thenReturn(mockUltiToolsForThread);
-                        r.run();
-                    }
-                }).get(5, TimeUnit.SECONDS);
+                pool.submit(() -> runWithMockedPlugin(r)).get();
                 return mock(TaskHandle.class);
-            };
-            when(mockScheduler.global().run(any(Runnable.class))).thenAnswer(submit);
-            when(mockScheduler.async().run(any(Runnable.class))).thenAnswer(submit);
-
-            try (MockedStatic<Bukkit> bukkitMock = mockStatic(Bukkit.class);
-                 MockedStatic<UltiTools> ultiToolsMock = mockStatic(UltiTools.class)) {
-                when(mockScheduler.global().isCurrentThread()).thenReturn(false);
-                UltiTools mockUltiTools = stubUltiTools();
-                ultiToolsMock.when(UltiTools::getInstance).thenReturn(mockUltiTools);
-                com.ultikits.ultitools.command.engine.CommandTestSupport.dispatch(executor, sender, mockCommand, "probe", args);
-            }
+            });
+            dispatchWithThreadLocalMocks(executor, sender, args);
         }
 
         @Test
         @DisplayName("Two concurrent command dispatches on different threads do not observe each other's user")
-        void concurrentDispatchesDoNotObserveEachOthersUser() throws InterruptedException {
+        void concurrentDispatchesDoNotObserveEachOthersUser() throws Exception {
+            CyclicBarrier overlap = new CyclicBarrier(2);
             CurrentUserProbeExecutor executorA = new CurrentUserProbeExecutor();
-            executorA.useLatches = true;
+            executorA.overlap = overlap;
             CurrentUserProbeExecutor executorB = new CurrentUserProbeExecutor();
-            executorB.useLatches = true;
+            executorB.overlap = overlap;
 
             Player playerA = mock(Player.class);
             UUID uuidA = UUID.randomUUID();
@@ -687,24 +678,23 @@ public class DataEntityTest {
             UUID uuidB = UUID.randomUUID();
             when(playerB.getUniqueId()).thenReturn(uuidB);
 
-            Thread t1 = new Thread(() -> dispatch(executorA, playerA, new String[]{}));
-            Thread t2 = new Thread(() -> dispatch(executorB, playerB, new String[]{}));
-            t1.start();
-            t2.start();
-
-            assertTrue(executorA.entered.await(5, TimeUnit.SECONDS), "executor A should have entered its handler");
-            assertTrue(executorB.entered.await(5, TimeUnit.SECONDS), "executor B should have entered its handler");
-
-            // Both handlers are now inside their bodies concurrently -- release them together.
-            executorA.release.countDown();
-            executorB.release.countDown();
-
-            t1.join(5000);
-            t2.join(5000);
+            // Stub the shared mock once, before either dispatcher invokes it.
+            stubOffThreadScheduler(inv -> runOnNewThread(inv.getArgument(0)));
+            ExecutorService dispatchers = Executors.newFixedThreadPool(2,
+                    Thread.ofPlatform().daemon().name("current-user-dispatch-", 0).factory());
+            try {
+                Future<?> dispatchA = dispatchers.submit(() -> dispatchWithThreadLocalMocks(executorA, playerA, new String[]{}));
+                Future<?> dispatchB = dispatchers.submit(() -> dispatchWithThreadLocalMocks(executorB, playerB, new String[]{}));
+                dispatchA.get();
+                dispatchB.get();
+            } finally {
+                dispatchers.shutdownNow();
+            }
 
             assertEquals(uuidA, executorA.observedDuringHandler);
             assertEquals(uuidB, executorB.observedDuringHandler);
             assertNotEquals(executorA.observedDuringHandler, executorB.observedDuringHandler);
+            assertNotSame(executorA.executionThread, executorB.executionThread);
         }
     }
 
@@ -938,9 +928,8 @@ public class DataEntityTest {
     /**
      * 02-08 Task 3 fixture: a minimal {@code BaseCommandExecutor} whose handler records
      * {@link AuditableDataEntity#getCurrentUser()} as observed from inside the invocation, plus
-     * the thread it ran on. {@code useLatches} lets a test force two concurrent dispatches to be
-     * inside their handler bodies at the same instant, proving isolation rather than accidental
-     * serialization.
+     * the thread it ran on. {@code overlap} keeps both audit scopes active while the concurrent
+     * handlers read their user.
      */
     @CmdTarget(CmdTarget.CmdTargetType.BOTH)
     @CmdExecutor(alias = {"probe"})
@@ -949,9 +938,7 @@ public class DataEntityTest {
         volatile boolean invoked;
         volatile Thread executionThread;
         volatile boolean throwOnInvoke;
-        boolean useLatches;
-        final CountDownLatch entered = new CountDownLatch(1);
-        final CountDownLatch release = new CountDownLatch(1);
+        CyclicBarrier overlap;
 
         @Override
         protected void handleHelp(CommandSender sender) {
@@ -959,37 +946,36 @@ public class DataEntityTest {
         }
 
         @SuppressWarnings("PMD.AvoidThrowingRawExceptionTypes")
-        private void probeBody() {
-            observedDuringHandler = AuditableDataEntity.getCurrentUser();
+        private void probeBody() throws InterruptedException, BrokenBarrierException {
+            if (overlap != null) {
+                overlap.await(); // Both wrappers have installed their audit user.
+            }
+            UUID observed = AuditableDataEntity.getCurrentUser();
+            if (overlap != null) {
+                overlap.await(); // Neither wrapper may restore its context before both reads.
+            }
+            observedDuringHandler = observed;
             invoked = true;
             executionThread = Thread.currentThread();
-            if (useLatches) {
-                entered.countDown();
-                try {
-                    release.await(5, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
             if (throwOnInvoke) {
                 throw new RuntimeException("boom - 02-08 current-user wrapper test");
             }
         }
 
         @CmdMapping(format = "")
-        public void probe(CommandSender sender) {
+        public void probe(CommandSender sender) throws InterruptedException, BrokenBarrierException {
             probeBody();
         }
 
         @CmdMapping(format = "async")
         @AsyncCommand(showProcessing = false, timeout = 0)
-        public void probeAsync(CommandSender sender) {
+        public void probeAsync(CommandSender sender) throws InterruptedException, BrokenBarrierException {
             probeBody();
         }
 
         @CmdMapping(format = "runasync")
         @RunAsync
-        public void probeRunAsync(CommandSender sender) {
+        public void probeRunAsync(CommandSender sender) throws InterruptedException, BrokenBarrierException {
             probeBody();
         }
     }
